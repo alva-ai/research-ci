@@ -14,7 +14,7 @@ Alpha CI moves the judgment **before** the results and makes it executable:
 - **Executable**: that standard is code. The engine reruns the submission and decides; it never trusts numbers an agent reports.
 - **Reproducible**: the standard is frozen before any result is seen. The same inputs always produce the same verdict, byte for byte.
 
-Research code stays free (pandas, rolling windows, sklearn, SHAP, anything). The kernel owns exactly three things:
+Research code stays free (pandas or polars, rolling windows, sklearn, SHAP, anything); it declares which panel format it wants, and pandas is the default. The kernel itself runs on polars and owns exactly three things:
 
 | Kernel duty | What it guarantees |
 | --- | --- |
@@ -213,8 +213,8 @@ See [docs/concepts.md](docs/concepts.md) for the vocabulary, how a verdict is co
 | Step | Scope | Acceptance | Status |
 | --- | --- | --- | --- |
 | M0 | Scaffold, CI, import layers | CI green; layer violations are caught | Done |
-| M1 | `tables` + `time` (asof, stepper) | Every planted lookahead is caught; plain rolling reports zero mismatches | Next |
-| M2 | `holdout` + ledger + workflow skeleton + `aci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Planned |
+| M1 | `tables` + `time` (asof, stepper) | Every planted lookahead is caught; plain rolling reports zero mismatches | Done |
+| M2 | `holdout` + ledger + workflow skeleton + `aci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Next |
 | M3 | `judge`: null worlds, z thresholds, evidence levels, stand-ins | Feat layer end to end on the first real case | Planned |
 | M4 | `runner`: child process + Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | Plugins pass conformance | Planned |

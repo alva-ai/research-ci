@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.0",
     "pandas>=2.2",
+    "polars>=1.0",
     "pyarrow>=15",
     "scipy>=1.13",
     "typer>=0.12",
@@ -27,6 +28,7 @@ dev = [
     "basedpyright>=1.40.1",
     "hypothesis>=6.168.3",
     "import-linter>=2.15",
+    "pandas-stubs>=3.0.5.260914",
     "pytest>=9.1.1",
     "ruff>=0.16.9",
 ]
