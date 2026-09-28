@@ -217,7 +217,7 @@ def test_optional_stages_can_be_skipped_by_the_contract(tmp_path: Path) -> None:
     assert "upstream:data" in idea.deps("algo")
 
 
-def test_gates_run_once_and_then_ask_for_a_rework(tmp_path: Path) -> None:
+def test_checkpoints_run_once_and_then_ask_for_a_rework(tmp_path: Path) -> None:
     idea = _idea(tmp_path, template="rule")
     for stage in ("data", "signal", "algo"):
         _pass(idea, stage)

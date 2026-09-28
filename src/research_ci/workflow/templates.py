@@ -4,7 +4,7 @@ from research_ci.workflow.machine import Kind, WorkflowError
 
 CONTRACT = "contract"
 LAYERS = ("data", "feat", "signal", "algo")
-GATES = ("seal", "forward", "capital", "monitor")
+CHECKPOINTS = ("seal", "forward", "capital", "monitor")
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class Template:
 
     @property
     def stages(self) -> tuple[str, ...]:
-        return (CONTRACT, *self.layers, *GATES)
+        return (CONTRACT, *self.layers, *CHECKPOINTS)
 
 
 TEMPLATES = {
@@ -41,6 +41,6 @@ def kind_of(stage: str) -> Kind:
         return Kind.CONTRACT
     if stage in LAYERS:
         return Kind.LAYER
-    if stage in GATES:
-        return Kind.GATE
+    if stage in CHECKPOINTS:
+        return Kind.CHECKPOINT
     raise WorkflowError(f"unknown stage {stage!r}")
