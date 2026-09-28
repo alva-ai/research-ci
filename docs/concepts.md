@@ -1,6 +1,6 @@
 # Concepts
 
-The vocabulary of Alpha CI, how a verdict is computed, and what a verdict card looks like. Nothing here is implemented yet; this is the target behavior.
+The vocabulary of Research CI, how a verdict is computed, and what a verdict card looks like. Nothing here is implemented yet; this is the target behavior.
 
 ## Vocabulary
 

@@ -3,7 +3,7 @@ from enum import StrEnum
 
 import polars as pl
 
-from alpha_ci.kernel.time.clock import lit_time
+from research_ci.kernel.time.clock import lit_time
 
 
 class Tier(StrEnum):

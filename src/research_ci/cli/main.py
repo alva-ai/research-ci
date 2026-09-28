@@ -9,12 +9,12 @@ from typing import Annotated, Any
 
 import typer
 
-from alpha_ci import __version__
-from alpha_ci.api.contract import ContractError
-from alpha_ci.store.ledger import LedgerError
-from alpha_ci.workflow.commands import CONTRACT_FILE, Idea, find_ideas
-from alpha_ci.workflow.machine import WorkflowError
-from alpha_ci.workflow.templates import CONTRACT, TEMPLATES
+from research_ci import __version__
+from research_ci.api.contract import ContractError
+from research_ci.store.ledger import LedgerError
+from research_ci.workflow.commands import CONTRACT_FILE, Idea, find_ideas
+from research_ci.workflow.machine import WorkflowError
+from research_ci.workflow.templates import CONTRACT, TEMPLATES
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 contract_app = typer.Typer(no_args_is_help=True, help="Work on the contract.")
@@ -43,7 +43,7 @@ def init(
     """Start an idea: write a contract skeleton and open its ledger."""
     with _errors():
         Idea.init(idea, template)
-    typer.echo(f"created {idea} ({template}); edit {idea / CONTRACT_FILE}, then run `aci contract derive -i {idea}`")
+    typer.echo(f"created {idea} ({template}); edit {idea / CONTRACT_FILE}, then run `rci contract derive -i {idea}`")
 
 
 @app.command()
@@ -112,7 +112,7 @@ def derive(idea: IdeaDir = Path(".")) -> None:
     with _errors():
         contract = Idea(idea).derive_contract()
     typer.echo(f"contract registered: {contract.claim}")
-    typer.echo("a person freezes it with `aci approve --stage contract`")
+    typer.echo("a person freezes it with `rci approve --stage contract`")
 
 
 @app.command()
@@ -136,7 +136,7 @@ def approve(
         freeze = target.approve(stage)
     typer.echo(f"frozen {stage} v{preview['version']}: {freeze.hash[:12]}")
     paths = f"{os.path.relpath(target.workspace.root)} {os.path.relpath(target.root / CONTRACT_FILE)}"
-    typer.echo(f"to keep it in git: git add {paths} && git commit -m 'aci: freeze {stage} of {target.root.name}'")
+    typer.echo(f"to keep it in git: git add {paths} && git commit -m 'rci: freeze {stage} of {target.root.name}'")
 
 
 def _extend(target: Idea, stage: str, trials: int) -> None:

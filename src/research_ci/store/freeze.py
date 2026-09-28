@@ -2,8 +2,8 @@ import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 
-from alpha_ci.kernel.hashing import hash_obj
-from alpha_ci.store.workspace import Workspace
+from research_ci.kernel.hashing import hash_obj
+from research_ci.store.workspace import Workspace
 
 
 @dataclass(frozen=True)

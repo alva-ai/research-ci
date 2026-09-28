@@ -8,19 +8,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from alpha_ci.kernel.hashing import canonical_json
+from research_ci.kernel.hashing import canonical_json
 
-STATE_DIR = ".aci"
+STATE_DIR = ".rci"
 IGNORED = frozenset({STATE_DIR, "__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_cache"})
 
 
-def aci_home() -> Path:
+def rci_home() -> Path:
     """Per-user engine state outside any idea: ledger anchors, and later the data vault."""
-    return Path(os.environ.get("ACI_HOME") or Path.home() / ".aci")
+    return Path(os.environ.get("RCI_HOME") or Path.home() / ".rci")
 
 
 class Workspace:
-    """Engine-owned state of one idea, kept under ``<idea>/.aci``."""
+    """Engine-owned state of one idea, kept under ``<idea>/.rci``."""
 
     def __init__(self, idea_dir: Path) -> None:
         self.idea_dir = Path(idea_dir)

@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from alpha_ci.kernel.time.clock import TIME
+from research_ci.kernel.time.clock import TIME
 
 _TAGS: list[tuple[pl.DataType, str]] = [
     (TIME, "ts_ns_utc"),

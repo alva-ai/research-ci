@@ -2,17 +2,17 @@ from pathlib import Path
 
 import pytest
 
-from alpha_ci.api.contract import ContractError
-from alpha_ci.store.ledger import LedgerError
-from alpha_ci.workflow.commands import Idea, find_ideas
-from alpha_ci.workflow.machine import State, WorkflowError
+from research_ci.api.contract import ContractError
+from research_ci.store.ledger import LedgerError
+from research_ci.workflow.commands import Idea, find_ideas
+from research_ci.workflow.machine import State, WorkflowError
 
 S = State
 
 
 def _contract(template: str = "factor", budget: int = 3, skip: tuple[str, ...] = ()) -> str:
     return (
-        "from alpha_ci.api.contract import Contract\n\n"
+        "from research_ci.api.contract import Contract\n\n"
         f"CONTRACT = Contract(template={template!r}, claim='toxicity predicts markouts', "
         f"explore_end='2025-06-30T00:00:00Z', seal_end='2025-12-31T00:00:00Z', budget={budget}, skip={skip!r})\n"
     )
@@ -183,7 +183,7 @@ def test_a_contract_edited_after_derive_cannot_be_approved(tmp_path: Path) -> No
         idea.approve("contract")
 
 
-def test_approval_trusts_the_ledger_not_the_copies_under_aci(tmp_path: Path) -> None:
+def test_approval_trusts_the_ledger_not_the_copies_under_rci(tmp_path: Path) -> None:
     idea = Idea.init(tmp_path / "tox", "factor")
     (idea.root / "contract.py").write_text(_contract(budget=3))
     idea.derive_contract()
@@ -264,8 +264,8 @@ def test_deleting_the_last_failed_submission_is_caught(tmp_path: Path) -> None:
         Idea(idea.root)
 
 
-def test_an_idea_keeps_its_anchor_when_the_directory_moves(tmp_path: Path, isolated_aci_home: Path) -> None:
+def test_an_idea_keeps_its_anchor_when_the_directory_moves(tmp_path: Path, isolated_rci_home: Path) -> None:
     idea = _idea(tmp_path)
     moved = idea.root.rename(tmp_path / "renamed")
     assert Idea(moved).status().stage("contract").state is S.PASSED
-    assert len(list((isolated_aci_home / "heads").glob("*.json"))) == 1
+    assert len(list((isolated_rci_home / "heads").glob("*.json"))) == 1

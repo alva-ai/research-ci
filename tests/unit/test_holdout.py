@@ -2,11 +2,11 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from alpha_ci.kernel.holdout.labels import holding_return, markout
-from alpha_ci.kernel.holdout.tiers import Tier, TierError, Tiers, decision_window, require_in_window, visible
-from alpha_ci.kernel.tables import field_table
-from alpha_ci.kernel.time.asof import asof
-from alpha_ci.kernel.time.clock import TIME, to_ns
+from research_ci.kernel.holdout.labels import holding_return, markout
+from research_ci.kernel.holdout.tiers import Tier, TierError, Tiers, decision_window, require_in_window, visible
+from research_ci.kernel.tables import field_table
+from research_ci.kernel.time.asof import asof
+from research_ci.kernel.time.clock import TIME, to_ns
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
 H = pd.Timedelta(hours=1)

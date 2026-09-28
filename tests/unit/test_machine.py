@@ -1,6 +1,6 @@
 import pytest
 
-from alpha_ci.workflow.machine import (
+from research_ci.workflow.machine import (
     ALLOWED,
     VERDICTS,
     Command,

@@ -1,4 +1,4 @@
-# Alpha CI
+# Research CI
 
 A backtest framework for research: an alpha claim counts only after it passes CI, the same way code does.
 
@@ -8,7 +8,7 @@ A backtest framework for research: an alpha claim counts only after it passes CI
 
 Agents made research fast, but judgment did not keep up. The usual loop is: an agent prepares data, writes a strategy, sweeps parameters, shows the best PnL curve, and explains why it works. Every decision in that loop depends on context and gut feeling, and none of it is reproducible.
 
-Alpha CI moves the judgment **before** the results and makes it executable:
+Research CI moves the judgment **before** the results and makes it executable:
 
 - **Falsifiable**: before an idea starts, write down what result would prove it wrong.
 - **Executable**: that standard is code. The engine reruns the submission and decides; it never trusts numbers an agent reports.
@@ -75,7 +75,7 @@ CHECKED                                  |
  |  human approves                       |
  v                                       |
 FROZEN ----------------------------------+
- |  aci submit (1 trial)
+ |  rci submit (1 trial)
  v
 SUBMITTED ------------------> PASSED ----> next layer
  |      ^
@@ -98,7 +98,7 @@ explore, submit          approve, capital card     forward, monitor
       |                     |                           |
       +---------------------+---------------------------+
                             |
-                         aci CLI
+                         rci CLI
                             |
                         workflow  ---------- spawns ------------>  challenger
               (state machine, next_actions)                        (separate LLM process,
@@ -108,20 +108,20 @@ explore, submit          approve, capital card     forward, monitor
                 (deterministic, no LLM)
 ```
 
-The library is passive. It knows the state, decides which transitions are legal, and computes. Every driver reads the same `next_actions()` list; `aci next` prints it.
+The library is passive. It knows the state, decides which transitions are legal, and computes. Every driver reads the same `next_actions()` list; `rci next` prints it.
 
 ## Architecture
 
 ```text
 +------------------------------------------------------------------+
-| cli        the aci command                                       |
+| cli        the rci command                                       |
 +------------------------------------------------------------------+
 | llm        challenger, narration, summary audit (optional)       |
 +------------------------------------------------------------------+
 | workflow   state machine, lineage, templates, next_actions       |
 +----------------+----------------+----------------+---------------+
 | stages         | store          | runner         | render        |
-| per-layer      | .aci/, ledger, | research code  | cards from    |
+| per-layer      | .rci/, ledger, | research code  | cards from    |
 | policies       | freeze, vault  | in a child     | verdict.json  |
 +----------------+----------------+----------------+---------------+
 | kernel     time, holdout, checks, judge (pure functions, no I/O) |
@@ -129,7 +129,7 @@ The library is passive. It knows the state, decides which transitions are legal,
 | api        building blocks and plugin protocols                  |
 +------------------------------------------------------------------+
      ^
-     |  plugins (in alpha-ci-lab) import api only
+     |  plugins (in research-ci-lab) import api only
 ```
 
 A layer may import only the layers below it. import-linter enforces this in CI, and `reference_plugins` may import only `api`.
@@ -141,10 +141,10 @@ A layer may import only the layers below it. import-linter enforces this in CI, 
 | `stages` | Policies, one file per layer: floor checks, floor null worlds, calibration recipe, caps. |
 | `workflow` | Lifecycle: inner state machine, outer dependency graph with STALE invalidation, templates, `next_actions`. |
 | `runner` | Process isolation for research code. |
-| `store` | All I/O: workspace `.aci/`, ledger, freeze records, data vault. |
+| `store` | All I/O: workspace `.rci/`, ledger, freeze records, data vault. |
 | `render` | Deterministic cards from `verdict.json`, citation checks for summaries. |
 | `llm` | Optional: challenger, card narration, summary audit. Never imported by the kernel or workflow. |
-| `cli` | The `aci` command. |
+| `cli` | The `rci` command. |
 
 ### Process model
 
@@ -173,34 +173,34 @@ A stray `np.random.seed`, an in-place edit, or a monkeypatch in research code ca
 
 | Command | Called by | Precondition |
 | --- | --- | --- |
-| `aci init <idea> --template <t>` | agent | none |
-| `aci contract derive` | agent | none |
-| `aci approve --stage <stage>` | **human**, interactive | calibration passed, no coverage gaps |
-| `aci <layer> explore` | agent, unlimited | upstream passed |
-| `aci <layer> register` | agent | upstream passed |
-| `aci <layer> challenge` | challenger | evaluators registered |
-| `aci <layer> check` | agent | null worlds present |
-| `aci <layer> submit` | agent, 1 trial each | frozen, budget left; TAINTED if anything frozen changed |
-| `aci approve --stage <layer> --extend N` | **human**, interactive | layer PAUSED |
-| `aci seal run` | human | k candidates declared in advance |
-| `aci forward --all`, `aci monitor --all` | scheduler | none |
-| `aci next`, `aci status`, `aci inbox`, `aci verify` | anyone | none |
+| `rci init <idea> --template <t>` | agent | none |
+| `rci contract derive` | agent | none |
+| `rci approve --stage <stage>` | **human**, interactive | calibration passed, no coverage gaps |
+| `rci <layer> explore` | agent, unlimited | upstream passed |
+| `rci <layer> register` | agent | upstream passed |
+| `rci <layer> challenge` | challenger | evaluators registered |
+| `rci <layer> check` | agent | null worlds present |
+| `rci <layer> submit` | agent, 1 trial each | frozen, budget left; TAINTED if anything frozen changed |
+| `rci approve --stage <layer> --extend N` | **human**, interactive | layer PAUSED |
+| `rci seal run` | human | k candidates declared in advance |
+| `rci forward --all`, `rci monitor --all` | scheduler | none |
+| `rci next`, `rci status`, `rci inbox`, `rci verify` | anyone | none |
 
-`<layer>` is one of data, feat, signal, algo. Implemented so far: `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve`. The per-layer commands arrive with M3 and the gate commands after it; `aci next` already names them. `status`, `next`, and `inbox` take `--json` for agents.
+`<layer>` is one of data, feat, signal, algo. Implemented so far: `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve`. The per-layer commands arrive with M3 and the gate commands after it; `rci next` already names them. `status`, `next`, and `inbox` take `--json` for agents.
 
 ```text
-$ aci init ideas/tox -t factor
-$ aci next -i ideas/tox
-agent      aci contract derive                  write contract.py, then derive the contract
-$ aci contract derive -i ideas/tox
-$ aci approve --stage contract -i ideas/tox     # a person, at a terminal
+$ rci init ideas/tox -t factor
+$ rci next -i ideas/tox
+agent      rci contract derive                  write contract.py, then derive the contract
+$ rci contract derive -i ideas/tox
+$ rci approve --stage contract -i ideas/tox     # a person, at a terminal
 approve contract v1 of tox
   claim: Taker toxicity on venue A predicts 5s markouts on venue B
   ...
 Freeze contract v1? [y/N]: y
 frozen contract v1: bc1490ba55b1
-$ aci next -i ideas/tox
-agent      aci data register                    declare how this stage will be judged
+$ rci next -i ideas/tox
+agent      rci data register                    declare how this stage will be judged
 ```
 
 ## Templates
@@ -226,7 +226,7 @@ All templates end with the same gates: seal, forward, capital, monitor.
 
 Git is not a security mechanism, because agents can rewrite history. Trust comes from the engine's own freeze hashes and the hash-chained ledger.
 
-The hash chain catches edited, deleted, and reordered records, but not records cut from the end, such as a failed submission deleted to win back a trial or an older ledger restored from git. For that the engine also keeps each idea's latest head in `$ACI_HOME/heads/` (default `~/.aci/heads/`), outside the idea and keyed by its first record, and refuses a ledger that no longer contains it. A ledger that grew elsewhere, for example pulled from another machine, is accepted as long as it still contains that head.
+The hash chain catches edited, deleted, and reordered records, but not records cut from the end, such as a failed submission deleted to win back a trial or an older ledger restored from git. For that the engine also keeps each idea's latest head in `$RCI_HOME/heads/` (default `~/.rci/heads/`), outside the idea and keyed by its first record, and refuses a ledger that no longer contains it. A ledger that grew elsewhere, for example pulled from another machine, is accepted as long as it still contains that head.
 
 See [docs/concepts.md](docs/concepts.md) for the vocabulary, how a verdict is computed, and an example verdict card.
 
@@ -236,7 +236,7 @@ See [docs/concepts.md](docs/concepts.md) for the vocabulary, how a verdict is co
 | --- | --- | --- | --- |
 | M0 | Scaffold, CI, import layers | CI green; layer violations are caught | Done |
 | M1 | `tables` + `time` (asof, stepper) | Every planted lookahead is caught; plain rolling reports zero mismatches | Done |
-| M2 | `holdout` + ledger + workflow skeleton + `aci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Done |
+| M2 | `holdout` + ledger + workflow skeleton + `rci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Done |
 | M3 | `judge`: null worlds, z thresholds, evidence levels, stand-ins | Feat layer end to end on the first real case | Planned |
 | M4 | `runner`: child process + Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | Plugins pass conformance | Planned |
@@ -248,7 +248,7 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync
-uv run aci --help
+uv run rci --help
 uv run pytest
 uv run ruff check
 uv run ruff format --check
@@ -258,7 +258,7 @@ npx markdownlint-cli2
 ```
 
 ```text
-src/alpha_ci/
+src/research_ci/
   api/  kernel/{time,holdout,checks,judge}/  stages/  workflow/
   runner/  store/  render/  llm/  cli/  reference_plugins/
 tests/unit/

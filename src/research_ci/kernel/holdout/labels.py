@@ -4,7 +4,7 @@ from datetime import datetime
 import pandas as pd
 import polars as pl
 
-from alpha_ci.kernel.time.clock import TIME, span_ns, time_series, to_ns
+from research_ci.kernel.time.clock import TIME, span_ns, time_series, to_ns
 
 
 def holding_return(

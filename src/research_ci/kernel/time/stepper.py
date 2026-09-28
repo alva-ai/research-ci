@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from alpha_ci.kernel.tables import PANEL_KEYS, SchemaError
-from alpha_ci.kernel.time.asof import asof, field_names
-from alpha_ci.kernel.time.clock import TIME, from_ns, lit_time, time_series, to_ns
+from research_ci.kernel.tables import PANEL_KEYS, SchemaError
+from research_ci.kernel.time.asof import asof, field_names
+from research_ci.kernel.time.clock import TIME, from_ns, lit_time, time_series, to_ns
 
 PanelFormat = Literal["pandas", "polars"]
 Features = Callable[[Any], Any]

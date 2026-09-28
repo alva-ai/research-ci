@@ -5,8 +5,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from alpha_ci.kernel.hashing import canonical_json, sha256_hex
-from alpha_ci.store.workspace import write_atomic
+from research_ci.kernel.hashing import canonical_json, sha256_hex
+from research_ci.store.workspace import write_atomic
 
 GENESIS = "0" * 64
 
@@ -82,7 +82,7 @@ class Ledger:
                 raise LedgerError(
                     f"line {seq + 1}: records were removed or rewritten; this machine last saw record {seq} "
                     f"({head[:12]}) and the ledger now has {len(heads)} records. "
-                    "A copied idea needs its own `aci init`."
+                    "A copied idea needs its own `rci init`."
                 )
         if known is None or known["seq"] < len(heads) - 1:
             self._pin(heads[0], len(heads) - 1, heads[-1])

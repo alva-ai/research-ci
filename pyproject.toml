@@ -1,5 +1,5 @@
 [project]
-name = "alpha-ci"
+name = "research-ci"
 version = "0.1.0"
 description = "CI for alpha research: time, holdout, verdict."
 readme = "README.md"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-aci = "alpha_ci.cli.main:app"
+rci = "research_ci.cli.main:app"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
@@ -50,32 +50,32 @@ pythonVersion = "3.11"
 include = ["src", "tests"]
 
 [tool.importlinter]
-root_package = "alpha_ci"
+root_package = "research_ci"
 
 [[tool.importlinter.contracts]]
 name = "layers"
 type = "layers"
 layers = [
-    "alpha_ci.cli",
-    "alpha_ci.llm",
-    "alpha_ci.workflow",
-    "alpha_ci.stages | alpha_ci.store | alpha_ci.runner | alpha_ci.render",
-    "alpha_ci.kernel",
-    "alpha_ci.api",
+    "research_ci.cli",
+    "research_ci.llm",
+    "research_ci.workflow",
+    "research_ci.stages | research_ci.store | research_ci.runner | research_ci.render",
+    "research_ci.kernel",
+    "research_ci.api",
 ]
 
 [[tool.importlinter.contracts]]
 name = "reference plugins only use api"
 type = "forbidden"
-source_modules = ["alpha_ci.reference_plugins"]
+source_modules = ["research_ci.reference_plugins"]
 forbidden_modules = [
-    "alpha_ci.kernel",
-    "alpha_ci.stages",
-    "alpha_ci.workflow",
-    "alpha_ci.store",
-    "alpha_ci.runner",
-    "alpha_ci.render",
-    "alpha_ci.llm",
-    "alpha_ci.cli",
+    "research_ci.kernel",
+    "research_ci.stages",
+    "research_ci.workflow",
+    "research_ci.store",
+    "research_ci.runner",
+    "research_ci.render",
+    "research_ci.llm",
+    "research_ci.cli",
 ]
 
