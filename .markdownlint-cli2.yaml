@@ -1,0 +1,9 @@
+config:
+  MD013: false
+
+globs:
+  - "*.md"
+  - "docs/**/*.md"
+
+ignores:
+  - ".venv/**"
