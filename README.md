@@ -48,28 +48,7 @@ Research code stays free (pandas or polars, rolling windows, sklearn, SHAP, anyt
 
 Each research layer is its own inner loop, and a layer can only use outputs that passed the layer before it. Seal, forward, and capital are one-shot checkpoints: registered in advance, run once, and sent back to an earlier layer if they fail.
 
-```text
-idea
- |
-contract ....... reverse-derived thresholds, frozen before any search
- |
-data ........... inner loop  <--+
- |                              |
-feat ........... inner loop  <--|----------------------+      CI
- |                              |                      |
-signal ......... inner loop     |  a later layer       |
- |                              |  finds a data        |
-algo ........... inner loop  ---+  problem             |
- |               (the backtest evaluates this layer)   |
- |                                                     |  drift
-seal ........... once, pass/fail only                  |  reopens
- |                                                     |  a layer    CD
-forward ........ new data created after freeze         |
- |                                                     |
-capital ........ human decision                        |
- |                                                     |
-monitor ........ scheduled ----------------------------+
-```
+![The outer loop: one idea from the contract through the four layers to the checkpoints](docs/assets/outer-loop.png)
 
 | Layer | Question it answers | Output shape | Needs a backtest |
 | --- | --- | --- | --- |

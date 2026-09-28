@@ -1142,7 +1142,13 @@ A plugin or tool moves from a lab into the engine only when all of these hold: a
 
 > **Status:** background: other systems and what Research CI takes from them.
 
+In the diagrams below, blue boxes are deterministic code, where results are judged; dashed orange boxes are agents or LLMs; green folded boxes are knowledge; rounded boxes are people; grey boxes are data and platforms. A red Gap badge marks a key gap for our purposes.
+
+![Legend](assets/legend.png)
+
 ### RD-Agent(Q)
+
+![RD-Agent(Q)](assets/prior-art-2-rd-agent.png)
 
 An automated research loop for quantitative factors and models, built on Qlib ([paper](https://arxiv.org/abs/2505.15155)). It specifies the task as a structured tuple of background, data, output format, and execution environment, then loops: propose a hypothesis, write code, validate (deduplicate, then backtest), analyse against the best set so far. A bandit decides whether the next round changes factors or the model. Knowledge is structured: records of hypotheses and feedback, and a graph of tasks, code, and feedback used to retrieve earlier code.
 
@@ -1151,12 +1157,16 @@ An automated research loop for quantitative factors and models, built on Qlib ([
 
 ### AlphaLab
 
+![AlphaLab](assets/prior-art-3-alphalab.png)
+
 An autonomous research system that takes a dataset and a one-sentence goal and runs the whole study ([paper](https://arxiv.org/abs/2604.08590)). It generates its own adapter files and a domain knowledge document, explores the data, then has a builder write the evaluator, a critic without context review it for leaks and lookahead, and a tester write tests until they pass. Experiments are then proposed, implemented, and scheduled at scale, with a leaderboard. Knowledge passes through markdown files, including a playbook of methods and "do not try again" entries; the dispatcher is plain Python.
 
 - **Borrowed**: a reviewer without the researcher's context (the challenger), a scheduler that is not an LLM, and pitfall lists that accumulate.
 - **Different**: its evaluator is built by an LLM and constrained only by prompts, with no process isolation; results come from single runs; its domains have clean scalar metrics with no costs, capacity, or live trading. In Research CI the evaluator machinery is fixed, reviewed code, and the challenger's output must pass calibration.
 
 ### autoresearch
+
+![autoresearch](assets/prior-art-1-autoresearch.png)
 
 A minimal loop of a few hundred lines: a person edits an instruction file, the agent edits the training script, and a fixed preparation script owns the data and the metric. Each run trains for five minutes; a better validation score is kept, a worse one discarded.
 
@@ -1165,6 +1175,8 @@ A minimal loop of a few hundred lines: a person edits an instruction file, the a
 
 ### AlphaEvolve
 
+![AlphaEvolve](assets/prior-art-4-alphaevolve.png)
+
 Evolves code and keeps a database of programs. The customer writes the evaluation function and runs it on their side; the system deliberately does not touch it.
 
 - **Borrowed**: the recognition that the evaluator is the open slot every automated loop leaves to the user.
@@ -1172,12 +1184,18 @@ Evolves code and keeps a database of programs. The customer writes the evaluatio
 
 ### Qlib
 
+![Qlib](assets/prior-art-5-qlib.png)
+
 A quantitative research platform with no agent: data layer, factor expression engine, model zoo, backtesting, and experiment records that compute IC and portfolio analysis, driven by YAML workflows and Python.
 
 - **Borrowed**: proof that a research engine can exist while research code stays free.
 - **Different**: it is oriented to daily cross-sectional equities and does not manage point-in-time data, a trial ledger, or holdout permissions.
 
 ### Kaggle
+
+Kaggle, WorldQuant BRAIN, and Lean side by side:
+
+![Kaggle, WorldQuant BRAIN, and Lean](assets/prior-art-6-kaggle-brain-lean.png)
 
 Competitions separate the host from the participants. Code competitions run submissions on hidden data, the private leaderboard is revealed once, and forecasting competitions score on data that did not exist at submission time.
 
@@ -1208,6 +1226,8 @@ A proof assistant with a small trusted kernel and a very large library. Tactics 
 - **Different**: theorems are deterministic and permanent; statistical claims are probabilistic and decay. Hence the ledger, the trial count, and forward reruns.
 
 ### What they share and what is missing
+
+![Side-by-side comparison](assets/prior-art-comparison.png)
 
 In every system above that works in practice, the judge is code, not markdown; markdown carries knowledge and instructions and only shapes what agents propose. The loop and orchestration are open source already, or will be provided by vendors. What they lack is the judgment layer: holdout data outside the agent's permissions, trial counting per idea, point-in-time data, many research types, forward validation, and tests of the tests with null worlds. That layer is Research CI.
 
