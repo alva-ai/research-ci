@@ -4,7 +4,7 @@ from enum import StrEnum
 class Kind(StrEnum):
     CONTRACT = "contract"
     LAYER = "layer"
-    GATE = "gate"
+    CHECKPOINT = "checkpoint"
 
 
 class State(StrEnum):
@@ -53,7 +53,7 @@ ALLOWED: dict[Kind, dict[Command, frozenset[State]]] = {
         C.SUBMIT: frozenset({S.FROZEN, S.FAILED, S.TAINTED}),
         C.EXTEND: frozenset({S.PAUSED}),
     },
-    Kind.GATE: {
+    Kind.CHECKPOINT: {
         C.REGISTER: frozenset({S.OPEN, S.REGISTERED, S.STALE}),
         C.APPROVE: frozenset({S.REGISTERED}),
         C.SUBMIT: frozenset({S.FROZEN}),

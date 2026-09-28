@@ -82,13 +82,13 @@ def test_a_contract_is_derived_then_approved() -> None:
         transition(Kind.CONTRACT, S.OPEN, C.APPROVE)
 
 
-def test_gates_run_once() -> None:
-    assert _walk(Kind.GATE, [(C.REGISTER, None), (C.APPROVE, None), (C.SUBMIT, S.FAILED)]) is S.FAILED
+def test_checkpoints_run_once() -> None:
+    assert _walk(Kind.CHECKPOINT, [(C.REGISTER, None), (C.APPROVE, None), (C.SUBMIT, S.FAILED)]) is S.FAILED
     for state in (S.FAILED, S.TAINTED, S.PASSED):
         with pytest.raises(WorkflowError):
-            transition(Kind.GATE, state, C.SUBMIT, S.PASSED)
+            transition(Kind.CHECKPOINT, state, C.SUBMIT, S.PASSED)
         with pytest.raises(WorkflowError):
-            transition(Kind.GATE, state, C.REGISTER)
+            transition(Kind.CHECKPOINT, state, C.REGISTER)
 
 
 def test_extending_a_paused_layer_restores_its_last_verdict() -> None:

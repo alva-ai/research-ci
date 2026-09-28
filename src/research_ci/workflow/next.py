@@ -4,7 +4,7 @@ from typing import Literal
 from research_ci.workflow.machine import DONE, Kind, State
 
 Who = Literal["agent", "human", "challenger", "scheduler"]
-GATE_RUN: dict[str, tuple[Who, str]] = {
+CHECKPOINT_RUN: dict[str, tuple[Who, str]] = {
     "seal": ("human", "rci seal run"),
     "forward": ("scheduler", "rci forward --all"),
     "capital": ("human", "rci capital run"),
@@ -62,7 +62,7 @@ def next_actions(status: IdeaStatus) -> list[Action]:
         if s.state not in DONE:
             if s.kind is Kind.CONTRACT:
                 return [_contract(s)]
-            return [_gate(s) if s.kind is Kind.GATE else _layer(s)]
+            return [_checkpoint(s) if s.kind is Kind.CHECKPOINT else _layer(s)]
     return []
 
 
@@ -97,14 +97,14 @@ def _layer(s: StageStatus) -> Action:
     return Action("agent", name, "submit", f"rci {name} submit", f"{reason}change the research code ({left})")
 
 
-def _gate(s: StageStatus) -> Action:
+def _checkpoint(s: StageStatus) -> Action:
     name, state = s.stage, s.state
     if state in (State.OPEN, State.STALE):
-        return Action("agent", name, "register", f"rci {name} register", "declare the plan before the gate runs")
+        return Action("agent", name, "register", f"rci {name} register", "declare the plan before the checkpoint runs")
     if state is State.REGISTERED:
         return Action("human", name, "approve", f"rci approve --stage {name}", "review the plan and freeze it")
     if state is State.FROZEN:
-        who, command = GATE_RUN[name]
-        return Action(who, name, "submit", command, "run the gate once")
-    reason = f"{name} ran once and ended {state}; reopen the layer to rework, which restarts the gates"
+        who, command = CHECKPOINT_RUN[name]
+        return Action(who, name, "submit", command, "run the checkpoint once")
+    reason = f"{name} ran once and ended {state}; reopen the layer to rework, which restarts the checkpoints"
     return Action("human", name, "reopen", "rci <layer> register", reason)
