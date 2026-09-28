@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from alpha_ci.store.freeze import changed, make_freeze, read_freeze, write_freeze
-from alpha_ci.store.ledger import Ledger, LedgerError
-from alpha_ci.store.workspace import Workspace, hash_file, hash_tree
+from research_ci.store.freeze import changed, make_freeze, read_freeze, write_freeze
+from research_ci.store.ledger import Ledger, LedgerError
+from research_ci.store.workspace import Workspace, hash_file, hash_tree
 
 
 def _ledger(tmp_path: Path) -> Ledger:

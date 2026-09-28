@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from alpha_ci import __version__
-from alpha_ci.cli import main
-from alpha_ci.cli.main import app
+from research_ci import __version__
+from research_ci.cli import main
+from research_ci.cli.main import app
 
 CONTRACT = (
-    "from alpha_ci.api.contract import Contract\n\n"
+    "from research_ci.api.contract import Contract\n\n"
     "CONTRACT = Contract(template='factor', claim='toxicity predicts markouts', "
     "explore_end='2025-06-30T00:00:00Z', seal_end='2025-12-31T00:00:00Z')\n"
 )
@@ -39,7 +39,7 @@ def test_init_then_status_and_next(tmp_path: Path) -> None:
     idea = tmp_path / "tox"
     assert runner.invoke(app, ["init", str(idea), "--template", "factor"]).exit_code == 0
     actions = json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)
-    assert [(a["who"], a["command"]) for a in actions] == [("agent", "aci contract derive")]
+    assert [(a["who"], a["command"]) for a in actions] == [("agent", "rci contract derive")]
     status = runner.invoke(app, ["status", "-i", str(idea)]).stdout
     assert "contract  OPEN" in status
 
@@ -87,7 +87,7 @@ def test_out_of_order_approve_is_rejected(tmp_path: Path) -> None:
 
 def test_a_tampered_ledger_is_refused_everywhere(tmp_path: Path) -> None:
     idea = _derived(tmp_path)
-    ledger = idea / ".aci" / "ledger.jsonl"
+    ledger = idea / ".rci" / "ledger.jsonl"
     ledger.write_text(ledger.read_text().replace('"template":"factor"', '"template":"rule"'))
     for command in (["verify"], ["status"], ["next"]):
         result = runner.invoke(app, [*command, "-i", str(idea)])
@@ -99,4 +99,4 @@ def test_inbox_lists_only_what_waits_for_a_person(tmp_path: Path) -> None:
     _derived(tmp_path, "ready")
     assert runner.invoke(app, ["init", str(tmp_path / "fresh"), "-t", "rule"]).exit_code == 0
     items = json.loads(runner.invoke(app, ["inbox", str(tmp_path), "--json"]).stdout)
-    assert [(Path(i["idea"]).name, i["command"]) for i in items] == [("ready", "aci approve --stage contract")]
+    assert [(Path(i["idea"]).name, i["command"]) for i in items] == [("ready", "rci approve --stage contract")]

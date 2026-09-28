@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 
-from alpha_ci.workflow.machine import DONE, State, WorkflowError
+from research_ci.workflow.machine import DONE, State, WorkflowError
 
 
 def upstream(stages: tuple[str, ...], stage: str) -> tuple[str, ...]:

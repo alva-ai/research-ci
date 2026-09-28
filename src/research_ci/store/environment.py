@@ -3,17 +3,17 @@ import re
 from importlib.metadata import distributions, requires, version
 from pathlib import Path
 
-import alpha_ci
-from alpha_ci.kernel.hashing import hash_obj
-from alpha_ci.store.workspace import hash_file, hash_tree
+import research_ci
+from research_ci.kernel.hashing import hash_obj
+from research_ci.store.workspace import hash_file, hash_tree
 
-ENGINE = "alpha-ci"
+ENGINE = "research-ci"
 
 
 def judging_deps() -> dict[str, str]:
     """What the verdict machinery depends on: engine source, interpreter, and the engine's own dependencies."""
     return {
-        "engine": hash_tree(Path(alpha_ci.__file__).parent),
+        "engine": hash_tree(Path(research_ci.__file__).parent),
         "python": f"{platform.python_implementation()} {platform.python_version()}",
         "engine_packages": hash_obj(engine_packages()),
     }

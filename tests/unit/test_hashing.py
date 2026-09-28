@@ -4,8 +4,8 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from alpha_ci.kernel.hashing import canonical_json, hash_frame, hash_obj
-from alpha_ci.kernel.tables import field_table
+from research_ci.kernel.hashing import canonical_json, hash_frame, hash_obj
+from research_ci.kernel.tables import field_table
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
 

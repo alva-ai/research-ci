@@ -4,10 +4,10 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from alpha_ci.kernel.tables import SchemaError, field_table
-from alpha_ci.kernel.time.asof import asof
-from alpha_ci.kernel.time.clock import from_ns, to_ns
-from alpha_ci.kernel.time.stepper import PanelFormat, step
+from research_ci.kernel.tables import SchemaError, field_table
+from research_ci.kernel.time.asof import asof
+from research_ci.kernel.time.clock import from_ns, to_ns
+from research_ci.kernel.time.stepper import PanelFormat, step
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
 H = pd.Timedelta(hours=1)

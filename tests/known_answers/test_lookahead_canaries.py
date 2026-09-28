@@ -7,8 +7,8 @@ import polars as pl
 import pytest
 from pandas.api.typing import SeriesGroupBy
 
-from alpha_ci.kernel.tables import field_table
-from alpha_ci.kernel.time.stepper import PanelFormat, _compare, check_leaks, step
+from research_ci.kernel.tables import field_table
+from research_ci.kernel.time.stepper import PanelFormat, _compare, check_leaks, step
 
 HOUR = pd.Timedelta(hours=1)
 START = pd.Timestamp("2026-01-01", tz="UTC")

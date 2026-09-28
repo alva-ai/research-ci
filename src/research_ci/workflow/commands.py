@@ -4,20 +4,20 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from alpha_ci.api.contract import Contract, ContractError
-from alpha_ci.store.environment import environment_record, judging_deps
-from alpha_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
-from alpha_ci.store.ledger import Ledger, LedgerError
-from alpha_ci.store.workspace import Workspace, aci_home, hash_file
-from alpha_ci.workflow.lineage import blockers, invalidated, upstream
-from alpha_ci.workflow.machine import Command, Kind, State, WorkflowError, starts_new_version, transition
-from alpha_ci.workflow.next import Action, IdeaStatus, StageStatus, next_actions
-from alpha_ci.workflow.templates import CONTRACT, get_template, kind_of
+from research_ci.api.contract import Contract, ContractError
+from research_ci.store.environment import environment_record, judging_deps
+from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
+from research_ci.store.ledger import Ledger, LedgerError
+from research_ci.store.workspace import Workspace, hash_file, rci_home
+from research_ci.workflow.lineage import blockers, invalidated, upstream
+from research_ci.workflow.machine import Command, Kind, State, WorkflowError, starts_new_version, transition
+from research_ci.workflow.next import Action, IdeaStatus, StageStatus, next_actions
+from research_ci.workflow.templates import CONTRACT, get_template, kind_of
 
 CONTRACT_FILE = "contract.py"
 CONTRACT_CARD = "contract.json"
 LEDGER_FILE = "ledger.jsonl"
-SKELETON = """from alpha_ci.api.contract import Contract
+SKELETON = """from research_ci.api.contract import Contract
 
 CONTRACT = Contract(
     template="{template}",
@@ -38,7 +38,7 @@ class Idea:
         self.workspace = Workspace(self.root)
         self.ledger = _ledger(self.workspace)
         if not self.ledger.path.exists():
-            raise WorkflowError(f"{self.root} is not an Alpha CI idea; run `aci init` first")
+            raise WorkflowError(f"{self.root} is not a Research CI idea; run `rci init` first")
         self.ledger.verify()
 
     @classmethod
@@ -48,7 +48,7 @@ class Idea:
         with workspace.lock():
             ledger = _ledger(workspace)
             if ledger.path.exists():
-                raise WorkflowError(f"{root} is already an Alpha CI idea")
+                raise WorkflowError(f"{root} is already a Research CI idea")
             contract = Path(root) / CONTRACT_FILE
             if not contract.exists():
                 contract.write_text(SKELETON.format(template=template))
@@ -102,7 +102,7 @@ class Idea:
 
     def register(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
         if stage == CONTRACT:
-            raise WorkflowError("the contract is registered by `aci contract derive`")
+            raise WorkflowError("the contract is registered by `rci contract derive`")
         return self._apply(stage, Command.REGISTER, payload=payload)
 
     def challenge(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
@@ -226,20 +226,20 @@ class Idea:
         return last
 
     def _derived_contract(self) -> dict[str, Any]:
-        """The contract as recorded in the ledger at derive time; files under .aci are only copies."""
+        """The contract as recorded in the ledger at derive time; files under .rci are only copies."""
         record = self._last(Command.REGISTER, CONTRACT)
         if record is None:
-            raise WorkflowError("the contract has not been derived; run `aci contract derive` first")
+            raise WorkflowError("the contract has not been derived; run `rci contract derive` first")
         path = self.root / CONTRACT_FILE
         if not path.exists() or record["payload"]["contract"] != hash_file(path):
-            raise WorkflowError("contract.py changed since it was derived; run `aci contract derive` again")
+            raise WorkflowError("contract.py changed since it was derived; run `rci contract derive` again")
         return record["payload"]["fields"]
 
 
 def load_contract(path: Path) -> Contract:
     if not path.is_file():
         raise ContractError(f"{path} does not exist")
-    spec = importlib.util.spec_from_file_location("_aci_contract", path)
+    spec = importlib.util.spec_from_file_location("_rci_contract", path)
     if spec is None or spec.loader is None:
         raise ContractError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
@@ -256,7 +256,7 @@ def load_contract(path: Path) -> Contract:
 
 
 def find_ideas(root: Path) -> list[Path]:
-    patterns = (".aci/" + LEDGER_FILE, "*/.aci/" + LEDGER_FILE, "*/*/.aci/" + LEDGER_FILE)
+    patterns = (".rci/" + LEDGER_FILE, "*/.rci/" + LEDGER_FILE, "*/*/.rci/" + LEDGER_FILE)
     return sorted({p.parent.parent for pattern in patterns for p in Path(root).glob(pattern)})
 
 
@@ -270,7 +270,7 @@ class _Replay:
 
 
 def _ledger(workspace: Workspace) -> Ledger:
-    return Ledger(workspace.path(LEDGER_FILE), anchors=aci_home() / "heads")
+    return Ledger(workspace.path(LEDGER_FILE), anchors=rci_home() / "heads")
 
 
 def _move(s: StageStatus, to: State, note: str) -> dict[str, Any]:

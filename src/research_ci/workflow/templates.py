@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from alpha_ci.workflow.machine import Kind, WorkflowError
+from research_ci.workflow.machine import Kind, WorkflowError
 
 CONTRACT = "contract"
 LAYERS = ("data", "feat", "signal", "algo")

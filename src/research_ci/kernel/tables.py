@@ -1,7 +1,7 @@
 import pandas as pd
 import polars as pl
 
-from alpha_ci.kernel.time.clock import TIME
+from research_ci.kernel.time.clock import TIME
 
 KEY = ["entity", "field", "event_time", "vintage"]
 REQUIRED = ["entity", "field", "event_time", "available_at", "value"]
