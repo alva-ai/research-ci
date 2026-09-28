@@ -2,7 +2,7 @@
 
 A backtest framework for research: an alpha claim counts only after it passes CI, the same way code does.
 
-> **Status:** scaffold only. The package layout, CLI entry point, and CI are in place; no kernel logic is implemented yet. See [Roadmap](#roadmap).
+> **Status:** early. The time kernel (M1), holdout tiers and labels, the ledger, freeze records, and the workflow with its first CLI commands (M2) are implemented. Nothing computes a verdict yet (M3). See [Roadmap](#roadmap).
 
 ## Why
 
@@ -85,6 +85,10 @@ FAILED / TAINTED
 ```
 
 Exploration is allowed in any state. It never changes the state and is never counted as a trial.
+
+Each layer gets a submission budget from the contract, shared across its versions. When the budget runs out the layer is PAUSED until a person extends it. Reopening a layer that has passed marks every started layer after it STALE, and nothing downstream can move until the reopened layer passes again. Gates run once: a failed gate sends the idea back to a layer.
+
+There is no separate state file. Every transition is a ledger record, the state is replayed from the ledger, and every command refuses to run on a ledger whose hash chain is broken.
 
 ### Who does what
 
@@ -172,16 +176,32 @@ A stray `np.random.seed`, an in-place edit, or a monkeypatch in research code ca
 | `aci init <idea> --template <t>` | agent | none |
 | `aci contract derive` | agent | none |
 | `aci approve --stage <stage>` | **human**, interactive | calibration passed, no coverage gaps |
-| `aci data run` | agent | contract frozen |
-| `aci <feat\|signal\|algo> explore` | agent, unlimited | upstream passed |
-| `aci <feat\|signal\|algo> challenge` | agent or human | evaluators registered |
-| `aci <feat\|signal\|algo> check` | agent | null worlds present |
-| `aci <feat\|signal\|algo> submit` | agent, 1 trial each | frozen, hashes match, budget left |
+| `aci <layer> explore` | agent, unlimited | upstream passed |
+| `aci <layer> register` | agent | upstream passed |
+| `aci <layer> challenge` | challenger | evaluators registered |
+| `aci <layer> check` | agent | null worlds present |
+| `aci <layer> submit` | agent, 1 trial each | frozen, budget left; TAINTED if anything frozen changed |
+| `aci approve --stage <layer> --extend N` | **human**, interactive | layer PAUSED |
 | `aci seal run` | human | k candidates declared in advance |
 | `aci forward --all`, `aci monitor --all` | scheduler | none |
-| `aci next`, `aci status`, `aci inbox` | anyone | none |
+| `aci next`, `aci status`, `aci inbox`, `aci verify` | anyone | none |
 
-Only `aci version` exists today.
+`<layer>` is one of data, feat, signal, algo. Implemented so far: `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve`. The per-layer commands arrive with M3 and the gate commands after it; `aci next` already names them. `status`, `next`, and `inbox` take `--json` for agents.
+
+```text
+$ aci init ideas/tox -t factor
+$ aci next -i ideas/tox
+agent      aci contract derive                  write contract.py, then derive the contract
+$ aci contract derive -i ideas/tox
+$ aci approve --stage contract -i ideas/tox     # a person, at a terminal
+approve contract v1 of tox
+  claim: Taker toxicity on venue A predicts 5s markouts on venue B
+  ...
+Freeze contract v1? [y/N]: y
+frozen contract v1: bc1490ba55b1
+$ aci next -i ideas/tox
+agent      aci data register                    declare how this stage will be judged
+```
 
 ## Templates
 
@@ -199,12 +219,14 @@ All templates end with the same gates: seal, forward, capital, monitor.
 
 | Situation | Rule |
 | --- | --- |
-| Normal run in a lab | The engine is installed at a pinned git SHA and read-only. Verdicts record kernel SHA, plugin hashes, `uv.lock`, interpreter and package versions, and the data snapshot. |
-| Anything above changes after freeze | TAINTED. |
+| Normal run in a lab | The engine is installed at a pinned git SHA and read-only. A freeze pins the contract, the engine source, the interpreter, the engine's own dependencies, and the upstream freezes; from M3 also evaluators, nulls, plugins, and the data snapshot. Each submission also records every installed package and `uv.lock`. |
+| Anything frozen changes after approval | The submission is TAINTED. Research code and the libraries it uses may change between submissions. |
 | Run from this repo in editable mode | Marked DEV, capped at L1. |
 | Deliberate cheating | Out of scope for the MVP. Later: a separate OS user or a thin service `execute(bundle, vault, ledger) -> verdict`. |
 
 Git is not a security mechanism, because agents can rewrite history. Trust comes from the engine's own freeze hashes and the hash-chained ledger.
+
+The hash chain catches edited, deleted, and reordered records, but not records cut from the end, such as a failed submission deleted to win back a trial or an older ledger restored from git. For that the engine also keeps each idea's latest head in `$ACI_HOME/heads/` (default `~/.aci/heads/`), outside the idea and keyed by its first record, and refuses a ledger that no longer contains it. A ledger that grew elsewhere, for example pulled from another machine, is accepted as long as it still contains that head.
 
 See [docs/concepts.md](docs/concepts.md) for the vocabulary, how a verdict is computed, and an example verdict card.
 
@@ -214,7 +236,7 @@ See [docs/concepts.md](docs/concepts.md) for the vocabulary, how a verdict is co
 | --- | --- | --- | --- |
 | M0 | Scaffold, CI, import layers | CI green; layer violations are caught | Done |
 | M1 | `tables` + `time` (asof, stepper) | Every planted lookahead is caught; plain rolling reports zero mismatches | Done |
-| M2 | `holdout` + ledger + workflow skeleton + `aci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Next |
+| M2 | `holdout` + ledger + workflow skeleton + `aci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Done |
 | M3 | `judge`: null worlds, z thresholds, evidence levels, stand-ins | Feat layer end to end on the first real case | Planned |
 | M4 | `runner`: child process + Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | Plugins pass conformance | Planned |
