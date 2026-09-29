@@ -55,7 +55,7 @@ Every state change is one line of canonical JSON in `<idea>/.rci/ledger.jsonl`. 
  "prev": "35830db044ea...", "seq": 12, "stage": "feat"}
 ```
 
-Every payload carries `from`, `to`, and `version`. Beyond that, `init` records the template; `register` on the contract records the file hash and every field; `check` records `passed` and a note saying what failed; `approve` records the freeze hash and the frozen dependencies (plus the budget and `skip` for the contract); `submit` records the verdict, a note, and the research environment (hashes of all installed packages and of `uv.lock`); `extend`, `stale`, and `skip` record budget extensions and the state moves that follow a reopen or the contract approval. From M3 on, `submit` also records the angle scores, z values, evidence level, and caps.
+Every payload carries `from`, `to`, and `version`. Beyond that, `init` records the template; `register` on the contract records the file hash and every field; `check` records `passed` and a note saying what failed; `approve` records the freeze hash and the frozen dependencies (plus the budget and `skip` for the contract); `submit` records the verdict, a note, and the research environment (hashes of all installed packages and of `uv.lock`); `extend`, `stale`, and `skip` record budget extensions and the state moves that follow a reopen or the contract approval. From M3 on, `submit` also records the criterion scores, z values, evidence level, and caps.
 
 Thresholds rise with n, the number of submissions the ledger counts for that stage: `z_need = z_base * sqrt(1 + ln n)`. With an illustrative `z_base = 2.0`:
 
@@ -252,7 +252,7 @@ masks, splits         Spring Festival 2015-2024 (18 weeks); the 2019-06 break
 
 ### Futures: feat layer
 
-> **Status:** partly implemented: `step` and `check_leaks`, which catch the lookahead below, in M1; angles, null worlds, calibration, and verdicts planned for M3.
+> **Status:** partly implemented: `step` and `check_leaks`, which catch the lookahead below, in M1; criteria, null worlds, calibration, and verdicts planned for M3.
 
 The claim at this layer: at the decision time, the deviation of the inventory draw from its seasonal norm predicts the next week's margin change, beyond pure seasonality and beyond margin mean reversion.
 
@@ -263,7 +263,7 @@ The claim at this layer: at the decision time, the deviation of the inventory dr
 | it is chance | `BlockPermute` by four-week blocks |
 | the inventory mechanism is not needed | `ReplaceField("social_inventory")` (mechanism ablation) |
 
-The other registered angles are a secondary prediction (the effect should be stronger in the peak construction season) and stability across years. Calibration tests each null world in both directions. A `StandIn` built from seasonality plus noise must be killed by the whole-year shift. A `Planted` feature, the stand-in plus a little of the true residual label (a residual IC of about 1.5 times the MDE), must survive; it uses labels on purpose, exists only to test the null world, and is never a candidate.
+The other registered criteria are a secondary prediction (the effect should be stronger in the peak construction season) and stability across years. Calibration tests each null world in both directions. A `StandIn` built from seasonality plus noise must be killed by the whole-year shift. A `Planted` feature, the stand-in plus a little of the true residual label (a residual IC of about 1.5 times the MDE), must survive; it uses labels on purpose, exists only to test the null world, and is never a candidate.
 
 **Trial 1 is TAINTED.** The agent's first feature subtracts a centered seasonal fit, which uses weeks after the decision time. The stepper calls the feature once per decision time on the panel known at that time and compares the result with one full-history run; a mismatch that remains when the lookback is widened to all history is lookahead. This check runs today:
 
@@ -286,14 +286,14 @@ stepper       0 mismatches
 sample        498 weekly decisions (18 masked), 2 segments split at 2019-06
 calibration   stand-ins 3 of 3 killed, planted 3 of 3 kept
 ------------------------------------------------------------------------------------------
-angle                          null world                            z      result
+criterion                      null world                            z      result
 increment over seasonality     ShiftTime(whole years)                3.1    pass
 increment over mean reversion  PermuteWithin(margin_zscore)          2.8    pass
 stronger in peak season        PermuteWithin(month)                  2.7    pass
 mechanism ablation             ReplaceField(social_inventory)        -      pass   IC 0.052 -> 0.012
 stability                      by year                               -      8 of 10 years same sign
 ------------------------------------------------------------------------------------------
-PASS . L2 by angles . capped at L1: social_inventory is explore-grade (revised values only)
+PASS . L2 by criteria . capped at L1: social_inventory is explore-grade (revised values only)
 ```
 
 This is what the choice at D7 meant: the idea may move on, but nothing it produces counts as evidence yet.
@@ -330,7 +330,7 @@ Feat v2 registers the same tests, and its first submission is the layer's third:
 
 > **Status:** partly implemented: the budget, PAUSED, `--extend`, and the counts in M2; walk-forward, `GridMax`, and dedup planned for M3.
 
-The signal layer combines the passed feature with blast furnace utilization and the margin level into one weekly score. Anything that learns from labels, such as a tree model or thresholds chosen by IC, must be written as `fit`. The engine then runs a purged walk-forward: `fit` receives only training-fold labels, without samples whose label window overlaps the test period. New angles are a mechanism ablation (without inventory, is the score just margin mean reversion?) and a secondary prediction (the hot-rolled coil margin should react the same way to its own inventory). The lookback and entry threshold are declared as one parameter family; `GridMax` runs the whole grid in every null world and keeps the maximum, so the grid is one submission and its search is priced in.
+The signal layer combines the passed feature with blast furnace utilization and the margin level into one weekly score. Anything that learns from labels, such as a tree model or thresholds chosen by IC, must be written as `fit`. The engine then runs a purged walk-forward: `fit` receives only training-fold labels, without samples whose label window overlaps the test period. New criteria are a mechanism ablation (without inventory, is the score just margin mean reversion?) and a secondary prediction (the hot-rolled coil margin should react the same way to its own inventory). The lookback and entry threshold are declared as one parameter family; `GridMax` runs the whole grid in every null world and keeps the maximum, so the grid is one submission and its search is priced in.
 
 The agent tries gradient-boosted trees on about 440 samples, with different depths and feature sets. Out of fold, every one fails the increment over margin mean reversion: the trees learn the margin level itself. Submission 6 is a retuned submission 4 whose scores correlate 0.95 with it; above 0.9 it counts as the same idea and still costs a submission. The eighth failure pauses the layer, and `rci status` shows `signal PAUSED v1 8/8`:
 
@@ -339,7 +339,7 @@ $ rci next -i ideas/mill-margin
 human      rci approve --stage signal --extend N all 8 submissions used; extend the budget or drop the idea
 ```
 
-The StageCard lists all eight submissions and every registered angle, failed ones included. Every failure is the same angle, which points to a simpler model, so the person extends by two instead of dropping the idea:
+The StageCard lists all eight submissions and every registered criterion, failed ones included. Every failure is the same criterion, which points to a simpler model, so the person extends by two instead of dropping the idea:
 
 ```text
 $ rci approve --stage signal --extend 2 -i ideas/mill-margin
@@ -351,13 +351,13 @@ $ rci next -i ideas/mill-margin
 agent      rci signal submit                    FAILED: budget extended by 2; change the research code (2 of 10 submissions left)
 ```
 
-The extension adds submissions but does not reset n. Submission 9, a linear combination, faces `z_need` 3.6; its increment angle reaches z 3.8 and it passes at L2.
+The extension adds submissions but does not reset n. Submission 9, a linear combination, faces `z_need` 3.6; its increment criterion reaches z 3.8 and it passes at L2.
 
 ### Futures: algo and the checkpoints
 
 > **Status:** planned: the backtest consumer in M6; checkpoint commands later.
 
-The algo layer turns the score into positions, and the backtest is its evaluator: a futures backtester plugged in as a `ConsumerPlugin` that handles contract-month rolls, delivery months, margin, limit-up and limit-down days, close-today fees, and integer lots. Its angles are the net Sharpe after costs against `RandomizeTiming(keep="rate")` (random entries at the same frequency), a parameter plateau, and two limit angles, maximum drawdown and margin usage, compared directly. Doubled costs are reported and flagged on the capital card if they turn the net negative.
+The algo layer turns the score into positions, and the backtest is its evaluator: a futures backtester plugged in as a `ConsumerPlugin` that handles contract-month rolls, delivery months, margin, limit-up and limit-down days, close-today fees, and integer lots. Its criteria are the net Sharpe after costs against `RandomizeTiming(keep="rate")` (random entries at the same frequency), a parameter plateau, and two limit criteria, maximum drawdown and margin usage, compared directly. Doubled costs are reported and flagged on the capital card if they turn the net negative.
 
 | Checkpoint | Plan registered before it runs | What it can show here |
 | --- | --- | --- |
@@ -392,7 +392,7 @@ The algo layer turns the score into positions, and the backtest is its evaluator
 
 ## Cross-venue maker-taker
 
-> **Status:** planned: this case runs end to end in M6 (execution simulator, fill models, randomized decisions, limit angles), and the checkpoints later. The lifecycle, freezes, taints, and every `rci next` and `rci status` line shown are implemented (M2).
+> **Status:** planned: this case runs end to end in M6 (execution simulator, fill models, randomized decisions, limit criteria), and the checkpoints later. The lifecycle, freezes, taints, and every `rci next` and `rci status` line shown are implemented (M2).
 
 A strategy whose outcome depends on its own orders, taken through every layer and checkpoint. It shows where action-free evidence ends and where fill models, stress worlds, and a live experiment have to take over.
 
@@ -404,7 +404,7 @@ feat      toxicity: adverse move on B after A taker trades            (action-fr
 signal    expected net per opportunity, from past A taker trades
           that crossed a hypothetical quote                           (action-free label)
 algo      quote, cancel, size, risk: fill models, RandomizeTiming,
-          stress worlds, limit angles                                 (depends on our orders)
+          stress worlds, limit criteria                               (depends on our orders)
 seal      cheap historical check
 forward   small randomized live experiment; calibrates the fill model
 capital   CapitalCard
@@ -434,13 +434,13 @@ book the cycle on its own:
 
 Every fill is hedged immediately, so net inventory stays at zero: there is no one-sided inventory and no inventory skew in the quotes. What remains is leg risk during the hedge latency, residual delta from partial fills and minimum order sizes, and hedge failures. After each hedge, one leg is left open on each venue, and how those legs are closed is an open decision:
 
-| Option | Meaning | Extra algo angles |
+| Option | Meaning | Extra algo criteria |
 | --- | --- | --- |
 | A | wait for the reverse spread and unwind with a reverse cycle | none beyond the base set |
-| B | hold both legs and close them periodically | funding accrued over the holding time; margin usage, which limits concurrent quotes; distance to liquidation of each leg under a 10% move (a limit angle) |
+| B | hold both legs and close them periodically | funding accrued over the holding time; margin usage, which limits concurrent quotes; distance to liquidation of each leg under a 10% move (a limit criterion) |
 | C | close each cycle's legs separately | the closing trades' cost enters each cycle's wear |
 
-This walkthrough assumes A. The choice changes only which angles the algo layer registers.
+This walkthrough assumes A. The choice changes only which criteria the algo layer registers.
 
 ### Maker-taker: the claim and the contract
 
@@ -496,24 +496,24 @@ Besides the market fields (A trades with aggressor side, A best quotes, B's orde
 | F0 | engine | none | data hands over fields and the latency table | no |
 | F1 | engine | part of the spec (planned) | decision time = trade - 35 ms; economic bar: -0.6 bp per fill must turn positive | no |
 | F2 | agent | `rci feat explore` (planned) | writes features, explores without limit | no |
-| F3 | agent | `rci feat register` (planned) | angles, mechanism fields, exposed parameters | no |
+| F3 | agent | `rci feat register` (planned) | criteria, mechanism fields, exposed parameters | no |
 | F4 | challenger | `rci feat challenge` (planned) | five null worlds; the clock-skew one is too narrow | no |
 | F5 | engine | `rci feat check` (planned) | a stand-in survives; back to the challenger | no |
 | F6 | human | `rci approve --stage feat` | freezes the tests | no |
 | F7 | agent | `rci feat submit` (planned) | lookahead: TAINTED | yes |
-| F8 | agent | `rci feat submit` | the economic angle fails: FAIL, evidence at L2 | yes |
+| F8 | agent | `rci feat submit` | the economic criterion fails: FAIL, evidence at L2 | yes |
 | F9 | human | reads the VerdictCard | may kill or ask; cannot turn a FAIL into a PASS | no |
 | F10 | agent | `rci feat submit` | PASS at L3; the feature is stored | yes |
 
-**F2 and F3, features and angles.** The features are the recent move on B, B's book imbalance, and how stale A's quote is. The angles are registered before any submission (API sketch):
+**F2 and F3, features and criteria.** The features are the recent move on B, B's book imbalance, and how stale A's quote is. The criteria are registered before any submission (API sketch):
 
 ```python
-@Angle("increment_over_b_move", kind="stat")
+@Criterion("increment_over_b_move", kind="stat")
 def increment(feat, label, ctx):
     return rank_ic(residualize(feat.score(), ctx.b_move_200ms), label.markout_60ms)
 
 
-@Angle("economic", kind="stat")
+@Criterion("economic", kind="stat")
 def economic(feat, label, ctx):
     return net_edge_after_filter(feat.score(), label, ctx.costs, drop=0.2)
 
@@ -522,7 +522,7 @@ MECHANISM_FIELDS = ["b_mid", "b_bid_size", "b_ask_size"]
 EXPOSED = {"latency_quantile": ["p50", "p95", "p99"]}
 ```
 
-The other angles are predictive power, a horizon shape (the adverse move should grow up to the hedge latency and then flatten), and latency robustness, whose registered rule is that p95 must pass and p99 is for reference. An evaluator is any function that returns one number; the engine never reads its meaning, and any search inside it is repeated in every null world. The size of the incoming taker trade is not a feature: at the cancel decision the trade has not arrived, so using it is lookahead. It can still be a bucket on the evaluation side.
+The other criteria are predictive power, a horizon shape (the adverse move should grow up to the hedge latency and then flatten), and latency robustness, whose registered rule is that p95 must pass and p99 is for reference. An evaluator is any function that returns one number; the engine never reads its meaning, and any search inside it is repeated in every null world. The size of the incoming taker trade is not a feature: at the cancel decision the trade has not arrived, so using it is lookahead. It can still be a bucket on the evaluation side.
 
 **F4, null worlds**, written by the challenger into `nulls/`:
 
@@ -553,11 +553,11 @@ $ rci next -i ideas/mm-toxicity
 agent      rci feat check                       stand-in 'B lead from a clock 3 ms off' survived ShiftTime(±2 ms): 31/50 killed
 ```
 
-The challenger widens the shift to the measured ±5 ms, the stand-in is killed 50 of 50, and the check passes. At F6 the StageCard shows the angles, the null worlds, and the challenger's strongest objection (A's takers are mostly arbitrageurs, all the toxicity comes from B having moved, and the features add nothing), and the person approves.
+The challenger widens the shift to the measured ±5 ms, the stand-in is killed 50 of 50, and the check passes. At F6 the StageCard shows the criteria, the null worlds, and the challenger's strongest objection (A's takers are mostly arbitrageurs, all the toxicity comes from B having moved, and the features add nothing), and the person approves.
 
 **F7, trial 1 is TAINTED.** `b_ret_50ms` uses the window (trade - 50 ms, trade], whose last 35 ms fall after the decision time. The agent wrote it on full data, where the trade time looked natural. The stepper reports a mismatch at 41,200 of 41,200 decision times: the cut-off must be t minus the cancel latency, not the trade time. `rci next` reports `TAINTED; change the research code (19 of 20 submissions left)`.
 
-**F8, trial 2 fails.** Every angle passes except the economic one: dropping the most toxic 20% moves the net per fill from -0.6 bp to -0.1 bp, not above zero. A registered angle failed, so the verdict is FAIL, with the evidence reaching L2. The mechanism ablation shows the IC falling to 0.01 when B's inputs are scrambled, and latency robustness passes by its rule, but at p99 (80 ms) the IC decays to zero. The feature predicts toxicity beyond "B already moved" only when cancels land within 40 ms, which becomes a hard infrastructure requirement for the algo layer and the capital card.
+**F8, trial 2 fails.** Every criterion passes except the economic one: dropping the most toxic 20% moves the net per fill from -0.6 bp to -0.1 bp, not above zero. A registered criterion failed, so the verdict is FAIL, with the evidence reaching L2. The mechanism ablation shows the IC falling to 0.01 when B's inputs are scrambled, and latency robustness passes by its rule, but at p99 (80 ms) the IC decays to zero. The feature predicts toxicity beyond "B already moved" only when cancels land within 40 ms, which becomes a hard infrastructure requirement for the algo layer and the capital card.
 
 **F9 and F10.** The person may kill the idea or ask for more, but cannot turn the FAIL into a PASS: verdicts must be reproducible. The agent adds a sudden thinning of A's best level (other makers pulling out) and resubmits against the same frozen tests:
 
@@ -567,7 +567,7 @@ decision time   trade time - 35 ms (p95 cancel latency)             stepper: 0 m
 sample          41,200 taker trades -> 3,100 independent clusters
 calibration     stand-ins 5 of 5 killed, planted 5 of 5 kept
 ------------------------------------------------------------------------------------------
-angle                    null world                        z      result
+criterion                null world                        z      result
 predictive               block permute by cluster          4.1    pass
 increment over B move    permute within B-move buckets     3.2    pass
 economic (drop top 20%)  permute within B-move buckets     3.0    pass   -0.6 -> +0.4 bp
@@ -590,7 +590,7 @@ The label needs no fill model. Every past A taker trade that crossed the hypothe
 
 | Step | Who | Command | What happens |
 | --- | --- | --- | --- |
-| S1 | agent | `rci signal register` (planned) | angles: predictive rank IC, increment over a spread-only score, net in the top predicted bucket, stability by day |
+| S1 | agent | `rci signal register` (planned) | criteria: predictive rank IC, increment over a spread-only score, net in the top predicted bucket, stability by day |
 | S2 | challenger | `rci signal challenge` (planned) | `PermuteWithin(bucket_by="spread")`, `PermuteWithin(bucket_by="hour")`, `ShiftTime(venue="a", max_ms=5)`, `BlockPermute(by="cluster")` |
 | S3 to S5 | engine, human, agent | `rci signal check`, `rci approve --stage signal`, `rci signal submit` | a stand-in (the spread plus noise) is killed within spread buckets and a planted score survives; the freeze includes the feat freeze hash (`upstream:feat`); PASS at L3 on the first submission |
 
@@ -604,7 +604,7 @@ The signal layer says which opportunities are worth taking. The algo layer decid
 
 The output shape is Quotes. The evaluator is a `ConsumerPlugin`, an event-driven execution simulator; a bar-close backtester cannot evaluate a millisecond strategy. Fills come from a `FillModel` plugin that always runs in two modes. Optimistic: any A taker trade that crosses our price fills us in full. Pessimistic: we are filled only if our price strictly improved the best price at that moment, and only after the volume estimated to be queued ahead of us. The hedge is simulated at fill time plus the hedge latency by walking B's recorded book. Verdicts are judged under the pessimistic model; if only the optimistic version passes, the evidence is capped at L2. Because the outcome depends on our own orders, the evidence is capped at L3 until live results exist.
 
-The registered angles come in two kinds. Statistical angles (`kind="stat"`: net per cycle under pessimistic fills, beating a spread-only baseline, daily net at the chosen size) are compared with null worlds. Limit angles (`kind="limit"`: the 1st percentile of cycle PnL, the maximum daily drawdown, how long a leg stays open under injected hedge failures) are risk limits compared directly, with no null distribution. The exposed parameters are the spread threshold, the toxicity cut, the size, and the number of open quotes.
+The registered criteria come in two kinds. Statistical criteria (`kind="stat"`: net per cycle under pessimistic fills, beating a spread-only baseline, daily net at the chosen size) are compared with null worlds. Limit criteria (`kind="limit"`: the 1st percentile of cycle PnL, the maximum daily drawdown, how long a leg stays open under injected hedge failures) are risk limits compared directly, with no null distribution. The exposed parameters are the spread threshold, the toxicity cut, the size, and the number of open quotes.
 
 At this layer most alternative explanations say that some optimistic assumption does not hold, so most of what the challenger writes are stress worlds in which that assumption is broken:
 
@@ -781,7 +781,7 @@ Reopening a passed layer marks every later stage STALE, the checkpoints included
 - Decision times are derived from the latency of the action (event time minus cancel latency), so the data layer must deliver a latency table from our own telemetry and stamp market fields with the local receive time.
 - For maker ideas, the step 0 oracle bound from public trades is a kill check that needs no strategy code.
 - Null worlds are tested with stand-ins: a null narrower than a measured quantity lets a stand-in through, and calibration catches it before the freeze. A stress world is strong enough only if the unprotected stand-in loses through the limit in it.
-- Randomized-decision nulls, fill models, simulator known-answer tests, the optimistic-only cap, stress worlds, and limit angles all belong to the algo layer. Signal, like feat, uses only labels that do not depend on our actions.
+- Randomized-decision nulls, fill models, simulator known-answer tests, the optimistic-only cap, stress worlds, and limit criteria all belong to the algo layer. Signal, like feat, uses only labels that do not depend on our actions.
 - Live trading is an experiment: randomized, pre-registered, unchanged while it runs, and reconciled fill by fill against the simulator.
 - Monitoring watches the wear structure, and each kind of drift names the layer to reopen.
 
@@ -896,7 +896,7 @@ Calibration plants four mutants, and each must be caught: `available_at` replace
 
 The claim at this layer: at the publish time, a refute stance predicts a negative thesis-direction abnormal return, and still does after removing (1) any news, (2) market and sector, and (3) the pre-publish move. The features are formulas that need no `fit`: stance, information type, number of sources, novelty of the news-event cluster, and the 5-day return before publication (as a control only).
 
-The registered angles are predictive power; the increment over random news on the same instrument; a secondary prediction on the shape of the cumulative abnormal return (if the mechanism holds, the effect builds over the days after publication; if it is complete at publication, it was momentum); dose response (more sources and harder information types should give a stronger effect); breadth across authors and theses; and another implementation: the same news events labelled by a much cheaper classifier instead of the LLM that produced the signals. If the cheaper classifier does as well, the cost falls by orders of magnitude.
+The registered criteria are predictive power; the increment over random news on the same instrument; a secondary prediction on the shape of the cumulative abnormal return (if the mechanism holds, the effect builds over the days after publication; if it is complete at publication, it was momentum); dose response (more sources and harder information types should give a stronger effect); breadth across authors and theses; and another implementation: the same news events labelled by a much cheaper classifier instead of the LLM that produced the signals. If the cheaper classifier does as well, the cost falls by orders of magnitude.
 
 | Alternative explanation | Null world |
 | --- | --- |
@@ -906,7 +906,7 @@ The registered angles are predictive power; the increment over random news on th
 | (5) volatile instruments | `PermuteWithin(bucket_by="volatility")` |
 | chance | `BlockPermute` by trading-day blocks |
 
-Explanation (4), the LLM knowing the outcome, needs no null world: the data layer already keeps backfilled rows out of verdicts. A diagnostic angle compares backfilled and live signals directly; if the backfilled ones look much better, that is direct evidence of outcome leakage, and a finding in its own right. Calibration: a `StandIn` made of the sign of the pre-publish 5-day return (pure momentum) must be killed within pre-publish-return buckets; a `StandIn` that marks random news on the same instrument must be killed by `RandomEvents`; a `Planted` refute marker built from future abnormal returns must survive.
+Explanation (4), the LLM knowing the outcome, needs no null world: the data layer already keeps backfilled rows out of verdicts. A diagnostic criterion compares backfilled and live signals directly; if the backfilled ones look much better, that is direct evidence of outcome leakage, and a finding in its own right. Calibration: a `StandIn` made of the sign of the pre-publish 5-day return (pure momentum) must be killed within pre-publish-return buckets; a `StandIn` that marks random news on the same instrument must be killed by `RandomEvents`; a `Planted` refute marker built from future abnormal returns must survive.
 
 ```text
 VerdictCard . refute-signals . feat v1 . refute -> 5-day abnormal return      trial 1 / 20   z_need 2.0

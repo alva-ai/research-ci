@@ -246,7 +246,7 @@ A layer may import only the layers below it. import-linter enforces this in CI, 
 
 | Package | Role | Status |
 | --- | --- | --- |
-| `api` | Building blocks for research code and plugins: `Contract`, `Angle`, null declarations, plugin protocols. | `Contract` done |
+| `api` | Building blocks for research code and plugins: `Contract`, `Criterion`, null declarations, plugin protocols. | `Contract` done |
 | `kernel` | Mechanisms, pure functions, no I/O: `time` (asof, stepper), `holdout` (tiers, labels), `hashing`, `checks`, `judge` (derive, nulls, mutate, calibrate, stats, verdict). | `time`, `holdout`, `hashing` done |
 | `stages` | Policies, one file per layer: floor checks, floor null worlds, calibration recipe, caps. | M3 |
 | `workflow` | Lifecycle: inner state machine, outer dependency graph with STALE invalidation, templates, `next_actions`. | Done |
@@ -271,7 +271,7 @@ kernel (parent)                                       research code (child)
       |<------------------------------------------ output at t |
       |                                                        |
       |-- build labels (the child never sees them here)        |
-      |-- evaluate(angle, output, allowed labels) ------------>|
+      |-- evaluate(criterion, output, allowed labels) -------->|
       |<------------------------------------------------ score |
       |                                                        |
       |-- null worlds, calibration, verdict, ledger            |
@@ -304,7 +304,7 @@ See [docs/design.md](docs/design.md) for the reasoning behind each rule and what
 | M3 | `judge`: null worlds, z thresholds, evidence levels, stand-ins; per-layer commands | Feat layer end to end on the first real case | Planned |
 | M4 | `runner`: child process + Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | Plugins pass conformance | Planned |
-| M6 | Algo: execution simulator, fill models, randomized decisions, constraint angles | A maker-taker case end to end | Planned |
+| M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria | A maker-taker case end to end | Planned |
 | Later | Checkpoint commands, verdict hooks, graveyard replay, a thin trusted service | Replaying past ideas kills some of them earlier than they were killed back then, kills no true positive, and every verdict reproduces | Planned |
 
 ## Development
