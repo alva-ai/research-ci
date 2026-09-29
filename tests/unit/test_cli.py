@@ -7,12 +7,9 @@ from typer.testing import CliRunner
 from research_ci import __version__
 from research_ci.cli import main
 from research_ci.cli.main import app
+from toy import label_contract
 
-CONTRACT = (
-    "from research_ci.api.contract import Contract\n\n"
-    "CONTRACT = Contract(template='factor', claim='toxicity predicts markouts', "
-    "explore_end='2025-06-30T00:00:00Z', seal_end='2025-12-31T00:00:00Z')\n"
-)
+CONTRACT = label_contract(budget=20)
 runner = CliRunner()
 
 
@@ -62,7 +59,8 @@ def test_a_person_approves_the_contract(tmp_path: Path) -> None:
     idea = _derived(tmp_path)
     result = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea)], input="y\n")
     assert result.exit_code == 0, result.output
-    assert "toxicity predicts markouts" in result.output
+    assert "cross-venue funding spreads persist" in result.output
+    assert "ContractCard" in result.output
     assert "frozen contract v1" in result.output
     assert "git add" in result.output
     actions = json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)
@@ -100,3 +98,22 @@ def test_inbox_lists_only_what_waits_for_a_person(tmp_path: Path) -> None:
     assert runner.invoke(app, ["init", str(tmp_path / "fresh"), "-t", "rule"]).exit_code == 0
     items = json.loads(runner.invoke(app, ["inbox", str(tmp_path), "--json"]).stdout)
     assert [(Path(i["idea"]).name, i["command"]) for i in items] == [("ready", "rci approve --stage contract")]
+
+
+def test_an_agent_can_relay_a_persons_approval_and_the_ledger_says_so(tmp_path: Path) -> None:
+    idea = _derived(tmp_path)
+    result = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--relayed", "ok, freeze it"])
+    assert result.exit_code == 0, result.output
+    assert "relayed by an agent" in result.output
+    status = json.loads(runner.invoke(app, ["status", "-i", str(idea), "--json"]).stdout)
+    assert "ok, freeze it" in status["stages"][0]["note"]
+    record = [json.loads(line) for line in (idea / ".rci" / "ledger.jsonl").read_text().splitlines()][-1]
+    assert record["payload"]["approval"] == {"by": "human", "channel": "relayed", "words": "ok, freeze it"}
+
+
+def test_a_relayed_approval_must_quote_the_person_and_budgets_still_need_a_terminal(tmp_path: Path) -> None:
+    idea = _derived(tmp_path)
+    assert runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--relayed", " "]).exit_code == 1
+    assert runner.invoke(app, ["approve", "--stage", "data", "-i", str(idea), "--auto", "--extend", "3"]).exit_code == 1
+    auto = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--auto"])
+    assert auto.exit_code == 0 and "approved by the agent" in auto.output
