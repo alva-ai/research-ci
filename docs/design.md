@@ -55,7 +55,7 @@ An agent may do anything else. It may not do three things: see sealed or forward
 3. **Judgment moves before results.** Claims, evaluators, and null worlds are written and frozen before the run. Changing them after seeing results is allowed, but it starts a new version and is recorded.
 4. **Constraints are code, not prose.** Markdown explains; code enforces. In every automated research system that works in practice, the judge is code (see [Prior art](#prior-art)).
 5. **The engine is thin and dumb on purpose.** The kernel is a few thousand lines of Python with no LLM in it. The clever parts (which claims to make, which alternative explanations to rule out) come from agents outside the engine and are checked by fixed machinery inside it. The engine never interprets a feature.
-6. **Unseen data is the final judge.** Every angle computed on the explore tier reuses the same data, so the results are correlated and are not independent evidence. The seal and forward tiers are.
+6. **Unseen data is the final judge.** Every criterion computed on the explore tier reuses the same data, so the results are correlated and are not independent evidence. The seal and forward tiers are.
 7. **Guard against false greens first.** An evaluator that is too strict only hurts its author. The system must stop results that should fail from passing. Calibration still tests both directions, because a null world that kills everything is as broken as one that kills nothing.
 8. **The engine is passive.** It knows the state, decides which commands are legal, and computes. Something outside always drives it: a research agent, a person, a scheduler, later an orchestrator. All of them read the same `next_actions()`.
 9. **The MVP defends against accidents, not attacks.** It stops honest mistakes and lazy shortcuts. A process or service boundary is added when deliberate cheating has to be stopped (see [Threat model](#threat-model)).
@@ -73,7 +73,7 @@ An agent may do anything else. It may not do three things: see sealed or forward
 | Template | The list of layers an idea goes through, fixed at `rci init`. |
 | Output shape | What a layer produces: a FieldTable for `data`, then Scores, Events, Positions, Quotes, or Orders. |
 | Evaluator | A function written by the agent that turns an output and labels into one number. |
-| Angle | One pre-registered way of testing the claim, backed by an evaluator. `stat` angles are compared with null worlds; `limit` angles are hard limits compared directly. |
+| Criterion | One pre-registered way of testing the claim, backed by an evaluator. `stat` criteria are compared with null worlds; `limit` criteria are hard limits compared directly. |
 | Null world | A world with the claimed information removed and the alternative explanation kept. The real score must beat the scores in these worlds. |
 | Stress world | A world where an optimistic assumption is broken: thinner depth, failed hedges, a replayed incident. Used by `algo`. |
 | Calibration | `calibrate`, the test of the tests: stand-ins must fail, planted signals must pass, mutants must be caught. |
@@ -102,7 +102,7 @@ The engine separates mechanism, policy, and lifecycle. The kernel holds mechanis
 
 | Package | Owns | Status |
 | --- | --- | --- |
-| `api` | The only package research code and plugins import: `Contract` today; `Angle`, null and stress declarations, study entry points, and plugin protocols later. | `Contract` in M2 |
+| `api` | The only package research code and plugins import: `Contract` today; `Criterion`, null and stress declarations, study entry points, and plugin protocols later. | `Contract` in M2 |
 | `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`), `hashing`, `holdout` (tiers, labels), `checks`, and `judge` (derive, nulls, mutate, calibrate, stats, verdict). | `tables` and `time` in M1; `hashing` and `holdout` in M2; `checks` and `judge` planned (M3) |
 | `stages` | One policy file per stage: `data.py`, `feat.py`, `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py` (`DataPolicy`, `FeatPolicy`, ..., `MonitorPolicy`): floor checks, floor null worlds, the calibration recipe, caps. | Planned (M3) |
 | `workflow` | The state machine, lineage, templates, `next_actions`, and the commands that apply transitions. | Implemented (M2) |
@@ -175,7 +175,7 @@ FieldTable   entity, field, event_time, available_at, value, vintage, source    
 Panel        rows (time, entity), one column per field, at one moment = asof(t)   (M1)
 Output       Scores, Events, Positions, Quotes, or Orders                          (M3 onward)
 Labels       (t, entity, horizon) -> outcome, built by the engine from the contract (builders in M2)
-Verdict      state, per-angle scores and z, evidence level, caps, preconditions,
+Verdict      state, per-criterion scores and z, evidence level, caps, preconditions,
              and the hashes of everything it depends on                            (M3)
 Ledger       append-only, every record carries the hash of the one before it       (M2)
 ```
@@ -199,7 +199,7 @@ DataPlugin.fetch -> FieldTable (vault) -> visible(tier) -> asof(t) at each decis
                                               |                                              |
                                               +--> labels (engine) -----+              output (shape)
                                                                         v                    |
-                                                  evaluators, one per angle <----------------+
+                                                  evaluators, one per criterion <------------+
                                                              |
                                           real score vs null worlds (and stress worlds)
                                                              |
@@ -226,7 +226,7 @@ kernel (parent)                                       research code (child)
       |<------------------------------------------ output at t |
       |                                                        |
       |-- build labels in the parent                           |
-      |-- evaluate(angle, output, labels the tier allows) ---->|
+      |-- evaluate(criterion, output, tier's labels) --------->|
       |<------------------------------------------------ score |
       |                                                        |
       |-- null worlds, calibration, verdict, ledger            |
@@ -371,7 +371,7 @@ A checkpoint is registered with its plan in advance: the k candidates for `seal`
 
 Exploration is allowed in any state. It never changes the state and is never counted as a trial. On the explore tier every number is shown, as often as the agent wants (planned command: `rci <layer> explore`, M3).
 
-Exploration is free because it is how agents find ideas; counting it would only push work off the record. It is safe because it never produces a verdict, the tests are frozen before any submission, and the seal and forward tiers are out of reach. One weakness remains: an agent can look at explore results and then choose which angles to register. The seal and forward checkpoints are the backstop.
+Exploration is free because it is how agents find ideas; counting it would only push work off the record. It is safe because it never produces a verdict, the tests are frozen before any submission, and the seal and forward tiers are out of reach. One weakness remains: an agent can look at explore results and then choose which criteria to register. The seal and forward checkpoints are the backstop.
 
 ### Who drives the loop
 
@@ -569,26 +569,26 @@ Each record is judged against the context as it was at the time, for example the
 
 ## Judging
 
-> **Status:** planned (M3), with the `algo` parts (fill models, `RandomizeTiming`, stress worlds, limit angles) in M6. Nothing computes a verdict today; the M2 workflow records verdicts passed in by tests.
+> **Status:** planned (M3), with the `algo` parts (fill models, `RandomizeTiming`, stress worlds, limit criteria) in M6. Nothing computes a verdict today; the M2 workflow records verdicts passed in by tests.
 
-### Evaluators and angles
+### Evaluators and criteria
 
-The agent writes evaluators: functions that turn an output, labels, and a context into one number. Each is registered in advance as an angle and frozen at approval. A sketch of the planned API:
+The agent writes evaluators: functions that turn an output, labels, and a context into one number. Each is registered in advance as a criterion and frozen at approval. A sketch of the planned API:
 
 ```python
-from research_ci.api import Angle  # planned (M3); the final API may differ
+from research_ci.api import Criterion  # planned (M3); the final API may differ
 
 
-@Angle("increment_over_b_move", kind="stat")
+@Criterion("increment_over_b_move", kind="stat")
 def resid_ic(scores, labels, ctx) -> float:
     return rank_ic(residualize(scores, ctx.b_move_200ms), labels.markout_60ms)
 ```
 
-`Angle(kind="stat")` is compared with its null distribution. `Angle(kind="limit")` is a hard constraint, such as "the 99th percentile loss per cycle stays within the limit", compared directly with no null distribution.
+`Criterion(kind="stat")` is compared with its null distribution. `Criterion(kind="limit")` is a hard constraint, such as "the 99th percentile loss per cycle stays within the limit", compared directly with no null distribution.
 
 The engine never reads what an evaluator means. It runs the same evaluator in the real world and in the null worlds and compares the numbers. Two properties follow. Any metric works, so the variety of ideas does not require the engine to understand them. And any search hidden inside an evaluator runs again in every null world, so its benefit is priced in automatically.
 
-On top of the agent's angles, each stage policy adds floor checks and floor null worlds that the agent cannot remove. The agent's own tests follow four rules: written before running, allowed only to tighten the floor, executed by the engine, and able to fail, which calibration proves.
+On top of the agent's criteria, each stage policy adds floor checks and floor null worlds that the agent cannot remove. The agent's own tests follow four rules: written before running, allowed only to tighten the floor, executed by the engine, and able to fail, which calibration proves.
 
 ### Alternative explanations become null worlds
 
@@ -646,7 +646,7 @@ The [maker-taker walkthrough](walkthroughs.md#cross-venue-maker-taker) shows a c
 
 ### Thresholds and trial counting
 
-For a `stat` angle, the engine turns the null distribution into a z score and compares it with a threshold that rises with the number of trials:
+For a `stat` criterion, the engine turns the null distribution into a z score and compares it with a threshold that rises with the number of trials:
 
 ```text
 z      = (real - mean(null)) / sd(null)
@@ -663,9 +663,9 @@ Thresholds are z scores, not p-values, because permutation p-values run out of r
 
 Every submission counts as a trial, including TAINTED ones and resubmissions of the same idea under a new look (see [Dedup](#dedup)). Exploration and calibration failures never count.
 
-### Combining angles
+### Combining criteria
 
-An evidence level requires every angle registered for it to pass. The claim is the conjunction of its angles, which makes this an intersection-union test: if the claim is false, at least one angle's null hypothesis is true, and that angle alone passes with probability at most its level, so all of them together pass with at most that probability. The angles need no multiple-testing correction among themselves. The multiplicity that does need correction is the number of versions tried, and the trial count handles it. Failed angles stay on the card.
+An evidence level requires every criterion registered for it to pass. The claim is the conjunction of its criteria, which makes this an intersection-union test: if the claim is false, at least one criterion's null hypothesis is true, and that criterion alone passes with probability at most its level, so all of them together pass with at most that probability. The criteria need no multiple-testing correction among themselves. The multiplicity that does need correction is the number of versions tried, and the trial count handles it. Failed criteria stay on the card.
 
 ### Parameter grids and robustness
 
@@ -685,7 +685,7 @@ The draft levels:
 | L1 | Predictive power, increment over what is known, and stability under walk-forward |
 | L2 | Plus mechanism ablation and a secondary prediction |
 | L3 | Plus economic value after the consumer and costs |
-| L4 | Plus at least one new-data angle: an independent source, the sealed tier, forward data, or live trading |
+| L4 | Plus at least one new-data criterion: an independent source, the sealed tier, forward data, or live trading |
 
 Caps:
 
@@ -694,7 +694,7 @@ Caps:
 - Quotes that pass only under the optimistic fill model are capped at L2.
 - A strategy whose outcomes depend on its own actions is capped at L3 until live results exist.
 
-Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because angles on the same data are not independent evidence. The final definitions follow the first real case in M3.
+Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because criteria on the same data are not independent evidence. The final definitions follow the first real case in M3.
 
 ### Verdict states
 
@@ -711,7 +711,7 @@ sample          41,200 taker trades -> 3,100 independent clusters
 calibration     stand-ins 5/5 killed, planted 5/5 kept
 lineage         data v1 passed (freeze 3f2a91c0...)
 --------------------------------------------------------------------------------------------
-angle                     null world                          z     result
+criterion                 null world                          z     result
 predictive                BlockPermute by cluster             4.1   pass
 increment over B move     PermuteWithin(B move bucket)        3.2   pass
 economic (drop top 20%)   PermuteWithin(B move bucket)        3.0   pass   -0.6 -> +0.4 bp per fill
@@ -728,7 +728,7 @@ The card is rendered from the verdict file without an LLM. A narrated summary ma
 
 `feat` and `signal` are judged on labels that do not depend on our own actions: returns, markouts, event outcomes. They need no backtest. For a strategy whose results depend on its own actions, such as a maker strategy, these layers use the terms of the profit formula that can be observed in history. For the maker-taker case: the adverse move on venue B after each taker trade on venue A (toxicity), and the taker volume that crosses a given price level (arrivals). The `signal` layer combines them into an expected net profit per opportunity, judged on historical taker trades that crossed a hypothetical quote, used as "if we had been filled" samples.
 
-Everything that depends on our actions belongs to `algo`: whether to quote, where, when to cancel, how large. `algo` is judged with a backtest through a `ConsumerPlugin`, with a fill model, the `RandomizeTiming` null, stress worlds, and limit angles.
+Everything that depends on our actions belongs to `algo`: whether to quote, where, when to cancel, how large. `algo` is judged with a backtest through a `ConsumerPlugin`, with a fill model, the `RandomizeTiming` null, stress worlds, and limit criteria.
 
 ### Fill models
 
@@ -792,8 +792,8 @@ A pitfall that passes calibration (it is harmful, and the right test catches it)
 | Card | When | Shows |
 | --- | --- | --- |
 | ContractCard | Before any search | The claim, the derived Spec, alternative explanations, and the decisions a person must make |
-| StageCard | Before a layer is frozen | Angles, null worlds, calibration results, coverage, the challenger's strongest counter-argument |
-| VerdictCard | After each submission | The verdict, every angle with its z or limit, the level and caps, preconditions, lineage |
+| StageCard | Before a layer is frozen | Criteria, null worlds, calibration results, coverage, the challenger's strongest counter-argument |
+| VerdictCard | After each submission | The verdict, every criterion with its z or limit, the level and caps, preconditions, lineage |
 | CapitalCard | Before real money | Live results against the simulated range, the denominator (ideas and trials tried), capacity, hard requirements, known risks |
 
 Cards are rendered from engine files without an LLM. Today the only one is `.rci/contract.json`, a plain copy of the derived contract.
@@ -945,9 +945,9 @@ The data layer is where many ideas should die early. If a core field exists only
 
 The feat layer judges whether a feature adds information beyond what is already known. Its output is Scores. Features that use no labels are stepped; features that learn from labels go through `fit` and walk-forward (see [Walk-forward and fit](#walk-forward-and-fit)).
 
-The agent picks angles from a menu and registers them in advance:
+The agent picks criteria from a menu and registers them in advance:
 
-| Angle | Question |
+| Criterion | Question |
 | --- | --- |
 | predictive | Is there a signal at all (IC, ICIR)? |
 | increment | Is there something beyond the known variables (residual IC, nested out-of-sample comparison)? |
@@ -971,7 +971,7 @@ Passing stores the feature under its version hash. Downstream stages may referen
 
 The signal layer judges whether the combined signal predicts: a raw signal, a rule, or a model's output (trees, neural networks, LLM scores). Its output is Scores or Events, judged on action-independent labels, with no backtest.
 
-Its angles and null worlds are those of `feat`, applied to the combination: increment over its inputs and over simple baselines, stability, secondary predictions, and for Events the outcome after events against random times and against `RandomEvents` from the same pool. Models are fitted by walk-forward only. Small samples overfit easily; with about 520 weekly points, a gradient-boosted model finds patterns that are not there. A threshold picked from history, such as "cancel on the top 20% of toxicity", is a `fit` step too.
+Its criteria and null worlds are those of `feat`, applied to the combination: increment over its inputs and over simple baselines, stability, secondary predictions, and for Events the outcome after events against random times and against `RandomEvents` from the same pool. Models are fitted by walk-forward only. Small samples overfit easily; with about 520 weekly points, a gradient-boosted model finds patterns that are not there. A threshold picked from history, such as "cancel on the top 20% of toxicity", is a `fit` step too.
 
 The engine checks lineage: `signal` may use only features that passed. In the maker-taker case, `signal` is "toxicity and arrivals give the expected net profit of each opportunity", judged on historical taker trades that crossed a hypothetical quote. Text and LLM signals use the `event` template and are confirmed only on forward data. Passing unlocks `algo`.
 
@@ -979,13 +979,13 @@ The engine checks lineage: `signal` may use only features that passed. In the ma
 
 The algo layer judges whether acting on the signal makes money after costs and constraints, safely, and at what size. Its output is Positions, Quotes, or Orders. The backtest is its evaluator: a `ConsumerPlugin`, which for millisecond strategies is an event-driven execution simulator and for daily strategies a bar-based backtester. It decides what the earlier layers do not: order size, how many quotes at once, what to do when a hedge fails, when to clean up residual delta, automatic stops (stale data, feed sequence gaps, latency above a limit, daily loss, repeated hedge failures), and margin and exposure per venue.
 
-- **Angles**: `stat` angles for profit (for example daily net at the chosen size, against the null) and `limit` angles for risk (the 99th percentile loss per cycle, maximum daily drawdown, and how long a leg may stay open under injected hedge failures).
+- **Criteria**: `stat` criteria for profit (for example daily net at the chosen size, against the null) and `limit` criteria for risk (the 99th percentile loss per cycle, maximum daily drawdown, and how long a leg may stay open under injected hedge failures).
 - **Null worlds**: `RandomizeTiming(keep="rate")`, a random strategy with the same decision rate, rules out "it only works because it trades or cancels less". Baseline strategies must be beaten too, such as a threshold-only rule that never cancels on toxicity. `GridMax` and plateaus cover sizes and limits.
 - **Stress worlds**: as listed in [Stress worlds](#stress-worlds).
 - **Calibration**: a random stand-in may pass the random-timing null no more often than the nominal rate alpha, a planted known-good signal on synthetic data must pass, and an unprotected stand-in must breach its limits under stress. The execution simulator passes known-answer tests before anything is judged on it: never quoting gives zero fills and zero PnL; quoting far away gives zero fills under the pessimistic model; doubling fees lowers PnL by exactly the number of fills times the fee difference; raising hedge latency from zero to p95 makes the adverse move grow monotonically; a larger size makes hedge slippage grow; zero depth on the hedge venue sends the simulation into the hedge-failure branch.
 - **Caps**: Quotes that pass only under the optimistic fill model stop at L2; action-dependent strategies stop at L3 until live results.
 
-Passing produces an executable configuration, such as an order size, a maximum number of open quotes, and a daily loss limit, which becomes the parameters of the forward experiment. For the maker-taker case, how the two hedge legs are eventually closed is an [open decision](#open-decisions); holding them adds funding, margin, and liquidation-distance angles.
+Passing produces an executable configuration, such as an order size, a maximum number of open quotes, and a daily loss limit, which becomes the parameters of the forward experiment. For the maker-taker case, how the two hedge legs are eventually closed is an [open decision](#open-decisions); holding them adds funding, margin, and liquidation-distance criteria.
 
 ### Checkpoints
 
@@ -1171,7 +1171,7 @@ An autonomous research system that takes a dataset and a one-sentence goal and r
 A minimal loop of a few hundred lines: a person edits an instruction file, the agent edits the training script, and a fixed preparation script owns the data and the metric. Each run trains for five minutes; a better validation score is kept, a worse one discarded.
 
 - **Borrowed**: the three-part split of human instructions, agent-edited code, and a fixed evaluator.
-- **Different**: it works because it has a cheap, objective scalar that is hard to game. Trading research has no such scalar, so Research CI builds the evaluator from pre-registered angles, null worlds, and calibration.
+- **Different**: it works because it has a cheap, objective scalar that is hard to game. Trading research has no such scalar, so Research CI builds the evaluator from pre-registered criteria, null worlds, and calibration.
 
 ### AlphaEvolve
 
@@ -1247,14 +1247,14 @@ A reinforcement learning view makes the same point. The engine is an environment
 | M3 | `kernel/judge` (null worlds, z thresholds, evidence levels, calibrate) and the per-layer CLI commands (`rci <layer> explore/register/challenge/check/submit`) | The `feat` layer runs end to end on the first real case | Planned |
 | M4 | `runner`: research code in a child process, data exchanged as Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | The plugins pass conformance | Planned |
-| M6 | Algo: execution simulator, fill models, randomized decisions, constraint angles; a maker-taker case end to end | The cross-venue maker-taker case runs end to end | Planned |
+| M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria; a maker-taker case end to end | The cross-venue maker-taker case runs end to end | Planned |
 | Later | Checkpoint commands (`rci seal run`, `rci forward --all`, `rci capital run`, `rci monitor --all`), `post_verdict` hook (card narration and citation check), graveyard replay, a thin trusted service `execute(bundle, vault, ledger) -> verdict` | Not set yet; graveyard replay is judged by the failure condition below | Planned |
 
 ### Open decisions
 
 - **The first real case for M3.** Candidates: a cross-sectional residual factor whose data is already local; a futures spread time series; and the cross-venue maker-taker case, which is event-driven and depends on its own actions.
-- **Final definitions of L0 to L4**, after M3 has run a real case. With them: the list of floor angles each stage enforces, the standard contents of the evaluator context, and the value of `z_base`.
-- **How the maker-taker hedge legs are closed.** The strategy is opportunity-driven: it quotes on venue A and, after any fill, hedges on venue B at once, so it never carries one-sided inventory. Each cycle leaves a leg on each venue. Option A closes them with a reverse cycle when the opposite spread appears; option B holds them and closes periodically, which adds funding, margin, and liquidation-distance angles to `algo`; option C closes each cycle separately.
+- **Final definitions of L0 to L4**, after M3 has run a real case. With them: the list of floor criteria each stage enforces, the standard contents of the evaluator context, and the value of `z_base`.
+- **How the maker-taker hedge legs are closed.** The strategy is opportunity-driven: it quotes on venue A and, after any fill, hedges on venue B at once, so it never carries one-sided inventory. Each cycle leaves a leg on each venue. Option A closes them with a reverse cycle when the opposite spread appears; option B holds them and closes periodically, which adds funding, margin, and liquidation-distance criteria to `algo`; option C closes each cycle separately.
 - **Graveyard cases**: which past failed research cases to replay, with what they died of and when.
 - **How INSUFFICIENT and DEV map onto stage states**, and whether an INSUFFICIENT verdict costs a trial.
 - **How an ongoing monitor fits the one-shot checkpoint**: in the M2 machine `monitor` runs once like the other checkpoints, while the design has it run on a schedule and reopen layers on drift.
