@@ -6,16 +6,13 @@ from research_ci.api.contract import ContractError
 from research_ci.store.ledger import LedgerError
 from research_ci.workflow.commands import Idea, find_ideas
 from research_ci.workflow.machine import State, WorkflowError
+from toy import label_contract
 
 S = State
 
 
 def _contract(template: str = "factor", budget: int = 3, skip: tuple[str, ...] = ()) -> str:
-    return (
-        "from research_ci.api.contract import Contract\n\n"
-        f"CONTRACT = Contract(template={template!r}, claim='toxicity predicts markouts', "
-        f"explore_end='2025-06-30T00:00:00Z', seal_end='2025-12-31T00:00:00Z', budget={budget}, skip={skip!r})\n"
-    )
+    return label_contract(template, budget, skip)
 
 
 def _idea(tmp_path: Path, template: str = "factor", budget: int = 3, skip: tuple[str, ...] = ()) -> Idea:

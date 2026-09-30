@@ -19,6 +19,13 @@ dependencies = [
 [project.scripts]
 rci = "research_ci.cli.main:app"
 
+[project.entry-points."research_ci.plugins"]
+"ref.return" = "research_ci.reference_plugins.labels:HoldingReturn"
+"ref.carry" = "research_ci.reference_plugins.labels:PairCarry"
+"ref.markout" = "research_ci.reference_plugins.labels:Markout"
+"ref.mean" = "research_ci.reference_plugins.targets:ClusterMean"
+"ref.flat_costs" = "research_ci.reference_plugins.costs:FlatCosts"
+
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
@@ -43,6 +50,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -59,7 +67,9 @@ layers = [
     "research_ci.cli",
     "research_ci.llm",
     "research_ci.workflow",
-    "research_ci.stages | research_ci.store | research_ci.runner | research_ci.render",
+    "research_ci.stages",
+    "research_ci.runner",
+    "research_ci.store | research_ci.render",
     "research_ci.kernel",
     "research_ci.api",
 ]

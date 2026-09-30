@@ -21,7 +21,7 @@ class Template:
 TEMPLATES = {
     t.name: t
     for t in (
-        Template("factor", ("data", "feat", "signal", "algo")),
+        Template("factor", ("data", "feat", "signal", "algo"), optional=frozenset({"signal", "algo"})),
         Template("rule", ("data", "signal", "algo")),
         Template("event", ("data", "feat", "signal", "algo")),
         Template("taker_arb", ("data", "signal", "algo"), optional=frozenset({"signal"})),

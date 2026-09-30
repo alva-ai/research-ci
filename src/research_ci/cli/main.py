@@ -12,7 +12,7 @@ import typer
 from research_ci import __version__
 from research_ci.api.contract import ContractError
 from research_ci.store.ledger import LedgerError
-from research_ci.workflow.commands import CONTRACT_FILE, Idea, find_ideas
+from research_ci.workflow.commands import CONTRACT_FILE, Approval, Idea, find_ideas
 from research_ci.workflow.machine import WorkflowError
 from research_ci.workflow.templates import CONTRACT, TEMPLATES
 
@@ -110,9 +110,9 @@ def verify(idea: IdeaDir = Path(".")) -> None:
 def derive(idea: IdeaDir = Path(".")) -> None:
     """Load contract.py, validate it, and register it for approval."""
     with _errors():
-        contract = Idea(idea).derive_contract()
-    typer.echo(f"contract registered: {contract.claim}")
-    typer.echo("a person freezes it with `rci approve --stage contract`")
+        _, card = Idea(idea).derive_contract()
+    typer.echo(card)
+    typer.echo("registered; a person freezes it with `rci approve --stage contract`")
 
 
 @app.command()
@@ -120,21 +120,44 @@ def approve(
     stage: Annotated[str, typer.Option("--stage", "-s", help="Stage to freeze.")],
     idea: IdeaDir = Path("."),
     extend: Annotated[int | None, typer.Option(help="Add this many submissions to a paused layer instead.")] = None,
+    relayed: Annotated[
+        str | None, typer.Option(help="An agent relays a person's approval; quote the person's words.")
+    ] = None,
+    auto: Annotated[
+        bool, typer.Option(help="Fully automatic research: the agent approves; results are capped.")
+    ] = False,
 ) -> None:
-    """Freeze a stage, or extend a paused layer's budget. Only a person at a terminal can do this."""
-    if not _interactive():
-        typer.echo("error: approve needs a person at an interactive terminal", err=True)
+    """Freeze a stage, or extend a paused layer's budget.
+
+    A person at a terminal approves by default. In semi-automatic research an agent stops, asks the person, and
+    relays the answer with --relayed; in fully automatic research the agent approves with --auto. The ledger records
+    which it was.
+    """
+    if relayed is not None and auto:
+        typer.echo("error: choose --relayed or --auto, not both", err=True)
+        raise typer.Exit(1)
+    by_person = relayed is None and not auto
+    if by_person and not _interactive():
+        typer.echo("error: approve needs a person at an interactive terminal (or --relayed / --auto)", err=True)
         raise typer.Exit(1)
     with _errors():
         target = Idea(idea)
         if extend is not None:
+            if not by_person:
+                raise WorkflowError("extending a budget needs a person at a terminal")
             _extend(target, stage, extend)
             return
+        who = Approval()
+        if relayed is not None:
+            who = Approval(by="human", channel="relayed", words=relayed)
+        elif auto:
+            who = Approval(by="agent", channel="auto")
         preview = target.preview_approval(stage)
         typer.echo(_render_preview(target, preview))
-        typer.confirm(f"Freeze {stage} v{preview['version']}?", abort=True)
-        freeze = target.approve(stage)
-    typer.echo(f"frozen {stage} v{preview['version']}: {freeze.hash[:12]}")
+        if by_person:
+            typer.confirm(f"Freeze {stage} v{preview['version']}?", abort=True)
+        freeze = target.approve(stage, approval=who)
+    typer.echo(f"frozen {stage} v{preview['version']}: {freeze.hash[:12]} · {who.describe()}")
     paths = f"{os.path.relpath(target.workspace.root)} {os.path.relpath(target.root / CONTRACT_FILE)}"
     typer.echo(f"to keep it in git: git add {paths} && git commit -m 'rci: freeze {stage} of {target.root.name}'")
 
@@ -151,7 +174,7 @@ def _extend(target: Idea, stage: str, trials: int) -> None:
 def _render_preview(target: Idea, preview: dict[str, Any]) -> str:
     lines = [f"approve {preview['stage']} v{preview['version']} of {target.root.name}"]
     if preview["stage"] == CONTRACT:
-        lines += [f"  {k}: {v}" for k, v in preview["contract"].items()]
+        lines.append(preview["card"])
     lines.append("  frozen dependencies:")
     lines += [f"    {k:<20} {v[:12] if len(v) == 64 else v}" for k, v in sorted(preview["deps"].items())]
     return "\n".join(lines)
