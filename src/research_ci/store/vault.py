@@ -28,3 +28,7 @@ def get(source: str, digest: str) -> pl.DataFrame:
 
 def has(source: str, digest: str) -> bool:
     return (vault_root() / source / f"{digest}.parquet").exists()
+
+
+def drop(source: str, digest: str) -> None:
+    (vault_root() / source / f"{digest}.parquet").unlink(missing_ok=True)

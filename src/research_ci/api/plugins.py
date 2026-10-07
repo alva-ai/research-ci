@@ -22,9 +22,42 @@ UNIVERSE_COLUMNS = ("t", "entity", "long", "short")
 @runtime_checkable
 class DataPlugin(Protocol):
     """Rows shaped like a FieldTable (``FIELD_COLUMNS``); ``available_at`` and ``vintage`` come from the plugin,
-    never from the agent. The engine normalizes them, checks them, and keeps the snapshot."""
+    never from the agent. The engine normalizes them, checks them, and keeps the snapshot.
 
-    def fetch(self) -> pl.DataFrame | pd.DataFrame: ...
+    ``fetch(as_of=T)`` returns what the plugin would have returned had it run at ``T``: only rows known by then, built
+    only from what was known by then, including any repair the plugin applies. ``entities`` limits the fetch to those
+    entities. Before a plugin's data is used, the engine replays it at cut points of its own choosing and compares
+    each replay with the full fetch; a plugin that cannot fetch as of a time cannot be admitted.
+    """
+
+    def fetch(
+        self, as_of: pd.Timestamp | None = None, entities: Sequence[str] | None = None
+    ) -> pl.DataFrame | pd.DataFrame: ...
+
+
+REQUEST_COLUMNS = ("entity", "field", "start", "end")
+
+
+@dataclass(frozen=True)
+class Reference:
+    """What an independent source holds for a batch of requests: ``rows`` (``entity``, ``field``, ``event_time``,
+    ``value``) found in each request's ``[start, end]``, and ``answered``, the requests it could check at all. A
+    request left out of ``answered`` (a field the source has no history of, a span too old) checks nothing."""
+
+    rows: pl.DataFrame
+    answered: pl.DataFrame
+
+
+@runtime_checkable
+class ReferenceSource(Protocol):
+    """A data plugin that can ask an independent source, such as the venue's own public API, for the same fields.
+    The engine samples the requests (``REQUEST_COLUMNS``) at random and adds every anomaly its checks found; the
+    plugin never chooses them. ``reference_note`` says where the rows come from, for the person admitting the
+    plugin: the engine cannot tell an independent source from one that reads the plugin's own files."""
+
+    reference_note: str
+
+    def reference(self, requests: pl.DataFrame) -> Reference: ...
 
 
 @runtime_checkable
@@ -39,7 +72,11 @@ class NativeWriter(Protocol):
 class UniversePlugin(Protocol):
     """The candidates at each decision time, computed only from ``fields``: ``UNIVERSE_COLUMNS`` plus cluster, group
     and score columns. ``t`` is the decision time; ``long`` and ``short`` name the FieldTable entities of the legs
-    (empty for single-entity candidates)."""
+    (empty for single-entity candidates).
+
+    A plugin whose legs are always one asset on two venues says so with a class attribute ``hedge_price``, the field
+    that prices both legs; the engine then checks, at every decision time, that the legs trade at the same level and
+    move together, and drops the candidates where they do not."""
 
     def candidates(self, fields: pl.DataFrame, times: Sequence[pd.Timestamp]) -> pl.DataFrame: ...
 

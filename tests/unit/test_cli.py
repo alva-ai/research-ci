@@ -7,6 +7,8 @@ from typer.testing import CliRunner
 from research_ci import __version__
 from research_ci.cli import main
 from research_ci.cli.main import app
+from research_ci.render.card import card_id
+from research_ci.workflow.commands import Idea
 from toy import label_contract
 
 CONTRACT = label_contract(budget=20)
@@ -19,6 +21,10 @@ def _derived(tmp_path: Path, name: str = "tox") -> Path:
     (idea / "contract.py").write_text(CONTRACT)
     assert runner.invoke(app, ["contract", "derive", "-i", str(idea)]).exit_code == 0
     return idea
+
+
+def _card(idea: Path, stage: str) -> str:
+    return card_id(Idea(idea).card(stage))
 
 
 @pytest.fixture
@@ -102,13 +108,20 @@ def test_inbox_lists_only_what_waits_for_a_person(tmp_path: Path) -> None:
 
 def test_an_agent_can_relay_a_persons_approval_and_the_ledger_says_so(tmp_path: Path) -> None:
     idea = _derived(tmp_path)
-    result = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--relayed", "ok, freeze it"])
+    card = _card(idea, "contract")
+    args = ["approve", "--stage", "contract", "-i", str(idea), "--relayed", "ok, freeze it", "--card", card]
+    result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
     assert "relayed by an agent" in result.output
     status = json.loads(runner.invoke(app, ["status", "-i", str(idea), "--json"]).stdout)
     assert "ok, freeze it" in status["stages"][0]["note"]
     record = [json.loads(line) for line in (idea / ".rci" / "ledger.jsonl").read_text().splitlines()][-1]
-    assert record["payload"]["approval"] == {"by": "human", "channel": "relayed", "words": "ok, freeze it"}
+    assert record["payload"]["approval"] == {
+        "by": "human",
+        "channel": "relayed",
+        "words": "ok, freeze it",
+        "card": card,
+    }
 
 
 def test_a_relayed_approval_must_quote_the_person_and_budgets_still_need_a_terminal(tmp_path: Path) -> None:
@@ -117,3 +130,34 @@ def test_a_relayed_approval_must_quote_the_person_and_budgets_still_need_a_termi
     assert runner.invoke(app, ["approve", "--stage", "data", "-i", str(idea), "--auto", "--extend", "3"]).exit_code == 1
     auto = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--auto"])
     assert auto.exit_code == 0 and "approved by the agent" in auto.output
+
+
+def test_the_data_layer_from_the_command_line(tmp_path: Path) -> None:
+    idea = _derived(tmp_path)
+    unshown = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--relayed", "ok"])
+    assert unshown.exit_code == 1 and "must quote the card" in unshown.output
+    card = ["--card", _card(idea, "contract")]
+    assert (
+        runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--relayed", "ok", *card]).exit_code == 0
+    )
+    first = runner.invoke(app, ["data", "check", "-i", str(idea)])
+    assert first.exit_code == 0, first.output
+    assert "SourceCard · toy.data" in first.output and "DataCard · tox · v1" in first.output
+    assert "blocked" in first.output
+    assert f"card {_card(idea, 'source')}" in first.output
+    admitted = runner.invoke(
+        app, ["source", "approve", "-i", str(idea), "--relayed", "admit it", "--card", _card(idea, "source")]
+    )
+    assert admitted.exit_code == 0, admitted.output
+    assert "relayed by an agent: 'admit it'" in admitted.output
+    second = runner.invoke(app, ["data", "check", "-i", str(idea)])
+    assert "READY" in second.output and "SourceCard" not in second.output
+    assert "DataCard" in runner.invoke(app, ["data", "show", "-i", str(idea)]).output
+    data_card = _card(idea, "data")
+    assert f"card {data_card}" in second.output
+    frozen = runner.invoke(
+        app, ["approve", "--stage", "data", "-i", str(idea), "--relayed", "freeze", "--card", data_card]
+    )
+    assert frozen.exit_code == 0 and "DataCard" in frozen.output
+    assert runner.invoke(app, ["data", "submit", "-i", str(idea)]).output.strip() == "data PASSED"
+    assert "data      PASSED" in runner.invoke(app, ["status", "-i", str(idea)]).output

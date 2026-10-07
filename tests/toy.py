@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from research_ci.api import ConsumerResult, LabelCase, Timing
+from research_ci.api import ConsumerResult, LabelCase, Reference, Timing
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME
 from research_ci.reference_plugins.labels import PairCarry
@@ -40,17 +40,81 @@ def toy_fields(hours: int = 24 * 25, seed: int = 0) -> pl.DataFrame:
 
 
 class ToyData:
+    """Replays as of any time, and answers reconciliation from the venue, here the same generator run apart; the
+    venue keeps no history of funding intervals."""
+
+    reference_note = "the toy venue"
+
     def __init__(self, hours: int = 24 * 25, seed: int = 0) -> None:
         self.hours, self.seed = hours, seed
 
-    def fetch(self) -> pl.DataFrame:
+    def fetch(self, as_of: Any = None, entities: Sequence[str] | None = None) -> pl.DataFrame:
+        rows = self.build(as_of)
+        if as_of is not None:
+            rows = rows.filter(pl.col("available_at") <= pd.Timestamp(as_of))
+        return rows if entities is None else rows.filter(pl.col("entity").is_in(list(entities)))
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
         return toy_fields(self.hours, self.seed)
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        venue = toy_fields(self.hours, self.seed).filter(pl.col("field") != "funding_interval_hours")
+        answered = requests.filter(pl.col("field") != "funding_interval_hours")
+        rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
+        rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
+        return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
+
+
+class ToyHindsight(ToyData):
+    """Drops a symbol's closes in a window once it knows a jump follows, as an ex-post repair would."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        lo, hi = START + 200 * HOUR, START + 206 * HOUR
+        if as_of is not None and pd.Timestamp(as_of) < hi + HOUR:
+            return rows
+        window = (pl.col("entity") == "b:Y") & (pl.col("field") == "close") & pl.col("event_time").is_between(lo, hi)
+        return rows.filter(~window)
+
+
+class ToyNoAsOf(ToyData):
+    def fetch(self) -> pl.DataFrame:  # type: ignore[override]
+        return super().build()
+
+
+class ToyCorrupt(ToyData):
+    """Its closes for one venue are off by a tenth from what the venue reports."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        hit = (pl.col("entity").str.starts_with("c:")) & (pl.col("field") == "close")
+        return rows.with_columns(value=pl.when(hit).then(pl.col("value") * 1.1).otherwise("value"))
+
+
+class ToySwapped(ToyData):
+    """Venue c lists another asset under the ticker Z: its closes follow their own path at the same level."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        hit = (pl.col("entity") == "c:Z") & (pl.col("field") == "close")
+        other = rows.filter(hit).sort("event_time")
+        rng = np.random.default_rng(99)
+        path = float(other["value"][0]) * np.exp(np.cumsum(rng.normal(0, 0.01, other.height)))
+        return pl.concat([rows.filter(~hit), other.with_columns(value=pl.Series(path))]).sort("available_at")
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        venue = self.build()
+        answered = requests.filter(pl.col("field") != "funding_interval_hours")
+        rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
+        rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
+        return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
 
 
 class ToyPairs:
     """Every venue pair of a symbol; long the venue with the lower latest funding rate per hour."""
 
     peek = False
+    hedge_price = "close"
 
     def candidates(self, fields: pl.DataFrame, times: Sequence[Any]) -> pl.DataFrame:
         funding = fields.filter(pl.col("field") == "funding_rate").sort("available_at")
