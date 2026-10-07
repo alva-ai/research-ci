@@ -4,13 +4,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from research_ci.api.contract import Contract, ContractError
-from research_ci.render.card import contract_card
-from research_ci.runner.plugins import Registry
+from research_ci.api.contract import Contract, ContractError, as_use
+from research_ci.render.card import card_id, contract_card, data_card, source_card
+from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import Settings, current_deps, derive, jsonable
+from research_ci.stages.data import DataSettings, check_data, current_data_deps
+from research_ci.store import vault
 from research_ci.store.environment import environment_record, judging_deps
 from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError
+from research_ci.store.sources import Sources, source_key
 from research_ci.store.workspace import Workspace, hash_file, rci_home
 from research_ci.workflow.lineage import blockers, invalidated, upstream
 from research_ci.workflow.machine import Command, Kind, State, WorkflowError, starts_new_version, transition
@@ -20,6 +23,9 @@ from research_ci.workflow.templates import CONTRACT, get_template, kind_of
 CONTRACT_FILE = "contract.py"
 CONTRACT_CARD = "contract.json"
 CARD_TEXT = "contract-card.txt"
+DATA = "data"
+DATA_CARD = "data.json"
+DATA_TEXT = "data-card.txt"
 LEDGER_FILE = "ledger.jsonl"
 SKELETON = """from research_ci.api import Alternative, Contract, Effect, Execution, Forward, Label, Universe, Use
 
@@ -44,12 +50,13 @@ DEFAULT_BUDGET = 20
 
 @dataclass(frozen=True)
 class Approval:
-    """Who approved: a person at a terminal; a person whose words an agent relayed (the words are kept); or, in
-    fully automatic research, the agent itself."""
+    """Who approved: a person at a terminal; a person whose words an agent relayed (the words are kept, and so is the
+    id of the card the person was shown); or, in fully automatic research, the agent itself."""
 
     by: str = "human"
     channel: str = "terminal"
     words: str = ""
+    card: str = ""
 
     def __post_init__(self) -> None:
         if (self.by, self.channel) not in APPROVAL_KINDS:
@@ -71,9 +78,15 @@ APPROVAL_KINDS = {("human", "terminal"), ("human", "relayed"), ("agent", "auto")
 class Idea:
     """One idea's lifecycle. Every state change is a ledger record, and the state is replayed from the ledger."""
 
-    def __init__(self, root: Path, registry: Registry | None = None, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        registry: Registry | None = None,
+        settings: Settings | None = None,
+        data_settings: DataSettings | None = None,
+    ) -> None:
         self.root = Path(root).resolve()
-        self.registry, self.settings = registry, settings
+        self.registry, self.settings, self.data_settings = registry, settings, data_settings
         self.workspace = Workspace(self.root)
         self.ledger = _ledger(self.workspace)
         if not self.ledger.path.exists():
@@ -82,7 +95,12 @@ class Idea:
 
     @classmethod
     def init(
-        cls, root: Path, template: str, registry: Registry | None = None, settings: Settings | None = None
+        cls,
+        root: Path,
+        template: str,
+        registry: Registry | None = None,
+        settings: Settings | None = None,
+        data_settings: DataSettings | None = None,
     ) -> "Idea":
         get_template(template)
         workspace = Workspace(Path(root))
@@ -95,7 +113,7 @@ class Idea:
                 contract.write_text(SKELETON.format(template=template))
             ledger.append("init", "idea", {"template": template})
             (workspace.root / ".gitignore").write_text("lock\n")
-        return cls(root, registry, settings)
+        return cls(root, registry, settings, data_settings)
 
     def status(self) -> IdeaStatus:
         records = list(self.ledger.records())
@@ -107,14 +125,14 @@ class Idea:
         for record in records[1:]:
             kind, payload, r = record["kind"], record["payload"], replay[record["stage"]]
             r.state, r.version, r.note = State(payload["to"]), payload["version"], payload.get("note", "")
-            r.trials += kind == Command.SUBMIT
+            r.trials += kind == Command.SUBMIT and record["stage"] != DATA
             r.extra += payload["trials"] if kind == Command.EXTEND else 0
             if kind == Command.APPROVE and record["stage"] == CONTRACT:
                 budget = payload["budget"]
         stages = []
         for name, r in replay.items():
             layer_budget = None
-            if budget is not None and kind_of(name) is Kind.LAYER:
+            if budget is not None and kind_of(name) is Kind.LAYER and name != DATA:
                 layer_budget = (budget.get(name, DEFAULT_BUDGET) if isinstance(budget, dict) else budget) + r.extra
             stages.append(StageStatus(name, kind_of(name), r.state, r.version, r.trials, layer_budget, r.note))
         return IdeaStatus(idea=self.root.name, template=template.name, stages=tuple(stages))
@@ -148,9 +166,73 @@ class Idea:
         self._apply(CONTRACT, Command.REGISTER, effect=card)
         return contract, contract_card(spec, self.root.name, version)
 
+    def check_data(self, keep: tuple[str, ...] = ()) -> tuple[dict[str, Any], str]:
+        """Admit the contract's data source if it has no admission yet, check the data against the contract, and
+        register the result: the data layer ends CHECKED when a person may approve it, else stays CHALLENGED.
+        ``keep`` names treatments a person chose not to apply. Treated data of earlier checks that was never frozen
+        is removed from the vault."""
+        contract = self._approved_contract()
+        self._allowed(DATA, Command.REGISTER)
+        previous = self._last(Command.REGISTER, DATA)
+        checked = check_data(contract, self.root, self.registry, self.data_settings, keep=keep)
+        spec = jsonable(checked.spec)
+        current = self.status().stage(DATA)
+        version = current.version + starts_new_version(current.state, Command.REGISTER)
+        text = data_card(spec, self.root.name, version)
+
+        def card() -> dict[str, Any]:
+            self.workspace.write_json(DATA_CARD, spec)
+            self.workspace.path(DATA_TEXT).write_text(text + "\n")
+            return {"spec": spec, "deps": checked.deps}
+
+        self._apply(DATA, Command.REGISTER, effect=card)
+        if previous is not None:
+            self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["panel"], spec["panel"])
+        canaries = [c for c in spec["checks"] if c["name"].startswith("canary")]
+        self._apply(DATA, Command.CHALLENGE, payload={"tests": spec["tests"], "canaries": canaries})
+        status = spec["verdict"]["status"]
+        note = "" if status != "blocked" else spec["verdict"]["notes"][0]
+        self.check(DATA, status != "blocked", note, {"verdict": status})
+        return spec, text
+
+    def source_card(self) -> str:
+        record = self._source_record()
+        return source_card(record["payload"]["spec"])
+
+    def card(self, stage: str) -> str:
+        """The card a person approves for ``stage`` (``contract``, ``source`` or ``data``), as it is now."""
+        if stage == "source":
+            return self.source_card()
+        version = self.status().stage(stage).version
+        if stage == CONTRACT:
+            return contract_card(self._derived_record()["spec"], self.root.name, version)
+        if stage == DATA:
+            return data_card(self._checked_data()["payload"]["spec"], self.root.name, version)
+        raise WorkflowError(f"{stage} has no card")
+
+    def approve_source(self, approval: "Approval | None" = None) -> dict[str, Any]:
+        """A person admits the contract's data source, once for this plugin, options and code."""
+        who = approval or Approval()
+        record = self._source_record()
+        spec = record["payload"]["spec"]
+        if spec["verdict"]["status"] != "admissible":
+            raise WorkflowError(f"{spec['plugin']} cannot be admitted: {'; '.join(spec['verdict']['notes'])}")
+        self._shown(who, source_card(spec))
+        if record["approved"] is not None:
+            return record["approved"]
+        return Sources().approve(record["stage"], record["hash"], asdict(who) | {"note": who.describe()})
+
+    def submit_data(self) -> State:
+        """Record the frozen data check as passed: the treated data it froze is what feat reads."""
+        record = self._checked_data()
+        panel = record["payload"]["spec"]["panel"]
+        return self.submit(DATA, State.PASSED, extra=_data_deps(record), payload={"panel": panel})
+
     def register(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
         if stage == CONTRACT:
             raise WorkflowError("the contract is registered by `rci contract derive`")
+        if stage == DATA:
+            raise WorkflowError("the data layer is registered by `rci data check`")
         return self._apply(stage, Command.REGISTER, payload=payload)
 
     def challenge(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
@@ -168,15 +250,28 @@ class Idea:
             record = self._derived_record()
             preview["contract"] = record["fields"]
             preview["card"] = contract_card(record["spec"], self.root.name, current.version)
+        if stage == DATA:
+            record = self._checked_data()
+            preview["deps"] |= _data_deps(record)
+            preview["card"] = data_card(record["payload"]["spec"], self.root.name, current.version)
         return preview
 
     def approve(self, stage: str, extra: Mapping[str, str] | None = None, approval: Approval | None = None) -> Freeze:
         """Freeze a stage. ``approval`` says who approved and through which channel; the ledger keeps it, and the
         verdict machinery caps what agent-approved or relayed stages can reach."""
-        self._allowed(stage, Command.APPROVE)
+        current = self._allowed(stage, Command.APPROVE)
         fields = self._derived_contract() if stage == CONTRACT else None
-        freeze = make_freeze(stage, self.deps(stage, extra))
         who = approval or Approval()
+        if stage == CONTRACT:
+            self._shown(who, contract_card(self._derived_record()["spec"], self.root.name, current.version))
+        if stage == DATA:
+            record = self._checked_data()
+            spec = record["payload"]["spec"]
+            if spec["verdict"]["status"] == "decide" and who.by != "human":
+                raise WorkflowError("the data card asks a person to decide; an agent cannot approve it with --auto")
+            self._shown(who, data_card(spec, self.root.name, current.version))
+            extra = {**(extra or {}), **_data_deps(record)}
+        freeze = make_freeze(stage, self.deps(stage, extra))
 
         def write() -> dict[str, Any]:
             write_freeze(self.workspace, freeze)
@@ -283,6 +378,52 @@ class Idea:
                 last = record
         return last
 
+    @staticmethod
+    def _shown(who: "Approval", card: str) -> None:
+        """A relayed approval must quote the id of the card it approves: the card the person was shown is this one."""
+        if who.channel == "relayed" and who.card != card_id(card):
+            got = f"got {who.card!r}" if who.card else "none was given"
+            raise WorkflowError(f"a relayed approval must quote the card the person saw: card {card_id(card)}, {got}")
+
+    def _drop_unfrozen(self, source: str, old: dict[str, Any], new: dict[str, Any]) -> None:
+        deps = [r["payload"]["deps"] for r in self.ledger.records() if r["kind"] == "approve"]
+        for key, kind in (("hash", "panel"), ("exclusions", "exclusions")):
+            frozen = {d.get(kind) for d in deps}
+            if old[key] != new[key] and old[key] not in frozen:
+                vault.drop(f"{source}.{kind}", old[key])
+
+    def _approved_contract(self) -> Contract:
+        approval = self._last(Command.APPROVE, CONTRACT)
+        if approval is None:
+            raise WorkflowError("the contract is not approved yet")
+        path = self.root / CONTRACT_FILE
+        if not path.exists() or hash_file(path) != approval["payload"]["deps"]["contract"]:
+            raise WorkflowError("contract.py changed since it was approved; derive and approve it again")
+        return load_contract(path)
+
+    def _source_record(self) -> dict[str, Any]:
+        use = as_use(self._approved_contract().data)
+        key = source_key(use.name, dict(use.options), code_hash(load(use, self.registry)))
+        record = Sources().latest(key)
+        if record is None:
+            raise WorkflowError(f"{use.name} has no admission for its current code; run `rci data check` first")
+        return record
+
+    def _checked_data(self) -> dict[str, Any]:
+        """The data check as recorded in the ledger. Refuses if it was blocked, or if a plugin's code, the data,
+        the source's admission or the treated data changed since."""
+        record = self._last(Command.REGISTER, DATA)
+        if record is None:
+            raise WorkflowError("the data has not been checked; run `rci data check` first")
+        spec = record["payload"]["spec"]
+        if spec["verdict"]["status"] == "blocked":
+            raise WorkflowError(f"the data check is blocked: {'; '.join(spec['verdict']['notes'])}")
+        recorded = record["payload"]["deps"]
+        moved = drift(recorded, current_data_deps(self._approved_contract(), recorded, spec, self.registry))
+        if moved:
+            raise WorkflowError(f"changed since the data check: {', '.join(moved)}; run `rci data check` again")
+        return record
+
     def _derived_contract(self) -> dict[str, Any]:
         return self._derived_record()["fields"]
 
@@ -336,6 +477,12 @@ class _Replay:
     trials: int = 0
     extra: int = 0
     note: str = ""
+
+
+def _data_deps(record: dict[str, Any]) -> dict[str, str]:
+    """What a data freeze pins beyond the usual: the check's ledger record and the treated data it produced."""
+    panel = record["payload"]["spec"]["panel"]
+    return {"data_check": record["hash"], "panel": panel["hash"], "exclusions": panel["exclusions"]}
 
 
 def _ledger(workspace: Workspace) -> Ledger:

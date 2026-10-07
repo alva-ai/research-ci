@@ -62,6 +62,8 @@ def next_actions(status: IdeaStatus) -> list[Action]:
         if s.state not in DONE:
             if s.kind is Kind.CONTRACT:
                 return [_contract(s)]
+            if s.stage == "data":
+                return [_data(s)]
             return [_checkpoint(s) if s.kind is Kind.CHECKPOINT else _layer(s)]
     return []
 
@@ -70,6 +72,21 @@ def _contract(s: StageStatus) -> Action:
     if s.state is State.REGISTERED:
         return Action("human", s.stage, "approve", "rci approve --stage contract", "review the contract and freeze it")
     return Action("agent", s.stage, "register", "rci contract derive", "write contract.py, then derive the contract")
+
+
+def _data(s: StageStatus) -> Action:
+    """The engine derives the data checks, so one command registers, challenges and checks them."""
+    state = s.state
+    if state is State.CHECKED:
+        return Action("human", s.stage, "approve", "rci approve --stage data", "review the data card and freeze it")
+    if state is State.FROZEN:
+        return Action("agent", s.stage, "submit", "rci data submit", "record the frozen data as what feat reads")
+    if state is State.PAUSED:
+        return _layer(s)
+    if "waits for a person" in s.note:
+        return Action("human", s.stage, "approve", "rci source approve", s.note)
+    reason = s.note or "check the data against the contract"
+    return Action("agent", s.stage, "check", "rci data check", reason)
 
 
 def _layer(s: StageStatus) -> Action:

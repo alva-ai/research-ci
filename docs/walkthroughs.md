@@ -1,6 +1,6 @@
 # Walkthroughs
 
-> **Status:** partly implemented: the stage lifecycle, the ledger, freeze records, and the commands `rci init`, `rci contract derive`, `rci approve`, `rci next`, `rci status`, `rci inbox`, and `rci verify` in M2; the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance) in M3a; judging, the per-layer commands, the lab plugins these cases need, and the checkpoints are planned for M3b and later.
+> **Status:** partly implemented: the stage lifecycle, the ledger, freeze records, and the commands `rci init`, `rci contract derive`, `rci approve`, `rci next`, `rci status`, `rci inbox`, and `rci verify` in M2; the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance) in M3a; judging, the per-layer commands, the lab plugins these cases need, and the checkpoints are planned for M3c and later.
 
 This document follows three ideas from the first sentence of a claim to the last checkpoint. Each case stresses a different part of Research CI.
 
@@ -14,7 +14,7 @@ Every number in these cases is illustrative: it shows the mechanics and is not a
 
 ## Reading a step
 
-> **Status:** partly implemented: `rci next`, `rci status`, `rci inbox`, and the ledger records in M2; the contract's Spec and approval provenance in the ledger in M3a; verdict fields in the ledger planned for M3b.
+> **Status:** partly implemented: `rci next`, `rci status`, `rci inbox`, and the ledger records in M2; the contract's Spec and approval provenance in the ledger in M3a; verdict fields in the ledger planned for M3c.
 
 Each step answers four questions: who acts, which command they run, what the engine checks or computes, and what is appended to the ledger.
 
@@ -40,8 +40,8 @@ ideas/mm-toxicity        rci approve --stage algo             review the tests a
 | `rci contract derive` | agent | implemented (M3a): validates `contract.py`, loads the plugins, stores the data in the vault, runs protocol tests, computes power, and prints the ContractCard; decision times derived from latencies and the oracle bound are planned |
 | `rci approve --stage <stage>`, `rci approve --stage <layer> --extend N` | human | implemented (M2, M3a): a person at an interactive terminal by default, or `--relayed "<words>"` and `--auto` for relayed and automatic approval; `--extend` needs a terminal; refuses a contract whose protocol tests failed or whose recorded dependencies changed; prints what it freezes and suggests a `git commit` that the person may or may not run |
 | `rci next`, `rci status`, `rci inbox`, `rci verify` | anyone | implemented (M2) |
-| `rci <layer> explore` | agent | planned (M3b) |
-| `rci <layer> register`, `challenge`, `check`, `submit` | agent, challenger, agent, agent | planned (M3b); the transitions behind them are implemented in `workflow` (M2), and `rci next` already prints them |
+| `rci <layer> explore` | agent | planned (M3c) |
+| `rci <layer> register`, `challenge`, `check`, `submit` | agent, challenger, agent, agent | planned (M3c); the transitions behind them are implemented in `workflow` (M2), and `rci next` already prints them |
 | `rci data run` | agent | planned (M5, with the first data plugin) |
 | `rci <checkpoint> register`; `rci seal run`, `rci forward --all`, `rci capital run`, `rci monitor --all` | agent; human, scheduler, human, scheduler | planned (later) |
 
@@ -55,7 +55,7 @@ Every state change is one line of canonical JSON in `<idea>/.rci/ledger.jsonl`. 
  "prev": "35830db044ea...", "seq": 12, "stage": "feat"}
 ```
 
-Every payload carries `from`, `to`, and `version`. Beyond that, `init` records the template; `register` on the contract records the file hash, every field, the derived Spec, and the dependencies derive recorded; `check` records `passed` and a note saying what failed; `approve` records the freeze hash, the frozen dependencies, and who approved through which channel (plus the budget and `skip` for the contract); `submit` records the verdict, a note, and the research environment (hashes of all installed packages and of `uv.lock`); `extend`, `stale`, and `skip` record budget extensions and the state moves that follow a reopen or the contract approval. From M3b on, `submit` also records the criterion scores, z values, evidence level, and caps.
+Every payload carries `from`, `to`, and `version`. Beyond that, `init` records the template; `register` on the contract records the file hash, every field, the derived Spec, and the dependencies derive recorded; `check` records `passed` and a note saying what failed; `approve` records the freeze hash, the frozen dependencies, and who approved through which channel (plus the budget and `skip` for the contract); `submit` records the verdict, a note, and the research environment (hashes of all installed packages and of `uv.lock`); `extend`, `stale`, and `skip` record budget extensions and the state moves that follow a reopen or the contract approval. From M3c on, `submit` also records the criterion scores, z values, evidence level, and caps.
 
 Thresholds rise with n, the number of submissions the ledger counts for that stage: `z_need = z_base * sqrt(1 + ln n)`. With an illustrative `z_base = 2.0`:
 
@@ -65,7 +65,7 @@ Thresholds rise with n, the number of submissions the ledger counts for that sta
 
 ## Futures inventory spread
 
-> **Status:** partly implemented: the lookahead check in M1; the lifecycle and every `rci next` and `rci status` line shown in M2; the contract's validation, protocol tests, and power in M3a; data checks, mutants, null worlds, and verdicts planned for M3b, data plugins for M5, and the backtest consumer for M6.
+> **Status:** partly implemented: the lookahead check in M1; the lifecycle and every `rci next` and `rci status` line shown in M2; the contract's validation, protocol tests, and power in M3a; data checks, mutants, null worlds, and verdicts planned for M3c, data plugins for M5, and the backtest consumer for M6.
 
 A weekly time-series idea on three futures legs. Most of the work is in the data layer, because the core field is a weekly industry survey with release-time, revision, and break problems. The case shows how much can be decided before anyone computes a return.
 
@@ -161,7 +161,7 @@ The card counts the daily grid (3836 points); the power table counts the decisio
 
 ### Futures: data layer, steps D1 to D10
 
-> **Status:** planned: floor checks, mutants, and calibration in M3b; data plugins and `rci data run` in M5. The FieldTable is M1; the state transitions and `rci next` lines are M2.
+> **Status:** planned: floor checks, mutants, and calibration in M3c; data plugins and `rci data run` in M5. The FieldTable is M1; the state transitions and `rci next` lines are M2.
 
 The data layer does not ask whether the data is good. It asks whether these fields can support this contract: the same field can be fine for a weekly strategy and useless for an intraday one. So the engine runs one set of checks with parameters taken from the contract. Generic floor checks are blind to the strategy (monotone timestamps, duplicates, time zones, gaps, `available_at` not before `event_time`, level breaks, units). Contract floor checks take their parameters from the contract (`available_at` before the decision time, coverage for power, freshness, expired contracts kept, tradable label prices). Source knowledge lives in the data plugin, reviewed once and reused by every idea (release calendars, vintage archives, methodology changes). The agent cannot remove or loosen floor checks; its own tests are written before they run, only tighten, are run by the engine, and must be able to fail.
 
@@ -203,7 +203,7 @@ warn  vintages                                social_inventory has revised value
 ok    label fields tradable                   contract months, not a continuous series
 ```
 
-**D4, explore, then register tests.** On the explore tier the agent finds a step in inventory in mid-2019 (probably a larger survey sample), Spring Festival weeks published as one merged value, and a few releases moved from Thursday to Friday. Each finding becomes a test that declares what it `covers` and what happens `on_fail` (the decorator names are a sketch; the M3b interface may differ):
+**D4, explore, then register tests.** On the explore tier the agent finds a step in inventory in mid-2019 (probably a larger survey sample), Spring Festival weeks published as one merged value, and a few releases moved from Thursday to Friday. Each finding becomes a test that declares what it `covers` and what happens `on_fail` (the decorator names are a sketch; the M3c interface may differ):
 
 ```python
 @covers("level_break")
@@ -260,7 +260,7 @@ Decide: social_inventory has revised values only, and it is the core field.
 
 The person chooses A for now, and the agent starts looking for an archive.
 
-**D8, the freeze.** `rci approve --stage data` prints and freezes what M2 covers: the `contract.py` hash, the engine source tree (`engine`), the interpreter (`python`), the engine's own dependencies (`engine_packages`), and the upstream freeze hashes. From M3b it also freezes the registered tests, the null and pitfall list, plugin hashes, and the data snapshot; today the plugin hashes and the data snapshot are only recorded at derive and checked when the contract is approved. The research environment is recorded with each submission but not frozen, so adding a research library does not taint a resubmission.
+**D8, the freeze.** `rci approve --stage data` prints and freezes what M2 covers: the `contract.py` hash, the engine source tree (`engine`), the interpreter (`python`), the engine's own dependencies (`engine_packages`), and the upstream freeze hashes. From M3c it also freezes the registered tests, the null and pitfall list, plugin hashes, and the data snapshot; today the plugin hashes and the data snapshot are only recorded at derive and checked when the contract is approved. The research environment is recorded with each submission but not frozen, so adding a research library does not taint a resubmission.
 
 **D9, the run.** `rci next` now says `rci data submit ... (8 of 8 submissions left)`. The engine runs the floor checks and the seven tests on the explore tier, and the `on_fail` policies take effect: the 18 Spring Festival weeks from 2015 to 2024 are masked, the history is split at the 2019 break, and the shifted release days use their actual `available_at`. Power is then recomputed on what is left; if the sample no longer supports the contract, the verdict is an insufficient-power card and the idea goes back to the contract. The sealed segment is not downloaded during exploration; the same tests run on it later, inside the seal checkpoint, which returns pass or fail only.
 
@@ -275,7 +275,7 @@ masks, splits         Spring Festival 2015-2024 (18 weeks); the 2019-06 break
 
 ### Futures: feat layer
 
-> **Status:** partly implemented: `step` and `check_leaks`, which catch the lookahead below, in M1; criteria, null worlds, calibration, and verdicts planned for M3b.
+> **Status:** partly implemented: `step` and `check_leaks`, which catch the lookahead below, in M1; criteria, null worlds, calibration, and verdicts planned for M3c.
 
 The claim at this layer: at the decision time, the deviation of the inventory draw from its seasonal norm predicts the next week's margin change, beyond pure seasonality and beyond margin mean reversion.
 
@@ -323,7 +323,7 @@ This is what the choice at D7 meant: the idea may move on, but nothing it produc
 
 ### Futures: reopening data
 
-> **Status:** implemented (M2) for the state changes and outputs shown; the data work itself is planned (M3b, M5).
+> **Status:** implemented (M2) for the state changes and outputs shown; the data work itself is planned (M3c, M5).
 
 The agent finds an archive of the survey's first-release values from 2016 on and reopens the data layer. `rci data register` on a PASSED stage starts version 2, and the engine marks every downstream stage that had started as STALE:
 
@@ -351,7 +351,7 @@ Feat v2 registers the same tests, and its first submission is the layer's third:
 
 ### Futures: signal layer and a spent budget
 
-> **Status:** partly implemented: the budget, PAUSED, `--extend`, and the counts in M2; walk-forward, `GridMax`, and dedup planned for M3b.
+> **Status:** partly implemented: the budget, PAUSED, `--extend`, and the counts in M2; walk-forward, `GridMax`, and dedup planned for M3c.
 
 The signal layer combines the passed feature with blast furnace utilization and the margin level into one weekly score. Anything that learns from labels, such as a tree model or thresholds chosen by IC, must be written as `fit`. The engine then runs a purged walk-forward: `fit` receives only training-fold labels, without samples whose label window overlaps the test period. New criteria are a mechanism ablation (without inventory, is the score just margin mean reversion?) and a secondary prediction (the hot-rolled coil margin should react the same way to its own inventory). The lookback and entry threshold are declared as one parameter family; `GridMax` runs the whole grid in every null world and keeps the maximum, so the grid is one submission and its search is priced in.
 
@@ -393,12 +393,12 @@ The algo layer turns the score into positions, and the backtest is its evaluator
 
 | What goes wrong | Caught by | Result | Status |
 | --- | --- | --- | --- |
-| the survey is stamped a day earlier than it was published | mutant M1 and `test_publish_day` | the actual `available_at` is used | planned (M3b) |
+| the survey is stamped a day earlier than it was published | mutant M1 and `test_publish_day` | the actual `available_at` is used | planned (M3c) |
 | a two-sided seasonal filter | stepper versus full run | TAINTED, and the submission counts | implemented (M1 check, M2 state) |
 | a declared lookback shorter than the window used | stepper with the full history | `kind='lookback'`: declare a longer window, no taint | implemented (M1) |
-| the core field has revised values only | vintage floor check, coverage check | explore-grade, verdicts capped at L1 | planned (M3b) |
-| a level break in 2019 | `test_inventory_break` | history split, power recomputed, possibly back to the contract | planned (M3b) |
-| a continuous main-contract series used for labels | contract floor check | the field is rejected for labels | planned (M3b) |
+| the core field has revised values only | vintage floor check, coverage check | explore-grade, verdicts capped at L1 | planned (M3c) |
+| a level break in 2019 | `test_inventory_break` | history split, power recomputed, possibly back to the contract | planned (M3c) |
+| a continuous main-contract series used for labels | contract floor check | the field is rejected for labels | planned (M3c) |
 | upstream data reopened | lineage | downstream stages STALE until they register again | implemented (M2) |
 | `contract.py` edited after the freeze, for example to a two-week horizon | freeze comparison at submit | TAINTED: `frozen dependencies changed: contract`; a new horizon needs `rci contract derive` again, which makes every later stage STALE | implemented (M2) |
 | the budget runs out | submission count in the ledger | PAUSED until a person extends or drops the idea | implemented (M2) |
@@ -524,13 +524,13 @@ CONTRACT = Contract(
 
 ### Maker-taker: data layer and the latency table
 
-> **Status:** planned: checks in M3b, plugins in M5; the FieldTable and `asof` are M1.
+> **Status:** planned: checks in M3c, plugins in M5; the FieldTable and `asof` are M1.
 
 Besides the market fields (A trades with aggressor side, A best quotes, B's order book), the data layer of an execution strategy delivers what the decision time is derived from. Every `available_at` is the local receive time, never a venue timestamp. A latency table, measured from our own order telemetry, gives cancel latency (p50 22 ms, p95 35 ms, p99 80 ms), order-to-acknowledgement, and hedge latency (p95 60 ms). Clock skew between our host and each venue is measured, not assumed (p99 ±5 ms). The data tests check that the latency sample is large enough and stable across hours of the day, that the skew was measured, and that feed gaps are found and masked. The steps are the same as in the futures case, and data passes on its first submission.
 
 ### Maker-taker: feat layer, steps F0 to F10
 
-> **Status:** planned (M3b); the stepper that catches the lookahead in F7 is M1, and the states and `rci next` lines are M2.
+> **Status:** planned (M3c); the stepper that catches the lookahead in F7 is M1, and the states and `rci next` lines are M2.
 
 | Step | Who | Command | What happens | Counts as a trial |
 | --- | --- | --- | --- | --- |
@@ -628,7 +628,7 @@ The card is rendered from the verdict without any LLM. Two failures were stopped
 
 ### Maker-taker: signal layer
 
-> **Status:** planned (M3b; the lineage check on inputs arrives with the runner in M4).
+> **Status:** planned (M3c; the lineage check on inputs arrives with the runner in M4).
 
 The claim: at t minus the cancel latency, a score built from toxicity, arrivals, and the spread predicts the net a fill at the hypothetical quote would earn, and the best-scored opportunities earn a positive net after fees and the simulated hedge.
 
@@ -682,7 +682,7 @@ $ rci next -i ideas/mm-toxicity
 agent      rci algo check                       the unprotected stand-in stayed inside the loss limit in the halved-depth world
 ```
 
-The challenger combines halved depth with injected hedge failures, the unprotected stand-in now loses through the limit, and the check passes. A person approves; from M3b on the freeze includes plugin hashes, the fill model among them.
+The challenger combines halved depth with injected hedge failures, the unprotected stand-in now loses through the limit, and the check passes. A person approves; from M3c on the freeze includes plugin hashes, the fill model among them.
 
 **Trial 1 is TAINTED by a frozen dependency.** Between approval and submission, someone recalibrates the fill model plugin. The engine compares the dependencies recorded at approval with the current ones and names what moved (the key name is illustrative):
 
@@ -811,12 +811,12 @@ Reopening a passed layer marks every later stage STALE, the checkpoints included
 
 | What goes wrong | Caught by | Result | Status |
 | --- | --- | --- | --- |
-| a null world narrower than the measured clock skew | calibration: the stand-in survives | back to the challenger, no trial | planned (M3b); the state loop is M2 |
+| a null world narrower than the measured clock skew | calibration: the stand-in survives | back to the challenger, no trial | planned (M3c); the state loop is M2 |
 | a feature computed up to the trade time instead of t minus the cancel latency | stepper | TAINTED, trial counted | implemented (M1 check, M2 state) |
 | the incoming trade's size used as a feature | stepper | TAINTED; allowed only as an evaluation bucket | implemented (M1 check) |
 | only the optimistic fill model passes | the cap rule | evidence capped at L2 | planned (M6) |
 | stress worlds too mild | calibration: the unprotected stand-in stays inside the limit | back to the challenger | planned (M6) |
-| a plugin updated after the freeze | freeze comparison at submit | TAINTED, naming the changed dependency | mechanism implemented (M2); plugin code hashes are checked at contract approval (M3a) and join layer freezes in M3b |
+| a plugin updated after the freeze | freeze comparison at submit | TAINTED, naming the changed dependency | mechanism implemented (M2); plugin code hashes are checked at contract approval (M3a) and join layer freezes in M3c |
 | live fills below the pessimistic model | forward reconciliation | every verdict that depends on the fill model is downgraded | planned (later) |
 | parameters changed during the live experiment | the frozen plan | the experiment ends; a new one is registered and counted | planned (later) |
 | drift after going live | monitor rules | FAILED, the named layer reopened, the checkpoints STALE | mechanism implemented (M2); rules planned (later) |
@@ -833,7 +833,7 @@ Reopening a passed layer marks every later stage STALE, the checkpoints included
 
 ## Text event signals
 
-> **Status:** planned: judging in M3b, the forward runs later. `RandomEvents`, the LLM point-in-time rule, and the generation columns (`gen_mode`, `model_cutoff`) are planned; the M1 FieldTable has seven columns (`entity`, `field`, `event_time`, `available_at`, `value`, `vintage`, `source`).
+> **Status:** planned: judging in M3c, the forward runs later. `RandomEvents`, the LLM point-in-time rule, and the generation columns (`gen_mode`, `model_cutoff`) are planned; the M1 FieldTable has seven columns (`entity`, `field`, `event_time`, `available_at`, `value`, `vintage`, `source`).
 
 Authors publish investment theses: a direction on one or more instruments, with a written rationale. An LLM pipeline reads news from an append-only news-event ledger and emits signals that support or refute a thesis. A much cheaper classifier is an alternative way to produce the same stance.
 
@@ -852,7 +852,7 @@ LLM pipeline --- compares each event with each thesis ---> signal
 
 ### Text events: the question
 
-> **Status:** planned (M3b).
+> **Status:** planned (M3c).
 
 Three questions could be asked of this data. (A) Do the theses themselves have alpha when followed? That becomes the consumer's baseline. (C) Do news events predict moves in related instruments? That is a generic event study and a possible foundation. The claim here is (B): after a refute signal, do thesis-direction returns really get worse? It tests what the pipeline promises, to notice in time that a thesis is going wrong. An offline evaluation with human labels can say whether a stance is right; it cannot say whether the market followed. It is also the hardest kind of research for Research CI, because the model's pretraining can itself be a view of the future.
 
@@ -928,7 +928,7 @@ Derive does this arithmetic from the spread of the target across blocks one hori
 
 ### Text events: data layer
 
-> **Status:** planned: checks in M3b, plugins in M5.
+> **Status:** planned: checks in M3c, plugins in M5.
 
 This is where the case's main finding appears.
 
@@ -959,7 +959,7 @@ Calibration plants four mutants, and each must be caught: `available_at` replace
 
 ### Text events: feat layer
 
-> **Status:** planned (M3b).
+> **Status:** planned (M3c).
 
 The claim at this layer: at the publish time, a refute stance predicts a negative thesis-direction abnormal return, and still does after removing (1) any news, (2) market and sector, and (3) the pre-publish move. The features are formulas that need no `fit`: stance, information type, number of sources, novelty of the news-event cluster, and the 5-day return before publication (as a control only).
 
@@ -995,7 +995,7 @@ The contaminated rows are what make the left column look strong, and the cap is 
 
 ### Text events: signal and algo
 
-> **Status:** planned (M3b for signal, M6 for algo).
+> **Status:** planned (M3c for signal, M6 for algo).
 
 The signal layer combines stance, number of sources, and information type into one event score (shape: Events). The algo layer overlays "cut on refute" on the follow-the-thesis portfolio and is judged by a daily bar-close backtester plugged in as a `ConsumerPlugin`, with costs and a per-instrument position cap. It must beat two baselines: the portfolio without the overlay, and `RandomizeTiming(keep="rate")`, which cuts at the same frequency on random days. Size is not a constraint. The baseline portfolio can use only live thesis cards, so its history is as short as the signals'.
 
@@ -1023,7 +1023,7 @@ For this case the CapitalCard is really a decision about a product claim, not ab
 
 ### Text events: what can go wrong
 
-All of these are planned except power in derive (M3a), which reports INSUFFICIENT and the days of new data needed: the checks in M3b, the forward checkpoint later.
+All of these are planned except power in derive (M3a), which reports INSUFFICIENT and the days of new data needed: the checks in M3c, the forward checkpoint later.
 
 | What goes wrong | Caught by | Result |
 | --- | --- | --- |

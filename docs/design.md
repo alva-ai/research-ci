@@ -23,7 +23,7 @@ Contents:
 
 ## Purpose and principles
 
-> **Status:** partly implemented: time, holdout tiers, the ledger, freezes, and the workflow in M1 and M2; the contract, plugin protocols, and protocol tests in M3a; judging planned for M3b.
+> **Status:** partly implemented: time, holdout tiers, the ledger, freezes, and the workflow in M1 and M2; the contract, plugin protocols, and protocol tests in M3a; the data layer in M3b; judging planned for M3c.
 
 ### The problem
 
@@ -44,8 +44,8 @@ The engine does not judge methods; it judges outputs, the way a backtester does 
 | Duty | What it guarantees | Status |
 | --- | --- | --- |
 | Time | At every decision time, research code sees only rows with `available_at <= t`. | Implemented (M1) |
-| Holdout and labels | Label definitions are plugins named in the contract; the engine owns label custody: which data a label sees, when it runs, and who gets the values. Sealed and forward data are out of the agent's reach. | Tiers in M2; label plugins and their protocol tests in M3a; delivery through evaluators in M3b and M4 |
-| Verdict | Real scores are compared with null worlds, thresholds rise with the number of trials, and every submission is logged in a hash-chained ledger. | Ledger in M2; power in M3a; judge planned (M3b) |
+| Holdout and labels | Label definitions are plugins named in the contract; the engine owns label custody: which data a label sees, when it runs, and who gets the values. Sealed and forward data are out of the agent's reach. | Tiers in M2; label plugins and their protocol tests in M3a; delivery through evaluators in M3c and M4 |
+| Verdict | Real scores are compared with null worlds, thresholds rise with the number of trials, and every submission is logged in a hash-chained ledger. | Ledger in M2; power in M3a; judge planned (M3c) |
 
 Everything specific to a case is a plugin: data sources, candidates, labels, targets, cost models, and backtesters. The engine keeps time, holdout, and verdicts, and it constrains plugins and agent-written code with executable checks and with tests of those checks: universe, label, and consumer plugins pass protocol tests before their output is used, and the protocol tests are themselves shown to catch plugins broken on purpose (see [Plugins](#plugins)).
 
@@ -104,7 +104,7 @@ An agent may do anything else. It may not do three things: see sealed or forward
 
 ## Architecture
 
-> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), `kernel/judge` (protocol tests and power), `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; the layer policies and the rest of `kernel/judge` planned for M3b, the child process for M4, `llm` from M5.
+> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), `kernel/judge` (protocol tests and power), `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; the layer policies and the rest of `kernel/judge` planned for M3c, the child process for M4, `llm` from M5.
 
 ### Packages
 
@@ -112,9 +112,9 @@ The engine separates mechanism, policy, and lifecycle. The kernel holds mechanis
 
 | Package | Owns | Status |
 | --- | --- | --- |
-| `api` | The only package research code and plugins import: `Contract` and its parts (`api/contract.py`), the plugin protocols (`api/plugins.py`), and what a layer file declares: `Criterion` (`api/study.py`) and null worlds (`api/nulls.py`). | Contract and protocols in M3a; criteria and nulls declared and validated in M3a, run from M3b |
-| `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), `checks`, and `judge`: `protocol` (protocol tests) and `power` today; nulls, mutate, calibrate, stats, and verdict later. | `tables` and `time` in M1; `hashing` and `holdout` in M2; `judge/protocol` and `judge/power` in M3a; `checks` and the rest of `judge` planned (M3b) |
-| `stages` | One policy file per stage. Today `contract.py`, which derives the Spec. Later `data.py`, `feat.py`, `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py`: floor checks, floor null worlds, the calibration recipe, caps. | `contract.py` in M3a; the others planned (M3b and later) |
+| `api` | The only package research code and plugins import: `Contract` and its parts (`api/contract.py`), the plugin protocols (`api/plugins.py`), and what a layer file declares: `Criterion` (`api/study.py`) and null worlds (`api/nulls.py`). | Contract and protocols in M3a; criteria and nulls declared and validated in M3a, run from M3c |
+| `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), `checks`, and `judge`: `protocol` (protocol tests) and `power` today; nulls, mutate, calibrate, stats, and verdict later. | `tables` and `time` in M1; `hashing` and `holdout` in M2; `judge/protocol` and `judge/power` in M3a; `checks` and the rest of `judge` planned (M3c) |
+| `stages` | One policy file per stage. Today `contract.py`, which derives the Spec, and `source.py` and `data.py`, which admit a data source and check an idea's data. Later `feat.py`, `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py`: floor checks, floor null worlds, the calibration recipe, caps. | `contract.py` in M3a; `source.py` and `data.py` in M3b; the others planned (M3c and later) |
 | `workflow` | The state machine, lineage, templates, `next_actions`, approval provenance, and the commands that apply transitions. | Implemented (M2); approval provenance in M3a |
 | `runner` | Plugin loading: builds each plugin from its entry point with the contract's options and hashes its code. Later, research code in a child process, with data exchanged as Arrow. | Plugin loading in M3a; child process planned (M4) |
 | `store` | All I/O: the `.rci/` workspace with atomic writes and a lock, the ledger with head anchors, freeze records, environment records, and the data vault, content-hashed snapshots under `$RCI_HOME/data/`. | Implemented (M2); vault in M3a |
@@ -164,7 +164,7 @@ research-ci/                     the engine: library and CLI only
   src/<lab_package>/shared/      shared research tools
   ideas/<idea>/
     contract.py                  written by the agent, frozen at approval
-    data.py feat.py signal.py algo.py   research code, one module per layer (rci init generates them from M3b)
+    data.py feat.py signal.py algo.py   research code, one module per layer (rci init generates them from M3c)
     nulls/                       written by the challenger
     .rci/                        written only by the engine
 
@@ -180,7 +180,7 @@ $RCI_HOME (default ~/.rci)       per user, outside every repository
 - Older research repositories are not moved. Lab plugins read their data or call their backtesters.
 - Research notebooks are optional; submissions are code (modules or scripts), and the engine calls only agreed entry points.
 
-The `.rci/` directory of an idea holds `ledger.jsonl`, `contract.json` (a copy of the contract fields, the hash of `contract.py`, and the derived Spec), `contract-card.txt` (the ContractCard), `freeze/<stage>.json` (copies of each freeze), and `lock`, which `.rci/.gitignore` excludes. Verdict files, the other cards, and audit reports will join it with M3b and later. Every JSON file is written to a temporary file and moved into place with `os.replace`, so a crash never leaves half a file.
+The `.rci/` directory of an idea holds `ledger.jsonl`, `contract.json` (a copy of the contract fields, the hash of `contract.py`, and the derived Spec), `contract-card.txt` (the ContractCard), `data.json` and `data-card.txt` (the data check and the DataCard), `freeze/<stage>.json` (copies of each freeze), and `lock`, which `.rci/.gitignore` excludes. Verdict files, the other cards, and audit reports will join it with M3c and later. Every JSON file is written to a temporary file and moved into place with `os.replace`, so a crash never leaves half a file.
 
 ### Data model
 
@@ -189,10 +189,10 @@ Six tables carry everything:
 ```text
 FieldTable   entity, field, event_time, available_at, value, vintage, source      all data (M1)
 Panel        rows (time, entity), one column per field, at one moment = asof(t)   (M1)
-Output       Scores, Events, Positions, Quotes, or Orders                          (M3b onward)
+Output       Scores, Events, Positions, Quotes, or Orders                          (M3c onward)
 Labels       (t, entity, horizon) -> outcome, from label plugins, engine custody   (M3a)
 Verdict      state, per-criterion scores and z, evidence level, caps, preconditions,
-             and the hashes of everything it depends on                            (M3b)
+             and the hashes of everything it depends on                            (M3c)
 Ledger       append-only, every record carries the hash of the one before it       (M2)
 ```
 
@@ -254,7 +254,7 @@ The process boundary is also where a trusted service would be split out later: `
 
 ## Lifecycle
 
-> **Status:** partly implemented: the state machine, versions, budgets, lineage, templates, `next_actions`, and the commands `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve` in M2; the derived Spec, the ContractCard, per-layer budgets, and approval provenance in M3a; per-layer CLI commands planned for M3b; checkpoint commands later.
+> **Status:** partly implemented: the state machine, versions, budgets, lineage, templates, `next_actions`, and the commands `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve` in M2; the derived Spec, the ContractCard, per-layer budgets, and approval provenance in M3a; per-layer CLI commands planned for M3c; checkpoint commands later.
 
 ### Outer pipeline
 
@@ -371,7 +371,7 @@ Every command requires all upstream stages to be PASSED or SKIPPED. Registering 
 
 A second lock sits in the freeze. Each stage's freeze includes `upstream:<stage>`, the freeze hash of each upstream stage's latest approval. If an upstream stage is approved again, any downstream submission against the old freeze would be TAINTED even without the STALE mark.
 
-From M3b, each verdict also records the hashes of the upstream outputs it consumed, and a stage may only use upstream outputs that passed. For example, `signal` may only read feature versions that passed `feat`; it cannot compute a new, unjudged feature of its own.
+From M3c, each verdict also records the hashes of the upstream outputs it consumed, and a stage may only use upstream outputs that passed. For example, `signal` may only read feature versions that passed `feat`; it cannot compute a new, unjudged feature of its own.
 
 ### Optional stages
 
@@ -385,7 +385,7 @@ A checkpoint is registered with its plan in advance: the k candidates for `seal`
 
 ### Exploration
 
-Exploration is allowed in any state. It never changes the state and is never counted as a trial. On the explore tier every number is shown, as often as the agent wants (planned command: `rci <layer> explore`, M3b).
+Exploration is allowed in any state. It never changes the state and is never counted as a trial. On the explore tier every number is shown, as often as the agent wants (planned command: `rci <layer> explore`, M3c).
 
 Exploration is free because it is how agents find ideas; counting it would only push work off the record. It is safe because it never produces a verdict, the tests are frozen before any submission, and the seal and forward tiers are out of reach. One weakness remains: an agent can look at explore results and then choose which criteria to register. The seal and forward checkpoints are the backstop.
 
@@ -410,7 +410,7 @@ The engine is passive. `next_actions(status)` returns what should happen next as
 | checkpoint | FROZEN | human or scheduler | `rci seal run`, `rci forward --all`, `rci capital run`, `rci monitor --all` | run the checkpoint once |
 | checkpoint | FAILED, TAINTED | human | `rci <layer> register` | the checkpoint ran once; reopen a layer, which restarts the checkpoints |
 
-The per-layer and checkpoint commands in this table do not exist yet (M3b and later), although `rci next` already prints them. An approval that `rci next` assigns to a person can also be relayed by an agent or, in fully automatic research, given by the agent (see [Approval provenance](#approval-provenance)). Who does what:
+The per-layer and checkpoint commands in this table do not exist yet (M3c and later), although `rci next` already prints them. An approval that `rci next` assigns to a person can also be relayed by an agent or, in fully automatic research, given by the agent (see [Approval provenance](#approval-provenance)). Who does what:
 
 ```text
 research agent           challenger              person                 scheduler
@@ -437,7 +437,7 @@ A later orchestrator needs nothing new: it loops over ideas, reads `next_actions
 
 ### Commands that exist today
 
-`rci init <idea> -t <template>` creates the idea, writes a `contract.py` skeleton with every required field and `TODO` placeholders, and opens the ledger with an `init` record. `rci contract derive` loads and validates `contract.py`, checks its template and `skip` list, derives the Spec (see [What derive computes](#what-derive-computes)), records the fields, the Spec, and the dependencies in the ledger, and prints the ContractCard. `rci approve --stage <stage>` shows everything it will freeze (for the contract, the ContractCard), asks for confirmation, freezes, and prints a suggested git command; with `--relayed "<words>"` or `--auto` it records a relayed or automatic approval without asking (see [Approval provenance](#approval-provenance)); with `--extend N` it adds submissions to a PAUSED layer instead, which needs a terminal. `rci status`, `rci next`, and `rci inbox` show the state, the next action, and the person's queue, with `--json` for agents. `rci verify` checks the ledger and prints `ledger ok: N records`. `status`, `next`, `verify`, `contract derive`, and `approve` take `-i <idea>` and default to the current directory; `inbox` takes a root directory. The [README](../README.md#cli) has the full table.
+`rci init <idea> -t <template>` creates the idea, writes a `contract.py` skeleton with every required field and `TODO` placeholders, and opens the ledger with an `init` record. `rci contract derive` loads and validates `contract.py`, checks its template and `skip` list, derives the Spec (see [What derive computes](#what-derive-computes)), records the fields, the Spec, and the dependencies in the ledger, and prints the ContractCard. `rci approve --stage <stage>` shows everything it will freeze (for the contract, the ContractCard), asks for confirmation, freezes, and prints a suggested git command; with `--relayed "<words>"` or `--auto` it records a relayed or automatic approval without asking (see [Approval provenance](#approval-provenance)); with `--extend N` it adds submissions to a PAUSED layer instead, which needs a terminal. `rci data check` admits the data source if needed and checks the data (see [The data layer](#the-data-layer)); `rci source approve` admits a source once; `rci data submit` records the frozen data; `rci data show` and `rci source show` print the last cards. `rci status`, `rci next`, and `rci inbox` show the state, the next action, and the person's queue, with `--json` for agents. `rci verify` checks the ledger and prints `ledger ok: N records`. `status`, `next`, `verify`, `contract derive`, and `approve` take `-i <idea>` and default to the current directory; `inbox` takes a root directory. The [README](../README.md#cli) has the full table.
 
 The fields of `Contract` and what it refuses are in [The contract](#the-contract).
 
@@ -592,6 +592,66 @@ power      consumer:
 
 Checks are marked `ok` (passed), `FAIL`, `[!]` (a warning), or `--` (skipped). Warnings do not block approval; a failure does.
 
+## The data layer
+
+> **Status:** implemented (M3b): source admission (replay, reconciliation, canaries, field grades), the checks the contract and plugins declare, idea tests and their calibration, treatments and their influence on label effects, the SourceCard and DataCard, `rci data check`, `rci data submit`, `rci source approve`, and the checks at approval. Influence on consumer effects, checks on the seal tier, and listings that would catch a universe chosen with hindsight are planned.
+
+The data layer answers one question: is the data the contract needs what was known at each decision time, and is it what the venue reported? Its constraints do not rest on tests the agent writes. They rest on what the engine owns: the clock (it picks the times to replay), the sample (it picks the rows to reconcile), the declarations already approved (the contract and the plugins), and a materiality threshold derived from the contract's own power. Everything is a function of the FieldTable: checks return flagged rows, treatments return a new table, and pits are tables broken on purpose.
+
+It runs in two parts with different lifetimes.
+
+### Source admission
+
+Once per plugin, options, and code; every idea that uses the source reuses the record. Admissions live in `$RCI_HOME/sources/ledger.jsonl`, hash-chained and anchored like an idea's ledger.
+
+| Step | What the engine does | When it fails |
+| --- | --- | --- |
+| Baseline | Finite values, rows known no earlier than their event, long gaps, near-duplicate events, and lasting jumps of 5x or more in fields that behave like price levels | Never by itself: what it flags goes to reconciliation first |
+| Replay | `fetch(as_of=T, entities=...)` at cut points the engine picks: inside every hole of the full output, a day before each week's newly appearing entities, and at random; each must equal the full fetch cut at `T` | The plugin built, repaired, or filtered rows with later information: it is not admitted, and no person can override that |
+| Reconciliation | The plugin's independent source (`ReferenceSource.reference`) answers a random sample of every field and every flagged anomaly; a gap must be empty at the source too, other anomalies must be there | Any disagreement; an anomaly the source confirms is faithful data and is never flagged again |
+| Canaries | A deletion made with hindsight must be caught by the replay; values altered on our side must be caught by the reconciliation | The checks did not bite on this data |
+| Grades | Each field is verified (the source agreed), unverified (the source cannot answer it), or failed | A failed field fails admission |
+
+A person reads the SourceCard and admits the source once (`rci source approve`, or `--relayed` / `--auto`). The engine cannot tell an independent source from one that reads the plugin's own files; that is what the person checks, from the `reference_note` on the card.
+
+### The data check
+
+Once per idea, after the contract is approved, with `rci data check`:
+
+1. The source must be admitted under its current code; if it has no admission yet, the check runs it first.
+2. The checks the contract and plugins declare: freshness; legs of one asset, when the universe plugin names the field that prices them (`hedge_price`), are at about the same level and move together over the recent past, using only prices known at each decision time; and the grade of every field the decisive number reads. A verdict that reads an unverified field is explore-grade at most.
+3. The idea's own tests, if `ideas/<idea>/data.py` defines `TESTS`. They can only add checks. Each names the (category, field) pairs it covers; the engine plants built-in pits and the challenger's `PITS` from `nulls/data.py` in a clean copy, and a pit that moves the decisive number by the threshold or more must be flagged, or the test is returned.
+4. Every flagged problem becomes a treatment, applied by default: candidates whose legs do not trade as one asset are dropped; level jumps the source did not confirm are masked; flagged test rows are masked or their entities dropped.
+5. The influence of each treatment, and of all of them together, on the contract's decisive number per horizon, in units of the MDE: the finer of the MDE on the untreated and on the treated data. Below the threshold (0.5 MDE by default) a treatment is applied and logged; above it, the card asks a person, and an agent cannot approve with `--auto`. Only sizes are shown, never the direction or the level, so no one picks a treatment by its result.
+6. Power again, on the treated data.
+
+A blocked check leaves the layer CHALLENGED with the reason; a passing one leaves it CHECKED. A person who disagrees with a treatment names it with `rci data check --keep "<name>"`: it is measured and shown but not applied, and the card says so. The data layer has no budget and counts no trials, because nothing in it is chosen by its result. Treated data of a check that was superseded before it was frozen is removed from the vault. `rci approve --stage data` freezes the check's ledger record and the treated data, and refuses if a plugin's code, the data, the admission, or the treated data changed since. `rci data submit` records the layer as PASSED; the treated data and the excluded candidates sit in the vault, and feat reads only them.
+
+### The DataCard
+
+An abridged card, with illustrative numbers:
+
+```text
+DataCard · carry · v1
+data       lab.perp afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 0.4 days old
+source     lab.perp admitted · admission 2bd7d03487c3
+checks     ok   data is current: latest data is 0.4 days old
+           [!]  hedged legs are one asset: 19.05% of candidate rows fail (close within 1.2x and returns correlated ≥ 0.3); mostly Z
+           ok   field grades: unverified fields are not read: funding_interval_hours
+treatments                                               rows   |Δ| bp    MDE  at
+           hedge guard at each decision time              564     2.66   0.09  carry 8h
+           below 0.5 MDE: applied and logged · sizes only, never direction
+power      H            MDE before   after   new data
+           carry 8h           28.9    10.9       16 d
+           carry 24h          82.8    45.6       8 mo
+grades     verified: close funding_rate · unverified: funding_interval_hours
+decide     nothing
+verdict    READY
+           approving freezes the treated data; feat reads only that
+```
+
+Here a venue lists another asset under one ticker. The guard drops a fifth of the candidate rows; the mean barely moves, but the noise falls by more than half, which the power block shows.
+
 ## Time and lookahead
 
 > **Status:** implemented (M1): FieldTable, `asof`, `step`, `check_leaks`. Decision grids from the contract in M3a; decision times derived from events and latencies are planned.
@@ -668,7 +728,7 @@ The check runs the code on the availability-timed copy, not on the real table. I
 
 ### Panel formats
 
-The kernel runs on polars. Research code chooses its panel with `panel_format`: `"pandas"` (the default) gives a wide DataFrame indexed by `(time, entity)`; `"polars"` gives a plain frame with `time` and `entity` columns. The known-answer tests run in both formats, and a control test requires the same feature written both ways to give the same values. Statistics that affect verdicts will be computed with numpy in a fixed order (M3b), not with polars parallel aggregations, so that verdicts are reproducible bit for bit.
+The kernel runs on polars. Research code chooses its panel with `panel_format`: `"pandas"` (the default) gives a wide DataFrame indexed by `(time, entity)`; `"polars"` gives a plain frame with `time` and `entity` columns. The known-answer tests run in both formats, and a control test requires the same feature written both ways to give the same values. Statistics that affect verdicts will be computed with numpy in a fixed order (M3c), not with polars parallel aggregations, so that verdicts are reproducible bit for bit.
 
 ### Performance
 
@@ -680,7 +740,7 @@ The kernel runs on polars. Research code chooses its panel with `panel_format`: 
 
 ## Holdout and labels
 
-> **Status:** partly implemented: tiers, `visible`, and decision windows in M2; label plugins, the reference labels, and the label protocol tests in M3a; label delivery through evaluators and walk-forward in M3b and M4; vintage-aware labels and the LLM data rule planned.
+> **Status:** partly implemented: tiers, `visible`, and decision windows in M2; label plugins, the reference labels, and the label protocol tests in M3a; label delivery through evaluators and walk-forward in M3c and M4; vintage-aware labels and the LLM data rule planned.
 
 ### Tiers
 
@@ -719,11 +779,11 @@ If no price for an entity became known at or after `t + h`, the data does not ye
 
 This rule makes a separate purge at the tier boundary unnecessary. Labels on `visible(fields, EXPLORE, tiers)` can never reach past `explore_end`: any label that would need a price published after the cutoff is missing. The tests check this for the reference labels, and the `label_truncation` protocol test checks the underlying property for every label plugin: labels whose window ends by a cut point do not change when the data stops at that cut.
 
-Walk-forward is a different case and still needs purging (planned, M3b). Code that learns from labels gets them only through `fit`. The engine passes `fit` only the labels of the training folds, and it drops training samples whose label window overlaps the test period.
+Walk-forward is a different case and still needs purging (planned, M3c). Code that learns from labels gets them only through `fit`. The engine passes `fit` only the labels of the training folds, and it drops training samples whose label window overlaps the test period.
 
 ### Who sees labels
 
-Label definitions are plugins; label custody belongs to the engine. Research code never builds the labels its verdict is judged on. The contract names each label's plugin, its options, and its horizons, so none of them can be changed after results; changing one is a new contract version, recorded in the same idea's ledger. The engine decides which data a label plugin sees (the tier's fields, or cut and perturbed copies in protocol tests), when it runs, and who gets the values. From M3b and M4, labels reach research code only through evaluators and `fit`, and only the labels the current tier allows. Components such as `flow` and `price` stay separate in the label, and costs come from the contract's cost model, applied by the target. Label types that need simulated fills call a plugin.
+Label definitions are plugins; label custody belongs to the engine. Research code never builds the labels its verdict is judged on. The contract names each label's plugin, its options, and its horizons, so none of them can be changed after results; changing one is a new contract version, recorded in the same idea's ledger. The engine decides which data a label plugin sees (the tier's fields, or cut and perturbed copies in protocol tests), when it runs, and who gets the values. From M3c and M4, labels reach research code only through evaluators and `fit`, and only the labels the current tier allows. Components such as `flow` and `price` stay separate in the label, and costs come from the contract's cost model, applied by the target. Label types that need simulated fills call a plugin.
 
 ### Data generated by LLMs
 
@@ -737,11 +797,11 @@ Each record is judged against the context as it was at the time, for example the
 
 ## Judging
 
-> **Status:** planned (M3b), with the `algo` parts (fill models, `RandomizeTiming`, stress worlds, limit criteria) in M6. Nothing computes a verdict today; the workflow records verdicts passed in by tests. Criteria and null worlds can already be declared in `research_ci.api` (M3a), and derive computes power (see [Power](#power)).
+> **Status:** planned (M3c), with the `algo` parts (fill models, `RandomizeTiming`, stress worlds, limit criteria) in M6. Nothing computes a verdict today; the workflow records verdicts passed in by tests. Criteria and null worlds can already be declared in `research_ci.api` (M3a), and derive computes power (see [Power](#power)).
 
 ### Evaluators and criteria
 
-The agent writes evaluators: functions that turn a layer's outputs and a context into one number. Each is registered in advance as a criterion and frozen at approval. A layer file lists them in `CRITERIA`; `Criterion` is declared in `research_ci.api` (M3a), and nothing runs it until M3b:
+The agent writes evaluators: functions that turn a layer's outputs and a context into one number. Each is registered in advance as a criterion and frozen at approval. A layer file lists them in `CRITERIA`; `Criterion` is declared in `research_ci.api` (M3a), and nothing runs it until M3c:
 
 ```python
 from research_ci.api import Criterion
@@ -810,7 +870,7 @@ Every real incident becomes a stress world that similar strategies must pass lat
 - **Mutant**: a copy of the data or of an evaluator with a planted defect. Each data test declares which risks it `covers`, must pass on clean synthetic data, and must fail on every mutant it covers. A mutant must be harmful: a naive feature on the mutated data must deviate clearly, for example show an inflated IC after a planted leak.
 - **Coverage**: a risk flagged on a field, with no test that fails on the matching mutant, is a coverage gap, and approval is refused until it is closed.
 
-In `algo`, calibration changes shape: a stand-in strategy that trades at random at the same rate must have a false pass rate of at most alpha against the random-timing null; an unprotected stand-in (no stops, no failure handling) must breach its limits in the stress worlds, which proves the stress is strong enough; and the execution simulator must pass known-answer tests (see [The algo layer](#the-algo-layer)). The rates, repetition counts, and sizes above are the planned recipe and may change in M3b.
+In `algo`, calibration changes shape: a stand-in strategy that trades at random at the same rate must have a false pass rate of at most alpha against the random-timing null; an unprotected stand-in (no stops, no failure handling) must breach its limits in the stress worlds, which proves the stress is strong enough; and the execution simulator must pass known-answer tests (see [The algo layer](#the-algo-layer)). The rates, repetition counts, and sizes above are the planned recipe and may change in M3c.
 
 The [maker-taker walkthrough](walkthroughs.md#cross-venue-maker-taker) shows a calibration failure: a clock-skew null written too narrow let a stand-in survive and was sent back to the challenger before anything counted.
 
@@ -875,11 +935,11 @@ Caps:
 - A strategy whose outcomes depend on its own actions is capped at L3 until live results exist.
 - A stage approved by relay or by the agent will be capped (see [Approval provenance](#approval-provenance)); the caps are not set yet.
 
-Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because criteria on the same data are not independent evidence. The final definitions follow the first real case in M3b.
+Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because criteria on the same data are not independent evidence. The final definitions follow the first real case in M3c.
 
 ### Verdict states
 
-A verdict is one of `PASS`, `FAIL`, `INSUFFICIENT` (the sample is too small to detect the claimed effect; the card says how much longer to collect at the current rate), `TAINTED` (something frozen changed, or a lookahead was found), `STALE` (an upstream stage was reopened), or `DEV` (made with an editable engine). In the M2 workflow a submission records PASSED, FAILED, or TAINTED, and STALE is a stage state. How INSUFFICIENT and DEV map onto stage states is decided in M3b. The status derive puts on the ContractCard (DECIDABLE, INSUFFICIENT, or BLOCKED) is not a verdict: it says, before any test, whether the data can decide the claim.
+A verdict is one of `PASS`, `FAIL`, `INSUFFICIENT` (the sample is too small to detect the claimed effect; the card says how much longer to collect at the current rate), `TAINTED` (something frozen changed, or a lookahead was found), `STALE` (an upstream stage was reopened), or `DEV` (made with an editable engine). In the M2 workflow a submission records PASSED, FAILED, or TAINTED, and STALE is a stage state. How INSUFFICIENT and DEV map onto stage states is decided in M3c. The status derive puts on the ContractCard (DECIDABLE, INSUFFICIENT, or BLOCKED) is not a verdict: it says, before any test, whether the data can decide the claim.
 
 ### Example verdict card
 
@@ -931,7 +991,7 @@ An illustration of why this comes first: ten years of weekly decisions give abou
 
 ### Walk-forward and fit
 
-There are two ways to run research code (planned, M3b). A layer file, `ideas/<idea>/<layer>.py`, declares `features` or `fit` and `predict`, `LOOKBACK` (how far back `features` reads, or `None` for all history), `PANEL_FORMAT`, and `CRITERIA` (`api/study.py`):
+There are two ways to run research code (planned, M3c). A layer file, `ideas/<idea>/<layer>.py`, declares `features` or `fit` and `predict`, `LOOKBACK` (how far back `features` reads, or `None` for all history), `PANEL_FORMAT`, and `CRITERIA` (`api/study.py`):
 
 | Path | Written as | Run by the engine as |
 | --- | --- | --- |
@@ -982,7 +1042,7 @@ Judging is done by deterministic kernel code. The challenger contributes tests a
 
 ## Trust and reproducibility
 
-> **Status:** partly implemented: the ledger, head anchors, state replay, freezes, environment records, and approval at a terminal in M2; approval provenance, the data vault, and the dependency check at contract approval in M3a; plugins and the data snapshot in layer freezes, and DEV marking, with M3b; process isolation in M4; stronger hardening later.
+> **Status:** partly implemented: the ledger, head anchors, state replay, freezes, environment records, and approval at a terminal in M2; approval provenance, the data vault, and the dependency check at contract approval in M3a; plugins and the data snapshot in layer freezes, and DEV marking, with M3c; process isolation in M4; stronger hardening later.
 
 ### The ledger
 
@@ -991,8 +1051,8 @@ Judging is done by deterministic kernel code. The challenger contributes tests a
 | Kind | Payload besides `from`, `to`, `version` |
 | --- | --- |
 | `init` | `template` only; stage `idea`; always the first record |
-| `register` | For the contract: its file hash (`contract`), every field (`fields`), the derived Spec (`spec`), and the dependencies derive recorded (`deps`: plugin code, baseline files, the data snapshot). For other stages: the declarations (from M3b). |
-| `challenge` | The challenger's declarations (from M3b) |
+| `register` | For the contract: its file hash (`contract`), every field (`fields`), the derived Spec (`spec`), and the dependencies derive recorded (`deps`: plugin code, baseline files, the data snapshot). For other stages: the declarations (from M3c). |
+| `challenge` | The challenger's declarations (from M3c) |
 | `check` | `passed`, `note` |
 | `approve` | `freeze` hash, `deps`, `approval` (who approved and through which channel, with a relayed person's words), and `note`; for the contract also `budget`, `skip`, and `derived`, the hash of the `register` record it approves |
 | `submit` | `verdict`, `note`, `environment` |
@@ -1047,10 +1107,10 @@ By default approval requires a person: `rci approve` refuses to run unless stdin
 | Channel | Command | `approval` in the ledger | Note on the stage |
 | --- | --- | --- | --- |
 | A person at a terminal (default) | `rci approve --stage <stage>` | `{"by": "human", "channel": "terminal"}` | approved by a person at a terminal |
-| A person's approval, relayed by an agent | `rci approve --stage <stage> --relayed "<the person's words>"` | `{"by": "human", "channel": "relayed", "words": "..."}` | approved by a person, relayed by an agent: '...' |
+| A person's approval, relayed by an agent | `rci approve --stage <stage> --relayed "<the person's words>" --card <id>` | `{"by": "human", "channel": "relayed", "words": "...", "card": "<id>"}` | approved by a person, relayed by an agent: '...' |
 | The agent itself, in fully automatic research | `rci approve --stage <stage> --auto` | `{"by": "agent", "channel": "auto"}` | approved by the agent (automatic research) |
 
-`--relayed` and `--auto` print the same preview but do not ask; `--relayed` refuses empty words, and the two flags cannot be combined. Extending a budget (`--extend N`) always needs a person at a terminal. `rci status` shows the note next to the stage.
+`--relayed` and `--auto` print the same preview but do not ask; `--relayed` refuses empty words, and the two flags cannot be combined. Every card ends with `card <id>`, a fingerprint of its text. A relayed approval of a stage that has a card (the contract, a data source, the data) must quote that id with `--card`, and is refused if the card changed since: outside fully automatic research the agent shows the person the whole card before relaying, and the id ties the approval to what was shown. Extending a budget (`--extend N`) always needs a person at a terminal. `rci status` shows the note next to the stage.
 
 The channels match the research intensities. In fully automatic research the agent approves itself, and what it reaches is capped. In semi-automatic research an agent does the work, stops at each approval, asks the person, and relays the answer with the person's words. Deep research, and every step that commits capital or publishes a claim, needs the person's own confirmation at a terminal, the strongest channel, because the engine cannot verify a relayed approval. A quick screen, where a person picks options on the rendered cards, will get its own channel (planned); until then it uses relay. The verdict machinery will cap what stages approved by relay or by the agent can reach; the caps themselves are planned, with the evidence levels.
 
@@ -1067,9 +1127,9 @@ A freeze is `Freeze(stage, deps, hash, at_ns)`, where the hash covers only the s
 | `python` | Interpreter and version, for example `CPython 3.11.15` |
 | `engine_packages` | The engine's version and the installed versions of its direct dependencies |
 | `upstream:<stage>` | The freeze hash of each upstream stage's latest approval; skipped stages are left out |
-| From M3b | Evaluators and null worlds; plugins and the data snapshot in each layer's freeze |
+| From M3c | Evaluators and null worlds; plugins and the data snapshot in each layer's freeze |
 
-The contract stage freezes only `contract`. Its other dependencies are recorded at derive and checked when the contract is approved (see [Approval reads the ledger](#approval-reads-the-ledger)): `plugin:<name>` (a tree hash of the directory holding the plugin's module), `baseline:config`, `baseline:code:<file>`, and `baseline:live_config`, and `data` (the content hash of the snapshot in the vault). They do not join layer freezes yet, so until M3b a lab plugin whose code changes after the contract's approval is not noticed at a layer submission. The reference plugins are part of the engine source, which layer freezes do pin. At each submission the engine recomputes the dependencies and compares them with the ledger. Any change, added key, or missing key makes the submission TAINTED, with a note that lists what moved, for example `frozen dependencies changed: contract`.
+The contract stage freezes only `contract`. Its other dependencies are recorded at derive and checked when the contract is approved (see [Approval reads the ledger](#approval-reads-the-ledger)): `plugin:<name>` (a tree hash of the directory holding the plugin's module), `baseline:config`, `baseline:code:<file>`, and `baseline:live_config`, and `data` (the content hash of the snapshot in the vault). They do not join layer freezes yet, so until M3c a lab plugin whose code changes after the contract's approval is not noticed at a layer submission. The reference plugins are part of the engine source, which layer freezes do pin. At each submission the engine recomputes the dependencies and compares them with the ledger. Any change, added key, or missing key makes the submission TAINTED, with a note that lists what moved, for example `frozen dependencies changed: contract`.
 
 The research environment is recorded, not frozen. Each submission records a hash of every installed package with its version and the hash of the nearest `uv.lock` in the idea directory or above it (`none` if there is none). The reason is the normal loop: after a FAIL the agent changes its code and resubmits, and adding a research library changes `uv.lock`. If the lock file were frozen, that normal resubmission would be TAINTED. What must not move is the machinery that judges; the rest is recorded so any verdict can be reproduced. The interpreter version is frozen because uv resolves dependencies per Python version (3.11 gets numpy 2.4.x, 3.12 gets 2.5.x), and floating-point results can differ across them.
 
@@ -1079,7 +1139,7 @@ Data snapshots in the vault (since M3a) are hashed with the engine's own encodin
 
 ### DEV mode
 
-A verdict made with an editable engine install, as the lab uses today, will be marked DEV and capped at L1 (planned, M3b; nothing detects it yet). Real verdicts need the engine pinned to a git SHA.
+A verdict made with an editable engine install, as the lab uses today, will be marked DEV and capped at L1 (planned, M3c; nothing detects it yet). Real verdicts need the engine pinned to a git SHA.
 
 ### Threat model
 
@@ -1093,7 +1153,7 @@ When deliberate cheating has to be stopped, the options are, in order of cost: t
 
 ## Layers and templates
 
-> **Status:** partly implemented: templates and stage lists in M2, the optional stages of `factor` in M3a; layer policies planned from M3b (`feat` first), data plugins in M5, `algo` in M6, checkpoint commands later.
+> **Status:** partly implemented: templates and stage lists in M2, the optional stages of `factor` in M3a; layer policies planned from M3c (`feat` first), data plugins in M5, `algo` in M6, checkpoint commands later.
 
 Each layer runs the same inner loop. What changes is the question, the output shape, the labels, the kind of null world, and what calibration checks.
 
@@ -1106,32 +1166,22 @@ Each layer runs the same inner loop. What changes is the question, the output sh
 | Worlds | mutants | null worlds | null worlds | random-timing nulls, stress worlds |
 | Calibration | mutants must be caught | stand-ins killed, planted kept | stand-ins killed, planted kept | random stand-in rejected, unprotected stand-in breaches limits, simulator known answers |
 
-### The data layer
+### Data
 
-The data layer judges whether these fields can support this contract, not whether the data is "good". The same field can serve a weekly strategy and be useless for an intraday one. Its output is a FieldTable, plus the list of fields usable for verdicts, fields that are explore-grade only, masks (for example holiday weeks), splits at breaks, and a hash of the snapshot that `feat` must use.
+The data layer judges whether these fields can support this contract, not whether the data is "good". The same field can serve a weekly strategy and be useless for an intraday one. [The data layer](#the-data-layer) describes what runs today: the source is admitted once by replay and reconciliation, and each idea's check derives its tests from the contract and the plugins, so the agent writes none unless the case has a risk the engine cannot derive. Its output is the treated FieldTable that `feat` must use, the candidates it excluded, and the grade of every field.
 
-Checks come in three tiers:
+An idea's own tests declare the (category, field) pairs they cover and what happens `on_fail`: mask the flagged rows, drop their entities, or ask a person. The built-in pits they are calibrated against, all transformations of the one table format:
 
-| Tier | Written by | Checks |
-| --- | --- | --- |
-| Generic floor | the engine | monotone timestamps without duplicates, time zones, gaps, `available_at >= event_time`, jumps and level breaks, units and magnitudes |
-| Floor set by the contract | the engine, parameters from the contract | `available_at` before the decision time, coverage long enough for the required sample, freshness at the decision time, a universe that includes delisted and expired instruments, labels built on tradable prices |
-| Source knowledge | the data plugin | publication schedules, vintage archives, methodology changes, reaction tests around releases |
-
-The agent explores and then writes data tests. Each declares what it `covers` and what happens `on_fail`: split and recompute power, mask the affected weeks, use the actual `available_at`, drop the field, or raise a decision for a person. The generic mutation operators, all transformations of the one table format:
-
-| Operator | Simulates |
+| Pit | Simulates |
 | --- | --- |
-| move `available_at` earlier | a wrong publication time |
-| replace values with future values | a leak |
-| multiply by (1 + k) after a date | a methodology break |
-| delete or merge a stretch | a gap, a merged release |
-| duplicate timestamps | duplicates |
-| replace first vintages with revised ones | revised-only history |
-| shift everything by some hours | a time zone error |
-| insert spikes | outliers |
-| multiply by 10 or 1000 | a unit error |
-| remove delisted or expired entities | survivorship bias |
+| `unit` | a unit error (×1000) |
+| `level_break` | a methodology break (×1.5 from a date on) |
+| `gap` | a missing stretch of ten usual spacings |
+| `duplicate` | an event recorded twice, a millisecond apart |
+| `shift` | a time stamped one spacing late |
+| `leak` | each value replaced by the next one |
+| `spike` | an outlier (×10) |
+| `swap` | a ticker reused for a different asset, at the same level |
 
 Execution strategies also need a latency table from the data layer: cancel latency, order-to-acknowledgement time, and hedge latency (p50, p95, p99) measured from our own order telemetry, the clock skew between us and each venue, and market data timed by local receive time rather than venue timestamps. Their tests check that the latency sample is large enough, stable across sessions, and that the skew was measured.
 
@@ -1344,7 +1394,7 @@ A plugin or tool moves from a lab into the engine only when all of these hold: a
 
 ### Freeze the judging machinery, record the research environment
 
-- **Decision**: freeze the contract, the engine source, the interpreter, the engine's own dependencies, and upstream freezes; record plugin code, baseline files, and the data snapshot at derive and check them at contract approval (M3a); from M3b also freeze evaluators and null worlds, with plugins and the data snapshot in layer freezes. Record all installed packages and `uv.lock` with each submission.
+- **Decision**: freeze the contract, the engine source, the interpreter, the engine's own dependencies, and upstream freezes; record plugin code, baseline files, and the data snapshot at derive and check them at contract approval (M3a); from M3c also freeze evaluators and null worlds, with plugins and the data snapshot in layer freezes. Record all installed packages and `uv.lock` with each submission.
 - **Alternatives**: freeze `uv.lock` too, as the first design did; freeze nothing about the environment.
 - **Why**: changing research code after a FAIL is the normal loop, and adding a library changes `uv.lock`; freezing it would taint honest resubmissions. Freezing nothing would make verdicts irreproducible.
 
@@ -1380,7 +1430,7 @@ A plugin or tool moves from a lab into the engine only when all of these hold: a
 
 ### Per-layer CLI deferred until the judge exists
 
-- **Decision**: `register`, `challenge`, `check`, and `submit` are implemented and tested in the workflow, but their CLI commands arrive with M3b. `rci next` already names them.
+- **Decision**: `register`, `challenge`, `check`, and `submit` are implemented and tested in the workflow, but their CLI commands arrive with M3c. `rci next` already names them.
 - **Alternatives**: expose them now.
 - **Why**: without a judge, the workflow's `submit` takes the verdict as an argument. A CLI command like that would let an agent declare its own verdict, which is exactly what the engine exists to prevent.
 
@@ -1523,7 +1573,7 @@ A reinforcement learning view makes the same point. The engine is an environment
 
 ## Roadmap and open decisions
 
-> **Status:** M0 to M3a done; M3b is next.
+> **Status:** M0 to M3a done; M3c is next.
 
 ### Roadmap
 
@@ -1533,7 +1583,7 @@ A reinforcement learning view makes the same point. The engine is an environment
 | M1 | `kernel/tables`, `kernel/time` (FieldTable, `asof`, `step`, `check_leaks`) | Every planted lookahead is caught; plain rolling features report zero mismatches | Done |
 | M2 | `kernel/hashing`, `kernel/holdout` (tiers, and label builders that M3a moved into reference plugins), `store` (workspace, ledger with head anchors, freeze, environment), `workflow` (machine, templates, lineage, next, commands), `api/contract`, CLI `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, `approve` (with `--extend`) | The state machine rejects out-of-order calls; a one-byte edit breaks ledger verification | Done |
 | M3a | The contract: `api/contract` (every field), `api/plugins` (protocols), `api/study` and `api/nulls` (declarations), `runner/plugins` (entry-point loading, code hashes), `store/vault`, `kernel/judge/protocol` and `kernel/judge/power`, `stages/contract` (derive), `render/card` (ContractCard), `reference_plugins`, approval provenance (`--relayed`, `--auto`) | Each deliberately broken toy plugin is caught by the protocol test that claims to catch it; approval refuses failed tests and anything changed since derive | Done |
-| M3b | `kernel/judge` (null worlds, z thresholds, evidence levels and caps, calibrate), the `feat` policy, and the per-layer CLI commands (`rci <layer> explore/register/challenge/check/submit`) | The `feat` layer runs end to end on the first real case | Planned |
+| M3c | `kernel/judge` (null worlds, z thresholds, evidence levels and caps, calibrate), the `feat` policy, and the per-layer CLI commands (`rci <layer> explore/register/challenge/check/submit`) | The `feat` layer runs end to end on the first real case | Planned |
 | M4 | `runner`: research code in a child process, data exchanged as Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | The plugins pass conformance | Planned |
 | M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria; a maker-taker case end to end | The cross-venue maker-taker case runs end to end | Planned |
@@ -1541,8 +1591,8 @@ A reinforcement learning view makes the same point. The engine is an environment
 
 ### Open decisions
 
-- **The first real case for M3b.** Candidates: a cross-sectional residual factor whose data is already local; a futures spread time series; and the cross-venue maker-taker case, which is event-driven and depends on its own actions.
-- **Final definitions of L0 to L4**, after M3b has run a real case. With them: the list of floor criteria each stage enforces, the null worlds that answer the floor alternatives (`chance`, `timing`, `fewer`), the standard contents of the evaluator context, the value of `z_base`, and the caps for relayed and automatic approval.
+- **The first real case for M3c.** Candidates: a cross-sectional residual factor whose data is already local; a futures spread time series; and the cross-venue maker-taker case, which is event-driven and depends on its own actions.
+- **Final definitions of L0 to L4**, after M3c has run a real case. With them: the list of floor criteria each stage enforces, the null worlds that answer the floor alternatives (`chance`, `timing`, `fewer`), the standard contents of the evaluator context, the value of `z_base`, and the caps for relayed and automatic approval.
 - **How event-driven decision times are declared.** `Execution` and a consumer's `Timing` describe a fixed grid. Decisions at an event minus a latency, or at a signal's publish time, need a declaration of their own.
 - **How the maker-taker hedge legs are closed.** The strategy is opportunity-driven: it quotes on venue A and, after any fill, hedges on venue B at once, so it never carries one-sided inventory. Each cycle leaves a leg on each venue. Option A closes them with a reverse cycle when the opposite spread appears; option B holds them and closes periodically, which adds funding, margin, and liquidation-distance criteria to `algo`; option C closes each cycle separately.
 - **Graveyard cases**: which past failed research cases to replay, with what they died of and when.
