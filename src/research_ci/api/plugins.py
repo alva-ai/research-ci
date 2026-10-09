@@ -28,6 +28,9 @@ class DataPlugin(Protocol):
     only from what was known by then, including any repair the plugin applies. ``entities`` limits the fetch to those
     entities. Before a plugin's data is used, the engine replays it at cut points of its own choosing and compares
     each replay with the full fetch; a plugin that cannot fetch as of a time cannot be admitted.
+
+    A class attribute ``levels`` (``research_ci.api.Levels``) names the fields whose values are levels and how large and
+    lasting a jump in them must be to count; without it, nothing is checked for level shifts.
     """
 
     def fetch(
@@ -74,9 +77,10 @@ class UniversePlugin(Protocol):
     and score columns. ``t`` is the decision time; ``long`` and ``short`` name the FieldTable entities of the legs
     (empty for single-entity candidates).
 
-    A plugin whose legs are always one asset on two venues says so with a class attribute ``hedge_price``, the field
-    that prices both legs; the engine then checks, at every decision time, that the legs trade at the same level and
-    move together, and drops the candidates where they do not."""
+    A plugin whose legs are always one asset on two venues says so with a class attribute ``hedge``
+    (``research_ci.api.Hedge``): the field that prices both legs and how closely they must track. The engine then
+    checks, at every decision time, that the legs trade at about the same level and move together, and drops the
+    candidates where they do not."""
 
     def candidates(self, fields: pl.DataFrame, times: Sequence[pd.Timestamp]) -> pl.DataFrame: ...
 

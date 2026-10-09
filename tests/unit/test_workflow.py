@@ -296,3 +296,18 @@ def test_an_idea_keeps_its_anchor_when_the_directory_moves(tmp_path: Path, isola
     moved = idea.root.rename(tmp_path / "renamed")
     assert Idea(moved).status().stage("contract").state is S.PASSED
     assert len(list((isolated_rci_home / "heads").glob("*.json"))) == 1
+
+
+def test_insufficient_waits_for_a_person_and_still_counts(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, budget=3)
+    _pass_data(idea)
+    _freeze(idea, "feat")
+    assert idea.submit("feat", S.INSUFFICIENT) is S.INSUFFICIENT
+    assert _who(idea) == [("human", "feat", "decide")]
+    assert "cannot decide yet" in idea.next_actions()[0].reason
+    assert idea.status().stage("feat").trials == 1
+    assert idea.submit("feat", S.INSUFFICIENT) is S.INSUFFICIENT
+    assert idea.submit("feat", S.INSUFFICIENT) is S.PAUSED
+    assert idea.extend("feat", 1) is S.INSUFFICIENT
+    idea.register("feat")
+    assert idea.status().stage("feat").version == 2

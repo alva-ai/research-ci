@@ -48,6 +48,44 @@ class Pit:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class Levels:
+    """Fields whose values are levels, such as prices, as a data plugin declares them in a class attribute
+    ``levels``. A move of ``factor`` or more that lasts over the next ``window`` events is a level shift: admission asks
+    the independent source about it, and the data check masks the ones it did not confirm for ``mask`` on each side.
+    A source that declares no levels is not checked for level shifts."""
+
+    fields: tuple[str, ...]
+    factor: float
+    window: int
+    mask: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fields", tuple(self.fields))
+        if not self.fields or self.factor <= 1 or self.window < 1:
+            raise ValueError("levels need fields, a factor above 1 and a window of at least one event")
+
+
+@dataclass(frozen=True)
+class Hedge:
+    """Legs that are one asset on two venues, as a universe plugin declares them in a class attribute ``hedge``. At
+    every decision time ``price`` must put the legs within ``max_ratio`` of each other and, when both legs' returns vary
+    by at least ``min_move``, their returns over the pair's last ``window`` decisions (at least ``min_obs``) must
+    correlate by ``min_corr`` or more; the data check drops the candidate rows where they do not. A universe that
+    declares no hedge is not checked."""
+
+    price: str
+    max_ratio: float
+    min_corr: float
+    window: int
+    min_obs: int
+    min_move: float
+
+    def __post_init__(self) -> None:
+        if self.max_ratio <= 1 or not 0 < self.min_obs <= self.window or self.min_move < 0:
+            raise ValueError("a hedge needs a ratio above 1, 0 < min_obs <= window and min_move >= 0")
+
+
 def tests_of(module: Any) -> list[DataTest]:
     return _listed(module, "TESTS", DataTest)
 

@@ -1,72 +1,64 @@
-"""What a layer file declares. The engine imports ``ideas/<idea>/<layer>.py`` and reads these names:
+"""What the feat layer reads from an idea.
 
-- ``features(panel, candidates)``: the output at one decision time, from the panel known at that time, one row per
-  candidate. ``candidates`` is the universe table at that time (``None`` when the contract names no universe, and
-  the output is then one row per entity). Labels never reach it. Code that learns from labels defines ``fit(X, y)``
-  and ``predict(X)`` instead, and the engine runs walk-forward.
-- ``LOOKBACK``: how far back ``features`` reads, for example ``"168h"``, or ``None`` for all history.
-- ``PANEL_FORMAT``: ``"pandas"`` (default) or ``"polars"``.
-- ``CRITERIA``: the pre-registered criteria the claim must pass.
+``ideas/<idea>/feat.py`` declares how the layer is judged, frozen when a person approves it:
+
+- ``CRITERIA``: the pre-registered criteria, each a function of the evaluation table.
+
+Each submission names its own file of features, which may change from one submission to the next:
+
+- ``features(fields, candidates)``: one score per candidate row, ``t``, ``entity``, ``score``, for every decision
+  time at once. ``fields`` is the frozen data and ``candidates`` the universe table; labels never reach it. The engine
+  computes it again on the data cut at a few decision times, and the rows at or before each cut must not change.
+
+The evaluation table has fixed columns for one horizon: ``t``, ``entity``, ``score``, ``y`` (the label at that
+horizon) and its components (``y_flow``, ``y_price``, ...), the universe's cluster column, its group columns, and any
+other universe column.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any
 
-import pandas as pd
+import polars as pl
 
-
-class Context(Protocol):
-    """Helpers the engine hands to each evaluator. Everything is restricted to the current tier and world."""
-
-    horizon: str
-
-    def label(self, name: str) -> pd.Series: ...
-    def baseline(self) -> pd.Series: ...
-    def rank_ic(self, x: pd.Series, y: pd.Series) -> float: ...
-    def residualize(self, x: pd.Series, on: pd.Series) -> pd.Series: ...
-    def consume(self, scores: pd.Series) -> "Result": ...
-
-
-class Result(Protocol):
-    net: pd.Series
-    fees: pd.Series
-
-
-Evaluator = Callable[[pd.DataFrame, Context], float]
+Evaluator = Callable[[pl.DataFrame], pl.DataFrame]
+TABLE_KEYS = ("t", "entity", "score", "y")
 
 
 @dataclass(frozen=True)
 class Criterion:
     """One pre-registered way of testing the claim.
 
-    ``evaluate(outputs, ctx)`` returns one number from the layer's outputs; it may be any metric, and any search
-    inside it is repeated in every null world. A ``stat`` criterion is compared with its null worlds as a z score; a
-    ``limit`` criterion is compared with ``limit`` directly. ``horizons`` picks label horizons from the contract
-    (``None`` means all); with ``combine="max"`` the whole family counts once and each null world keeps its own
-    maximum (GridMax), after each horizon is standardized. ``required=False`` records a reference criterion that
-    appears on the card but does not decide the verdict.
+    ``evaluate(table)`` returns one value per decision time (``t``, ``value``) from the evaluation table at one
+    horizon; any metric works, and any search inside it is repeated in every null world. The engine averages the
+    values by blocks of the horizon and compares the real average with the same average in each null world, as a z
+    score. ``horizons`` picks label horizons from the contract (``None`` means all); with ``combine="max"`` the whole
+    family counts once and each null world keeps its own maximum, after each horizon is standardized. ``label`` names
+    the contract's label (its first by default). ``required=False`` records a reference criterion that appears on the
+    card but does not decide the verdict.
     """
 
     name: str
     evaluate: Evaluator
-    kind: Literal["stat", "limit"] = "stat"
+    label: str | None = None
     horizons: tuple[str, ...] | None = None
-    combine: Literal["max", "each"] = "max"
-    limit: float | None = None
-    direction: Literal["greater", "less"] = "greater"
+    combine: str = "max"
     required: bool = True
     note: str = ""
 
     def __post_init__(self) -> None:
-        if (self.kind == "limit") != (self.limit is not None):
-            raise ValueError("a limit criterion needs a limit, and only a limit criterion has one")
+        if not self.name.strip():
+            raise ValueError("name the criterion")
+        if self.combine not in ("max", "each"):
+            raise ValueError("combine is max or each")
+        if self.horizons is not None:
+            object.__setattr__(self, "horizons", tuple(self.horizons))
 
 
 def criteria_of(module: Any) -> list[Criterion]:
     found = getattr(module, "CRITERIA", None)
     if not isinstance(found, list) or not all(isinstance(c, Criterion) for c in found) or not found:
-        raise ValueError("a layer file must define CRITERIA = [Criterion(...), ...]")
+        raise ValueError("feat.py must define CRITERIA = [Criterion(...), ...]")
     names = [c.name for c in found]
     if len(names) != len(set(names)):
         raise ValueError(f"criterion names must be unique: {names}")

@@ -14,6 +14,7 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import Use, span
+from research_ci.api.data import Levels
 from research_ci.api.plugins import REQUEST_COLUMNS, Reference
 from research_ci.kernel.checks import reconcile as rc
 from research_ci.kernel.checks.baseline import baseline, events
@@ -44,6 +45,16 @@ def can_replay(plugin: Any) -> bool:
     return "as_of" in params and "entities" in params
 
 
+def declared_levels(plugin: Any) -> tuple[tuple[str, ...], float, int]:
+    """The plugin's ``levels`` as the baseline takes them: fields, factor and window; none when it declares none."""
+    levels = getattr(plugin, "levels", None)
+    if levels is None:
+        return (), 0.0, 0
+    if not isinstance(levels, Levels):
+        raise TypeError("a data plugin's levels must be an research_ci.api.Levels")
+    return levels.fields, levels.factor, levels.window
+
+
 def admit(use: Use, plugin: Any, fields: pl.DataFrame, settings: SourceSettings | None = None) -> dict[str, Any]:
     s = settings or SourceSettings()
     started = time.monotonic()
@@ -58,7 +69,7 @@ def admit(use: Use, plugin: Any, fields: pl.DataFrame, settings: SourceSettings 
         "fields": names,
         "settings": asdict(s),
     }
-    checks, anomalies = baseline(fields)
+    checks, anomalies = baseline(fields, *declared_levels(plugin))
     spec["anomalies"] = {k: n for k, n in anomalies.group_by("kind").len().iter_rows()}
     if can_replay(plugin):
 

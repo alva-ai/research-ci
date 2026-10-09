@@ -1,9 +1,10 @@
 """Null worlds, declared rather than run. Each keeps one alternative explanation and destroys the claimed information.
 
-The challenger writes them into ``nulls/<layer>.py`` as ``NULLS = [Null(...), ...]``; the kernel runs them.
+The challenger writes them into ``nulls/<layer>.py`` as ``NULLS = [Null(...), ...]``; the engine runs them.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -15,7 +16,8 @@ class BlockPermute:
 
 @dataclass(frozen=True)
 class PermuteWithin:
-    """Shuffle labels across entities inside each bucket of ``bucket_by`` (``"time"`` for each decision time).
+    """Shuffle scores across entities inside each bucket of ``bucket_by`` at each decision time (``"time"``: one
+    bucket per decision time); the labels stay.
 
     ``clusters`` names a column whose members move together, so dependence inside a cluster survives. ``block``
     repeats the same shuffle for every decision time inside a block, which keeps overlapping label windows honest;
@@ -62,16 +64,35 @@ World = BlockPermute | PermuteWithin | ShiftTime | ReplaceField | RandomEvents |
 
 @dataclass(frozen=True)
 class Null:
-    """One alternative explanation ("it is only X") and the world that keeps X. ``criteria`` limits it to some
-    criteria by name; empty means every stat criterion of the layer."""
+    """One alternative explanation ("it is only X") and the world that keeps X.
+
+    ``explains`` is the id of an alternative in the contract. ``keeps`` names the column X lives in (``"time"``: only
+    when a decision happens); a ``PermuteWithin`` world keeps its own bucket unless told otherwise. The engine checks
+    the claim: an output that carries only X must not beat this world. ``criteria`` limits it to some criteria by
+    name; empty means every criterion of the layer.
+    """
 
     explains: str
     world: World
+    keeps: str | None = None
     criteria: tuple[str, ...] = ()
     reps: int = 200
+    note: str = ""
 
     def __post_init__(self) -> None:
         if not self.explains.strip():
             raise ValueError("say which alternative explanation this null world keeps")
         if self.reps < 20:
             raise ValueError("a null world needs at least 20 repetitions")
+        object.__setattr__(self, "criteria", tuple(self.criteria))
+        if self.keeps is None and isinstance(self.world, PermuteWithin):
+            object.__setattr__(self, "keeps", self.world.bucket_by)
+
+
+def nulls_of(module: Any) -> list[Null]:
+    found = getattr(module, "NULLS", None)
+    if found is None:
+        return []
+    if not isinstance(found, list) or not all(isinstance(n, Null) for n in found):
+        raise ValueError("nulls/<layer>.py must define NULLS = [Null(...), ...]")
+    return found

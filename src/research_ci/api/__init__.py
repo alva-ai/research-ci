@@ -14,7 +14,7 @@ from research_ci.api.contract import (
     Usage,
     Use,
 )
-from research_ci.api.data import BUILTIN_PITS, DataTest, OnFail, Pit
+from research_ci.api.data import BUILTIN_PITS, DataTest, Hedge, Levels, OnFail, Pit
 from research_ci.api.nulls import (
     BlockPermute,
     Null,
@@ -23,6 +23,7 @@ from research_ci.api.nulls import (
     RandomizeTiming,
     ReplaceField,
     ShiftTime,
+    nulls_of,
 )
 from research_ci.api.plugins import (
     ENTRY_POINTS,
@@ -42,13 +43,14 @@ from research_ci.api.plugins import (
     Timing,
     UniversePlugin,
 )
-from research_ci.api.study import Context, Criterion, criteria_of
+from research_ci.api.study import TABLE_KEYS, Criterion, criteria_of
 
 __all__ = [
     "BUILTIN_PITS",
     "ENTRY_POINTS",
     "FIELD_COLUMNS",
     "REQUEST_COLUMNS",
+    "TABLE_KEYS",
     "UNIVERSE_COLUMNS",
     "Alternative",
     "Baseline",
@@ -56,7 +58,6 @@ __all__ = [
     "Branch",
     "ConsumerPlugin",
     "ConsumerResult",
-    "Context",
     "Contract",
     "ContractError",
     "CostModel",
@@ -67,9 +68,11 @@ __all__ = [
     "Execution",
     "Forward",
     "FullPath",
+    "Hedge",
     "Label",
     "LabelCase",
     "LabelPlugin",
+    "Levels",
     "NativeWriter",
     "Null",
     "OnFail",
@@ -89,4 +92,5 @@ __all__ = [
     "Usage",
     "Use",
     "criteria_of",
+    "nulls_of",
 ]

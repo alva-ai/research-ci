@@ -16,6 +16,7 @@ class State(StrEnum):
     PASSED = "PASSED"
     FAILED = "FAILED"
     TAINTED = "TAINTED"
+    INSUFFICIENT = "INSUFFICIENT"
     PAUSED = "PAUSED"
     STALE = "STALE"
     SKIPPED = "SKIPPED"
@@ -36,7 +37,7 @@ class WorkflowError(Exception):
 
 S = State
 C = Command
-VERDICTS = frozenset({S.PASSED, S.FAILED, S.TAINTED})
+VERDICTS = frozenset({S.PASSED, S.FAILED, S.TAINTED, S.INSUFFICIENT})
 DONE = frozenset({S.PASSED, S.SKIPPED})
 BEFORE_FREEZE = frozenset({S.OPEN, S.REGISTERED, S.CHALLENGED, S.CHECKED})
 
@@ -46,11 +47,11 @@ ALLOWED: dict[Kind, dict[Command, frozenset[State]]] = {
         C.APPROVE: frozenset({S.REGISTERED}),
     },
     Kind.LAYER: {
-        C.REGISTER: BEFORE_FREEZE | {S.FROZEN, S.PASSED, S.FAILED, S.TAINTED, S.STALE},
+        C.REGISTER: BEFORE_FREEZE | {S.FROZEN, S.PASSED, S.FAILED, S.TAINTED, S.INSUFFICIENT, S.STALE},
         C.CHALLENGE: frozenset({S.REGISTERED, S.CHALLENGED, S.CHECKED}),
         C.CHECK: frozenset({S.CHALLENGED, S.CHECKED}),
         C.APPROVE: frozenset({S.CHECKED}),
-        C.SUBMIT: frozenset({S.FROZEN, S.FAILED, S.TAINTED}),
+        C.SUBMIT: frozenset({S.FROZEN, S.FAILED, S.TAINTED, S.INSUFFICIENT}),
         C.EXTEND: frozenset({S.PAUSED}),
     },
     Kind.CHECKPOINT: {
@@ -78,7 +79,7 @@ def transition(kind: Kind, state: State, command: Command, result: State | None 
         return S.PASSED if kind is Kind.CONTRACT else S.FROZEN
     if command is C.SUBMIT:
         return _outcome(command, result, VERDICTS)
-    return _outcome(command, result, {S.FAILED, S.TAINTED})
+    return _outcome(command, result, {S.FAILED, S.TAINTED, S.INSUFFICIENT})
 
 
 def starts_new_version(state: State, command: Command) -> bool:

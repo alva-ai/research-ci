@@ -86,6 +86,16 @@ def test_cluster_mean_weights_clusters_equally_after_costs() -> None:
     assert out["value"].to_list() == [pytest.approx((0.02 + 0.05) / 2 - 0.004)]
 
 
+def test_cluster_mean_with_top_counts_only_the_highest_scores() -> None:
+    labels = pl.DataFrame(
+        {"t": [T0] * 4, "entity": list("abcd"), "symbol": list("abcd"), "value": [0.4, 0.3, 0.2, 0.1]}
+    ).with_columns(pl.col("t").cast(TIME))
+    top = ClusterMean(cluster="symbol", net=False, top=0.5)
+    scored = labels.with_columns(score=pl.Series([1.0, 2.0, 3.0, 4.0]))
+    assert top.reduce(scored, H, FlatCosts(0, 0))["value"].to_list() == [pytest.approx(0.15)]
+    assert top.reduce(labels, H, FlatCosts(0, 0))["value"].to_list() == [pytest.approx(0.25)]
+
+
 def test_flat_costs_charge_every_leg_of_every_weight_change() -> None:
     trades = pl.DataFrame({"t": [T0, T0], "entity": ["p", "q"], "from_weight": [0.0, 0.5], "to_weight": [0.25, 0.0]})
     assert FlatCosts(5, 5, legs=2).fees(trades) == pytest.approx((0.25 + 0.5) * 2 * 0.001)

@@ -110,6 +110,9 @@ def _layer(s: StageStatus) -> Action:
         return Action("human", name, "extend", f"rci approve --stage {name} --extend N", reason)
     if state is State.FROZEN:
         return Action("agent", name, "submit", f"rci {name} submit", f"submit the research code ({left})")
+    if state is State.INSUFFICIENT:
+        reason = f"the data cannot decide yet: wait for new data, submit other research code ({left}), or drop it"
+        return Action("human", name, "decide", f"rci {name} show", reason)
     reason = f"{state}: {s.note}; " if s.note else f"{state}; "
     return Action("agent", name, "submit", f"rci {name} submit", f"{reason}change the research code ({left})")
 

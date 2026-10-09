@@ -2,17 +2,18 @@
 
 A backtest framework for research: an alpha claim counts only after it passes CI, the same way code does.
 
-> **Status:** early. The time kernel (M1), the holdout, ledger, and workflow layer (M2), the contract stage (M3a: plugin protocols, protocol tests, power, the ContractCard, approval provenance), and the data layer (M3b: source admission by replay and reconciliation, checks the contract and plugins declare, treatments weighed by their influence, the DataCard) are implemented. Feat judging and the other per-layer commands arrive in M3c. See [Roadmap](#roadmap).
+> **Status:** early. The time kernel (M1), the holdout, ledger, and workflow layer (M2), the contract stage (M3a: plugin protocols, protocol tests, power, the ContractCard, approval provenance), the data layer (M3b: source admission by replay and reconciliation, checks the contract and plugins declare, treatments weighed by their influence, the DataCard), and the feat layer (M3c: criteria judged against null worlds for every alternative, calibration, a lookahead check on cut data, the decisive effect, the MethodCard and ResultCard) are implemented. The signal and algo layers come next. See [Roadmap](#roadmap).
 
 | Area | Works today | Planned |
 | --- | --- | --- |
 | Time | FieldTable, `asof`, stepping, lookahead checks, decision grids | Decision times from events and latencies, walk-forward helpers |
-| Holdout | Explore, seal, and forward tiers | Labels delivered through evaluators, vintage-aware labels |
+| Holdout | Explore, seal, and forward tiers; labels reach criteria only through the evaluation table | Labels through `fit` on training folds, vintage-aware labels |
 | Contract | Every field validated; `derive` loads plugins, snapshots the data, runs protocol tests, computes power, pilots the consumer, and prints the ContractCard | Oracle bounds for maker strategies |
 | Data | Source admission (replay as of past times, an independent source on engine-picked rows, canaries, field grades); checks the contract and plugins declare; treatments applied by default and weighed by their influence in MDE units; the DataCard | Influence on consumer effects, seal-tier checks, listings from the source to catch hindsight universes |
 | Workflow | State machine, budgets, lineage, `next_actions`, templates, approval provenance | Caps by approval provenance, hooks after verdicts |
-| Trust | Hash-chained ledger, head anchors, freeze records, data vault; plugin code, baseline files, and the data snapshot checked again at approval | Plugin and data hashes in layer freezes |
-| Judge | Protocol tests, power, minimum detectable effects | Null worlds, calibration, z thresholds, evidence levels (M3c) |
+| Trust | Hash-chained ledger, head anchors, freeze records, data vault; plugin code, baseline files, and the data snapshot checked again at approval; the feat freeze pins its criteria, null worlds, and plugin code | Plugin hashes in the other layer freezes |
+| Feat | Criteria on an evaluation table; the idea's null worlds and the engine's floor, one per alternative explanation; calibration by stand-ins and planted signals; a lookahead check on cut data; the decisive effect on a label or through the consumer; INSUFFICIENT when the data cannot decide; MethodCard and ResultCard | Learning from labels with walk-forward, other null generators, dedup by correlation |
+| Judge | Protocol tests, power, minimum detectable effects; `PermuteWithin` shuffles, GridMax over horizons, z thresholds that rise with the trial count | Evidence levels and caps, stress worlds and limit criteria (M6) |
 | Runner | Plugin loading by entry point, plugin code hashes | Research code in a child process with Arrow exchange (M4) |
 | Plugins | Protocols for data, universes, labels, targets, cost models, consumers; reference labels, target, and cost model | First real data plugin and consumer (M5), fill models (M6), challenger |
 
@@ -223,7 +224,7 @@ $ rci next -i ideas/carry --json
 ]
 ```
 
-Approval is refused if `contract.py`, a plugin's code, a baseline file, or the data snapshot changed since the derive, or if any protocol test failed. Next, `rci data check` admits the data source if this plugin, with these options and this code, was never admitted (a person approves that once, with `rci source approve`), checks the data against the contract, and prints the DataCard; `rci approve --stage data` freezes it and `rci data submit` records it as what feat reads. The other per-layer commands arrive with the judge in M3c. Engine state lives in `ideas/<idea>/.rci/` (commit it with the idea) and in `$RCI_HOME` (default `~/.rci`), which keeps each ledger's latest head outside the idea and holds the data vault.
+Approval is refused if `contract.py`, a plugin's code, a baseline file, or the data snapshot changed since the derive, or if any protocol test failed. Next, `rci data check` admits the data source if this plugin, with these options and this code, was never admitted (a person approves that once, with `rci source approve`), checks the data against the contract, and prints the DataCard; `rci approve --stage data` freezes it and `rci data submit` records it as what feat reads. `rci feat register` fixes how features are judged (the criteria in `feat.py`, the challenger's null worlds in `nulls/feat.py`, and their calibration) and prints the MethodCard; after `rci approve --stage feat`, each `rci feat submit <file>` judges one features file and prints a ResultCard. Engine state lives in `ideas/<idea>/.rci/` (commit it with the idea) and in `$RCI_HOME` (default `~/.rci`), which keeps each ledger's latest head outside the idea and holds the data vault.
 
 ## CLI
 
@@ -240,15 +241,15 @@ Approval is refused if `contract.py`, a plugin's code, a baseline file, or the d
 | `rci source approve` | **human**, interactive, or `--relayed "<words>" --card <id>` / `--auto` | the source passed admission; once per plugin, options, and code | yes |
 | `rci data submit` | agent | data frozen | yes |
 | `rci data show`, `rci source show` | anyone | none | yes |
-| `rci <layer> explore` | agent, unlimited | upstream passed | M3c |
-| `rci <layer> register` | agent | upstream passed | M3c |
-| `rci <layer> challenge` | challenger | evaluators registered | M3c (challenger in M5) |
-| `rci <layer> check` | agent | null worlds present | M3c |
-| `rci <layer> submit` | agent, 1 trial each | frozen, budget left; TAINTED if anything frozen changed | M3c |
+| `rci feat register` | agent | data passed; registers, challenges, and checks the method; prints the MethodCard | yes |
+| `rci feat explore <file>` | agent, unlimited | data passed; runs only the checks a submission must pass | yes |
+| `rci feat submit <file>` | agent, 1 trial each | method frozen and unchanged, budget left, scores not repeated; prints the ResultCard | yes |
+| `rci feat show` | anyone | method registered | yes |
+| `rci <layer> explore/register/challenge/check/submit` for signal and algo | agent, challenger | upstream passed | later (challenger in M5) |
 | `rci seal run`, `rci capital run` | human | plan declared and frozen in advance | later |
 | `rci forward --all`, `rci monitor --all` | scheduler | none | later |
 
-`<layer>` is one of feat, signal, algo; the data layer has its own commands above. `status`, `next`, and `inbox` take `--json` for agents. Commands on one idea take `-i <idea>` and default to the current directory; `init` takes the new idea's directory and `inbox` a root directory.
+`<layer>` is signal or algo; data and feat have their own commands above. `status`, `next`, and `inbox` take `--json` for agents. Commands on one idea take `-i <idea>` and default to the current directory; `init` takes the new idea's directory and `inbox` a root directory.
 
 ## Templates
 
@@ -291,13 +292,13 @@ A layer may import only the layers below it; `store` and `render` do not import 
 
 | Package | Role | Status |
 | --- | --- | --- |
-| `api` | Building blocks for research code and plugins: `Contract` and its parts, plugin protocols, `Criterion` and null-world declarations. | Contract and protocols done; criteria and nulls declared, run from M3c |
-| `kernel` | Mechanisms, pure functions, no I/O: `time` (asof, stepper), `holdout` (tiers), `hashing`, `checks`, `judge` (protocol tests and power today; nulls, mutate, calibrate, stats, verdict later). | `time`, `holdout`, `hashing`, `judge/protocol`, `judge/power` done |
-| `stages` | Policies, one file per stage: contract derivation today; floor checks, floor null worlds, calibration recipe, caps per layer later. | Contract done; layers M3c |
+| `api` | Building blocks for research code and plugins: `Contract` and its parts, plugin protocols, `Criterion` and null-world declarations. | Done |
+| `kernel` | Mechanisms, pure functions, no I/O: `time` (asof, stepper), `holdout` (tiers), `hashing`, `checks`, `judge` (protocol tests, power, shuffles, calibration, verdicts). | Done for contract, data, and feat |
+| `stages` | Policies, one file per stage: contract derivation, source admission, the data check, and the feat method and submissions today; signal and algo later. | Contract, data, feat done |
 | `workflow` | Lifecycle: inner state machine, outer dependency graph with STALE invalidation, templates, `next_actions`, approval provenance. | Done |
 | `runner` | Plugin loading by entry point and plugin code hashes; later process isolation for research code. | Loading done; child process M4 |
 | `store` | All I/O: workspace `.rci/`, ledger and head anchors, freeze records, environment records, the content-hashed data vault. | Done |
-| `render` | Deterministic cards from engine files: the ContractCard today; citation checks for summaries later. | ContractCard done |
+| `render` | Deterministic cards from engine files: Contract, Source, Data, Method, and Result cards; citation checks for summaries later. | Done for contract, data, and feat |
 | `llm` | Optional: challenger, card narration, summary audit. Never imported by the kernel or workflow. | Planned |
 | `cli` | The `rci` command. | Partly done |
 | `reference_plugins` | Labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`. | Done |
@@ -329,7 +330,7 @@ A stray `np.random.seed`, an in-place edit, or a monkeypatch in research code ca
 
 | Situation | Rule |
 | --- | --- |
-| Normal run in a lab | The engine is installed at a pinned git SHA and read-only. A freeze pins the contract, the engine source, the interpreter, the engine's own dependencies, and the upstream freezes. Derive also records the code hash of every plugin, the hash of every baseline file, and the hash of the data snapshot, and approving the contract checks them again; from M3c evaluators and null worlds join the layer freezes, with plugins and the data snapshot. Each submission also records every installed package and `uv.lock`. |
+| Normal run in a lab | The engine is installed at a pinned git SHA and read-only. A freeze pins the contract, the engine source, the interpreter, the engine's own dependencies, and the upstream freezes. Derive also records the code hash of every plugin, the hash of every baseline file, and the hash of the data snapshot, and approving the contract checks them again; the feat freeze also pins its criteria, its null worlds, and the code of every plugin it runs. Each submission also records every installed package and `uv.lock`. |
 | Anything frozen changes after approval | The submission is TAINTED. Research code and the libraries it uses may change between submissions. |
 | Approval relayed by an agent, or given by the agent | Recorded in the ledger with the channel and, for a relay, the person's words. The verdict machinery will cap what such stages can reach (planned). |
 | Run from this repo in editable mode | Marked DEV, capped at L1 (planned). |
@@ -350,7 +351,7 @@ See [docs/design.md](docs/design.md) for the reasoning behind each rule and what
 | M2 | `holdout` + ledger + workflow skeleton + `rci next` | Out-of-order calls are rejected; a one-byte edit breaks ledger verification | Done |
 | M3a | The contract: fields, plugin protocols and loading, data vault, decision grid, protocol tests, power, consumer pilot (`Branch`, `FullPath`), ContractCard, approval provenance, reference plugins | Every deliberately broken toy plugin is caught by its protocol test; approval refuses failed tests and anything changed since derive | Done |
 | M3b | The data layer: source admission (replay, reconciliation, canaries, grades), invariants declared by plugins, idea tests and their calibration, treatments and their influence, DataCard, `rci data` and `rci source` commands | Every deliberately broken toy source is caught; a real source whose repairs used hindsight is refused until fixed | Done |
-| M3c | `judge`: null worlds, z thresholds, evidence levels, calibration, caps; feat judging; per-layer commands | Feat layer end to end on the first real case | Planned |
+| M3c | The feat layer: criteria on an evaluation table, null worlds per alternative and the engine's floor, calibration, a lookahead check on cut data, decisive effects, INSUFFICIENT, MethodCard and ResultCard, `rci feat` commands | A spread passes, noise fails, a peek is tainted, and a null world that does not keep what it claims is returned, on the toy; the first real case runs end to end | Done |
 | M4 | `runner`: child process + Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | Plugins pass conformance | Planned |
 | M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria | A maker-taker case end to end | Planned |

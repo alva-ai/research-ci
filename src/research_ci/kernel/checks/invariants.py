@@ -1,6 +1,7 @@
-"""Invariants a plugin declares and the engine checks. A universe whose candidates are one asset on two venues says
-which field prices the legs; at every decision time the legs must then trade at about the same level and, when both
-move enough to tell, move together over the recent past, using only prices known by then."""
+"""Invariants a plugin declares and the engine checks. A universe whose candidates are one asset on two venues
+declares the hedge (``research_ci.api.Hedge``): the field that prices the legs and how close they must stay. At every
+decision time the legs must then trade at about the same level and, when both move enough to tell, move together over
+the recent past, using only prices known by then."""
 
 import polars as pl
 
@@ -12,12 +13,12 @@ def hedged_legs(
     cands: pl.DataFrame,
     fields: pl.DataFrame,
     price: str,
-    max_ratio: float = 1.2,
-    min_corr: float = 0.3,
-    window: int = 72,
-    min_obs: int = 48,
+    max_ratio: float,
+    min_corr: float,
+    window: int,
+    min_obs: int,
+    min_move: float,
     keep: tuple[str, ...] = (),
-    min_move: float = 1e-3,
 ) -> pl.DataFrame:
     """Per candidate row (``t``, ``entity``): the legs' price ratio and the correlation of their latest returns over
     the pair's last ``window`` decisions, and ``ok``. The correlation counts only when both legs' returns vary by at
@@ -51,9 +52,7 @@ def hedged_legs(
     return rows.select("t", "entity", "pair", *keep, "ratio", "corr", ok)
 
 
-def hedge_check(
-    legs: pl.DataFrame, price: str, max_ratio: float = 1.2, min_corr: float = 0.3, by: str = "pair"
-) -> Check:
+def hedge_check(legs: pl.DataFrame, price: str, max_ratio: float, min_corr: float, by: str = "pair") -> Check:
     bad = legs.filter(~pl.col("ok"))
     name = "hedged legs are one asset"
     rule = f"{price} within {max_ratio:g}x and returns correlated ≥ {min_corr:g}"

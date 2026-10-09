@@ -13,7 +13,7 @@ from research_ci import __version__
 from research_ci.api.contract import ContractError
 from research_ci.render.card import card_id
 from research_ci.store.ledger import LedgerError
-from research_ci.workflow.commands import CONTRACT_FILE, DATA_TEXT, Approval, Idea, find_ideas
+from research_ci.workflow.commands import CONTRACT_FILE, DATA_TEXT, FEAT_TEXT, Approval, Idea, find_ideas
 from research_ci.workflow.machine import WorkflowError
 from research_ci.workflow.templates import TEMPLATES
 
@@ -24,6 +24,8 @@ data_app = typer.Typer(no_args_is_help=True, help="Check the data against the co
 app.add_typer(data_app, name="data")
 source_app = typer.Typer(no_args_is_help=True, help="Admit a data source, once for every idea that uses it.")
 app.add_typer(source_app, name="source")
+feat_app = typer.Typer(no_args_is_help=True, help="Judge features with criteria and null worlds fixed in advance.")
+app.add_typer(feat_app, name="feat")
 
 ERRORS = (WorkflowError, ContractError, LedgerError)
 IdeaDir = Annotated[Path, typer.Option("--idea", "-i", help="Idea directory.")]
@@ -167,6 +169,58 @@ def data_submit(idea: IdeaDir = Path(".")) -> None:
     with _errors():
         state = Idea(idea).submit_data()
     typer.echo(f"data {state}")
+
+
+@feat_app.command("register")
+def feat_register(idea: IdeaDir = Path(".")) -> None:
+    """Load feat.py and nulls/feat.py, calibrate every criterion in every world, and print the method card."""
+    with _errors():
+        spec, card = Idea(idea).register_feat()
+    typer.echo(card)
+    typer.echo(f"card {card_id(card)}")
+    if spec["verdict"]["status"] == "blocked":
+        typer.echo("blocked; see the verdict above")
+    else:
+        typer.echo("checked; a person freezes it with `rci approve --stage feat`")
+
+
+@feat_app.command("show")
+def feat_show(idea: IdeaDir = Path(".")) -> None:
+    """Print the method card and the result card of every submission."""
+    with _errors():
+        target = Idea(idea)
+        path = target.workspace.path(FEAT_TEXT)
+        if not path.exists():
+            raise WorkflowError("the feat method has not been registered; run `rci feat register` first")
+        results = target.results()
+    text = path.read_text().rstrip()
+    typer.echo(text)
+    typer.echo(f"card {card_id(text)}")
+    for result in results:
+        typer.echo(result)
+
+
+@feat_app.command("explore")
+def feat_explore(
+    path: Annotated[Path, typer.Argument(help="A file defining features(fields, candidates).")],
+    idea: IdeaDir = Path("."),
+) -> None:
+    """Run the checks a submission must pass on a file of features; nothing is judged or recorded."""
+    with _errors():
+        _, card = Idea(idea).explore_feat(path)
+    typer.echo(card)
+
+
+@feat_app.command("submit")
+def feat_submit(
+    path: Annotated[Path, typer.Argument(help="A file defining features(fields, candidates).")],
+    idea: IdeaDir = Path("."),
+) -> None:
+    """Judge a file of features with the approved method; this uses one submission of the budget."""
+    with _errors():
+        _, card, state = Idea(idea).submit_feat(path)
+    typer.echo(card)
+    typer.echo(f"feat {state}")
 
 
 @source_app.command("show")

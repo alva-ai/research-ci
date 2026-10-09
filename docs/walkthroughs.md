@@ -1,6 +1,6 @@
 # Walkthroughs
 
-> **Status:** partly implemented: the stage lifecycle, the ledger, freeze records, and the commands `rci init`, `rci contract derive`, `rci approve`, `rci next`, `rci status`, `rci inbox`, and `rci verify` in M2; the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance) in M3a; judging, the per-layer commands, the lab plugins these cases need, and the checkpoints are planned for M3c and later.
+> **Status:** partly implemented: the stage lifecycle, the ledger, freeze records, and the commands `rci init`, `rci contract derive`, `rci approve`, `rci next`, `rci status`, `rci inbox`, and `rci verify` in M2; the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance) in M3a; the data layer in M3b; the feat layer and its judging in M3c; the other layers, the lab plugins these cases need, and the checkpoints are planned.
 
 This document follows three ideas from the first sentence of a claim to the last checkpoint. Each case stresses a different part of Research CI.
 
@@ -546,18 +546,23 @@ Besides the market fields (A trades with aggressor side, A best quotes, B's orde
 | F9 | human | reads the VerdictCard | may kill or ask; cannot turn a FAIL into a PASS | no |
 | F10 | agent | `rci feat submit` | PASS at L3; the feature is stored | yes |
 
-**F2 and F3, features and criteria.** The features are the recent move on B, B's book imbalance, and how stale A's quote is. The criteria are registered before any submission. `Criterion` is declared in `research_ci.api`; `net_edge_after_filter` is the agent's own helper, and `MECHANISM_FIELDS` and `EXPOSED` are a sketch:
+**F2 and F3, features and criteria.** The features are the recent move on B, B's book imbalance, and how stale A's quote is. The criteria are registered before any submission. Each is a function of the evaluation table (`t`, `entity`, `score`, the markout `y`, and the candidate columns) that returns one value per decision time; `net_edge_after_filter` is the agent's own helper, and `MECHANISM_FIELDS` and `EXPOSED` are a sketch:
 
 ```python
+import polars as pl
+
 from research_ci.api import Criterion
 
 
-def increment(outputs, ctx):
-    return ctx.rank_ic(ctx.residualize(outputs["score"], outputs["b_move_200ms"]), ctx.label("markout"))
+def increment(table):
+    """Rank IC of the score with the markout, within each fifth of B's own move."""
+    bucket = (pl.col("b_move_200ms").rank() / pl.len() * 5).ceil().over("t").alias("bucket")
+    per = table.with_columns(bucket).group_by("t", "bucket").agg(pl.corr("score", "y", method="spearman"))
+    return per.group_by("t").agg(pl.col("score").mean().alias("value"))
 
 
-def economic(outputs, ctx):
-    return net_edge_after_filter(outputs["score"], ctx.label("markout"), drop=0.2)
+def economic(table):
+    return net_edge_after_filter(table, drop=0.2)
 
 
 CRITERIA = [
@@ -568,7 +573,7 @@ MECHANISM_FIELDS = ["b_mid", "b_bid_size", "b_ask_size"]
 EXPOSED = {"latency_quantile": ["p50", "p95", "p99"]}
 ```
 
-The other criteria are predictive power, a horizon shape (the adverse move should grow up to the hedge latency and then flatten), and latency robustness, whose registered rule is that p95 must pass and p99 is for reference. An evaluator is any function that returns one number; the engine never reads its meaning, and any search inside it is repeated in every null world. The size of the incoming taker trade is not a feature: at the cancel decision the trade has not arrived, so using it is lookahead. It can still be a bucket on the evaluation side.
+The other criteria are predictive power, a horizon shape (the adverse move should grow up to the hedge latency and then flatten), and latency robustness, whose registered rule is that p95 must pass and p99 is for reference. An evaluator is any function of the table; the engine never reads its meaning, and any search inside it is repeated in every null world. The size of the incoming taker trade is not a feature: at the cancel decision the trade has not arrived, so using it is lookahead. It can still be a bucket on the evaluation side.
 
 **F4, null worlds**, written by the challenger into `nulls/`:
 
