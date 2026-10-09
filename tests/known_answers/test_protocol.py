@@ -13,11 +13,13 @@ from toy import (
     EarlyCredit,
     FlippedFlow,
     LaggedScores,
+    LateBooking,
     LazyLabel,
     NoFees,
     Noisy,
     Peeking,
     PeekingLabel,
+    SameInstantCredit,
     ToyCarry,
     ToyNeedsNextBar,
     ToyPairs,
@@ -110,7 +112,16 @@ def test_fees_must_match_the_cost_model(fields: pl.DataFrame, plugin, status) ->
     assert pr.fees_match(result, COSTS).status == status
 
 
-@pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (FlippedFlow(), "fail"), (EarlyCredit(), "fail")])
+@pytest.mark.parametrize(
+    ("plugin", "status"),
+    [
+        (ToyCarry(), "pass"),
+        (FlippedFlow(), "fail"),
+        (EarlyCredit(), "fail"),
+        (SameInstantCredit(), "fail"),
+        (LateBooking(), "fail"),
+    ],
+)
 def test_the_consumer_must_earn_what_the_labels_say_its_positions_earned(fields, plugin, status) -> None:
     result = plugin.run(fields)
     held = result.positions.join(_cands(fields), on=["t", "entity"], how="inner")

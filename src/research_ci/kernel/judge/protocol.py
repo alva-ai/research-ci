@@ -181,8 +181,9 @@ def fees_match(result: ConsumerResult, costs: CostModel) -> Check:
 
 def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int) -> Check:
     """The consumer and the label are written independently; on the positions held, they must agree on what each
-    component booked every period earned. A gap in the total means an error in size or sign and fails; a gap that
-    only shows period by period means the two book the same money at different moments, which is shown."""
+    component booked every period earned, period by period. A gap in the total is an error in size or sign; a gap
+    that only shows period by period is money booked in another period than the label's, such as a flow at a decision
+    time paid to the positions that decision opens. Either fails: verdicts are judged period by period."""
     shared = [c for c in result.marked if c in result.net.columns and c in labels.columns]
     if not shared:
         return Check("consumer matches labels", "skip", "no component booked every period by both")
@@ -197,10 +198,8 @@ def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int)
         scale = max(float(np.abs(a).sum()), 1e-12)
         total = (float(a.sum()) - float(b.sum())) / scale
         per_period = float(np.abs(a - b).sum()) / scale
-        if abs(total) > 0.02:
+        if abs(total) > 0.02 or per_period > 0.02:
             status = "fail"
-        elif per_period > 0.02 and status == "pass":
-            status = "warn"
         notes.append(
             f"{c}: consumer books {float(a.sum()) - float(b.sum()):+.4%} of capital more than its labels "
             f"({total:+.2%} of |{c}|); period by period the gap is {per_period:.0%}"
