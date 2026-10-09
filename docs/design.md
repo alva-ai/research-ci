@@ -10,20 +10,22 @@ Contents:
 2. [Architecture](#architecture)
 3. [Lifecycle](#lifecycle)
 4. [The contract](#the-contract)
-5. [Time and lookahead](#time-and-lookahead)
-6. [Holdout and labels](#holdout-and-labels)
-7. [Judging](#judging)
-8. [The challenger and summaries](#the-challenger-and-summaries)
-9. [Trust and reproducibility](#trust-and-reproducibility)
-10. [Layers and templates](#layers-and-templates)
-11. [Plugins](#plugins)
-12. [Key decisions](#key-decisions)
-13. [Prior art](#prior-art)
-14. [Roadmap and open decisions](#roadmap-and-open-decisions)
+5. [The data layer](#the-data-layer)
+6. [The feat layer](#the-feat-layer)
+7. [Time and lookahead](#time-and-lookahead)
+8. [Holdout and labels](#holdout-and-labels)
+9. [Judging](#judging)
+10. [The challenger and summaries](#the-challenger-and-summaries)
+11. [Trust and reproducibility](#trust-and-reproducibility)
+12. [Layers and templates](#layers-and-templates)
+13. [Plugins](#plugins)
+14. [Key decisions](#key-decisions)
+15. [Prior art](#prior-art)
+16. [Roadmap and open decisions](#roadmap-and-open-decisions)
 
 ## Purpose and principles
 
-> **Status:** partly implemented: time, holdout tiers, the ledger, freezes, and the workflow in M1 and M2; the contract, plugin protocols, and protocol tests in M3a; the data layer in M3b; judging planned for M3c.
+> **Status:** partly implemented: time, holdout tiers, the ledger, freezes, and the workflow in M1 and M2; the contract, plugin protocols, and protocol tests in M3a; the data layer in M3b; the feat layer and its judging in M3c.
 
 ### The problem
 
@@ -44,8 +46,8 @@ The engine does not judge methods; it judges outputs, the way a backtester does 
 | Duty | What it guarantees | Status |
 | --- | --- | --- |
 | Time | At every decision time, research code sees only rows with `available_at <= t`. | Implemented (M1) |
-| Holdout and labels | Label definitions are plugins named in the contract; the engine owns label custody: which data a label sees, when it runs, and who gets the values. Sealed and forward data are out of the agent's reach. | Tiers in M2; label plugins and their protocol tests in M3a; delivery through evaluators in M3c and M4 |
-| Verdict | Real scores are compared with null worlds, thresholds rise with the number of trials, and every submission is logged in a hash-chained ledger. | Ledger in M2; power in M3a; judge planned (M3c) |
+| Holdout and labels | Label definitions are plugins named in the contract; the engine owns label custody: which data a label sees, when it runs, and who gets the values. Sealed and forward data are out of the agent's reach. | Tiers in M2; label plugins and their protocol tests in M3a; labels reach criteria only through the evaluation table (M3c) |
+| Verdict | Real scores are compared with null worlds, thresholds rise with the number of trials, and every submission is logged in a hash-chained ledger. | Ledger in M2; power in M3a; feat judging in M3c; signal and algo later |
 
 Everything specific to a case is a plugin: data sources, candidates, labels, targets, cost models, and backtesters. The engine keeps time, holdout, and verdicts, and it constrains plugins and agent-written code with executable checks and with tests of those checks: universe, label, and consumer plugins pass protocol tests before their output is used, and the protocol tests are themselves shown to catch plugins broken on purpose (see [Plugins](#plugins)).
 
@@ -104,7 +106,7 @@ An agent may do anything else. It may not do three things: see sealed or forward
 
 ## Architecture
 
-> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), `kernel/judge` (protocol tests and power), `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; the layer policies and the rest of `kernel/judge` planned for M3c, the child process for M4, `llm` from M5.
+> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), `kernel/judge` (protocol tests and power), `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; `kernel/checks` and the data stages in M3b; the feat policy and the rest of `kernel/judge` in M3c; the other layer policies later, the child process in M4, `llm` from M5.
 
 ### Packages
 
@@ -112,16 +114,16 @@ The engine separates mechanism, policy, and lifecycle. The kernel holds mechanis
 
 | Package | Owns | Status |
 | --- | --- | --- |
-| `api` | The only package research code and plugins import: `Contract` and its parts (`api/contract.py`), the plugin protocols (`api/plugins.py`), and what a layer file declares: `Criterion` (`api/study.py`) and null worlds (`api/nulls.py`). | Contract and protocols in M3a; criteria and nulls declared and validated in M3a, run from M3c |
-| `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), `checks`, and `judge`: `protocol` (protocol tests) and `power` today; nulls, mutate, calibrate, stats, and verdict later. | `tables` and `time` in M1; `hashing` and `holdout` in M2; `judge/protocol` and `judge/power` in M3a; `checks` and the rest of `judge` planned (M3c) |
-| `stages` | One policy file per stage. Today `contract.py`, which derives the Spec, and `source.py` and `data.py`, which admit a data source and check an idea's data. Later `feat.py`, `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py`: floor checks, floor null worlds, the calibration recipe, caps. | `contract.py` in M3a; `source.py` and `data.py` in M3b; the others planned (M3c and later) |
+| `api` | The only package research code and plugins import: `Contract` and its parts (`api/contract.py`), the plugin protocols (`api/plugins.py`), and what a layer file declares: `Criterion` (`api/study.py`) and null worlds (`api/nulls.py`). | Contract and protocols in M3a; criteria and nulls run by feat from M3c |
+| `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), `checks`, and `judge`: `protocol` (protocol tests), `power`, `nulls` (shuffles on the evaluation table), `calibrate`, and `verdict`. | `tables` and `time` in M1; `hashing` and `holdout` in M2; `judge/protocol` and `judge/power` in M3a; `checks` in M3b; the rest of `judge` in M3c |
+| `stages` | One policy file per stage. Today `contract.py`, which derives the Spec, `source.py` and `data.py`, which admit a data source and check an idea's data, and `feat.py`, which registers a method and judges features. Later `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py`: floor checks, floor null worlds, the calibration recipe, caps. | `contract.py` in M3a; `source.py` and `data.py` in M3b; `feat.py` in M3c; the others planned |
 | `workflow` | The state machine, lineage, templates, `next_actions`, approval provenance, and the commands that apply transitions. | Implemented (M2); approval provenance in M3a |
 | `runner` | Plugin loading: builds each plugin from its entry point with the contract's options and hashes its code. Later, research code in a child process, with data exchanged as Arrow. | Plugin loading in M3a; child process planned (M4) |
 | `store` | All I/O: the `.rci/` workspace with atomic writes and a lock, the ledger with head anchors, freeze records, environment records, and the data vault, content-hashed snapshots under `$RCI_HOME/data/`. | Implemented (M2); vault in M3a |
-| `render` | Cards rendered deterministically from engine files: the ContractCard today; later the other cards and citation checks for summaries. | ContractCard in M3a; the rest planned |
+| `render` | Cards rendered deterministically from engine files: the ContractCard, SourceCard, DataCard, MethodCard, and ResultCard; later the other cards and citation checks for summaries. | ContractCard in M3a; data cards in M3b; feat cards in M3c; the rest planned |
 | `llm` | Optional: the challenger, card narration, summary audit. | Planned (M5 and later) |
-| `cli` | The `rci` command, a thin layer over `workflow`. | Partly implemented (M2, M3a) |
-| `reference_plugins` | Generic plugins with no privileges: labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`. Toy plugins on synthetic data, with deliberately broken variants, live in `tests/toy.py`. | Implemented (M3a) |
+| `cli` | The `rci` command, a thin layer over `workflow`. | Partly implemented (M2 to M3c) |
+| `reference_plugins` | Generic plugins with no privileges: labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`; criteria helpers in `stats` (rank IC, quantile spread, leaving out the largest entities). Toy plugins on synthetic data, with deliberately broken variants, live in `tests/toy.py`. | Implemented (M3a) |
 
 ### Import layers
 
@@ -164,7 +166,8 @@ research-ci/                     the engine: library and CLI only
   src/<lab_package>/shared/      shared research tools
   ideas/<idea>/
     contract.py                  written by the agent, frozen at approval
-    data.py feat.py signal.py algo.py   research code, one module per layer (rci init generates them from M3c)
+    data.py feat.py signal.py algo.py   one module per layer: tests and criteria, frozen at approval
+    research/                    features files, one per submission (any path)
     nulls/                       written by the challenger
     .rci/                        written only by the engine
 
@@ -175,12 +178,12 @@ $RCI_HOME (default ~/.rci)       per user, outside every repository
 
 - The engine changes slowly and every verdict pins it, so it is reviewed and versioned on its own. Ideas and plugins change daily. Keeping ideas out of the engine repository also keeps the engine generic.
 - A lab is meant to install the engine at a pinned git SHA. Upgrading the engine changes the `engine` hash in every freeze, so a stage frozen under the old engine must be registered and approved again before it can submit without being TAINTED.
-- A lab may install the engine in editable mode while both are being developed. Verdicts made that way will be marked DEV and capped at L1 (planned, M3b), so a lab switches to a pinned SHA before real verdicts.
+- A lab may install the engine in editable mode while both are being developed. Verdicts made that way will be marked DEV and capped at L1 (planned), so a lab switches to a pinned SHA before real verdicts.
 - Both repositories commit `uv.lock` and `.python-version`, because the lab's lock file is part of the recorded environment of each submission.
 - Older research repositories are not moved. Lab plugins read their data or call their backtesters.
 - Research notebooks are optional; submissions are code (modules or scripts), and the engine calls only agreed entry points.
 
-The `.rci/` directory of an idea holds `ledger.jsonl`, `contract.json` (a copy of the contract fields, the hash of `contract.py`, and the derived Spec), `contract-card.txt` (the ContractCard), `data.json` and `data-card.txt` (the data check and the DataCard), `freeze/<stage>.json` (copies of each freeze), and `lock`, which `.rci/.gitignore` excludes. Verdict files, the other cards, and audit reports will join it with M3c and later. Every JSON file is written to a temporary file and moved into place with `os.replace`, so a crash never leaves half a file.
+The `.rci/` directory of an idea holds `ledger.jsonl`, `contract.json` (a copy of the contract fields, the hash of `contract.py`, and the derived Spec), `contract-card.txt` (the ContractCard), `data.json` and `data-card.txt` (the data check and the DataCard), `feat.json` and `feat-card.txt` (the feat method and the MethodCard), `feat-result-<n>.json` and `.txt` (each submission and its ResultCard), `freeze/<stage>.json` (copies of each freeze), and `lock`, which `.rci/.gitignore` excludes. The other cards and audit reports will join it later. Every JSON file is written to a temporary file and moved into place with `os.replace`, so a crash never leaves half a file.
 
 ### Data model
 
@@ -254,7 +257,7 @@ The process boundary is also where a trusted service would be split out later: `
 
 ## Lifecycle
 
-> **Status:** partly implemented: the state machine, versions, budgets, lineage, templates, `next_actions`, and the commands `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve` in M2; the derived Spec, the ContractCard, per-layer budgets, and approval provenance in M3a; per-layer CLI commands planned for M3c; checkpoint commands later.
+> **Status:** partly implemented: the state machine, versions, budgets, lineage, templates, `next_actions`, and the commands `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, and `approve` in M2; the derived Spec, the ContractCard, per-layer budgets, and approval provenance in M3a; the feat commands and the INSUFFICIENT state in M3c; the other layer and checkpoint commands later.
 
 ### Outer pipeline
 
@@ -296,14 +299,15 @@ layer: data, feat, signal, algo
   CHALLENGED <------------------------+                       |
    |  check: calibration passed       |  check failed, or     |  register after the
    v                                  |  challenge again      |  freeze: new version
-  CHECKED ----------------------------+  (new null worlds)    |  (from FROZEN, PASSED,
-   |  approve: provenance recorded                            |  FAILED, TAINTED, STALE)
+  CHECKED ----------------------------+  (new null worlds)    |  (from FROZEN, PASSED, FAILED,
+   |  approve: provenance recorded                            |  TAINTED, INSUFFICIENT, STALE)
    v                                                          |
   FROZEN -----------------------------------------------------+
    |  submit: 1 trial, the verdict is recorded at once
    v
   PASSED ............ the next stage may start
   FAILED, TAINTED ... change the research code and submit again (1 more trial)
+  INSUFFICIENT ...... the data cannot decide yet; a person decides: wait, resubmit, or drop
   PAUSED ............ the budget ran out without a pass; a person extends it
   STALE ............. an upstream stage was reopened; register again (new version)
 
@@ -321,19 +325,19 @@ The full transition table, from `workflow/machine.py`:
 | contract | register (`rci contract derive`) | OPEN, REGISTERED, PASSED | REGISTERED. From PASSED this is a new version, and every started downstream stage becomes STALE. |
 | contract | approve | REGISTERED | PASSED. The contract's budget and `skip` list take effect. Refused if anything recorded at derive changed or a protocol test failed. |
 | layer | register | OPEN, REGISTERED, CHALLENGED, CHECKED | REGISTERED, same version |
-| layer | register | FROZEN, PASSED, FAILED, TAINTED, STALE | REGISTERED, new version. From PASSED, started downstream stages become STALE. |
+| layer | register | FROZEN, PASSED, FAILED, TAINTED, INSUFFICIENT, STALE | REGISTERED, new version. From PASSED, started downstream stages become STALE. |
 | layer | challenge | REGISTERED, CHALLENGED, CHECKED | CHALLENGED |
 | layer | check | CHALLENGED, CHECKED | CHECKED if calibration passed, otherwise CHALLENGED |
 | layer | approve | CHECKED | FROZEN |
-| layer | submit | FROZEN, FAILED, TAINTED | PASSED, FAILED, or TAINTED. PAUSED instead of FAILED or TAINTED when this submission used the last trial. |
-| layer | extend | PAUSED | The verdict of the last submission, FAILED or TAINTED |
+| layer | submit | FROZEN, FAILED, TAINTED, INSUFFICIENT | PASSED, FAILED, TAINTED, or INSUFFICIENT. PAUSED instead of anything but PASSED when this submission used the last trial. |
+| layer | extend | PAUSED | The verdict of the last submission, FAILED, TAINTED, or INSUFFICIENT |
 | checkpoint | register | OPEN, REGISTERED, STALE | REGISTERED. From STALE this is a new version. |
 | checkpoint | approve | REGISTERED | FROZEN |
 | checkpoint | submit (the checkpoint run) | FROZEN | PASSED, FAILED, or TAINTED |
 
 Everything else is refused with a message such as `cannot approve a layer stage that is OPEN (allowed from: CHECKED)`. Examples: submitting a stage that has PASSED, registering a PAUSED layer, running a checkpoint twice. Before the machine is even consulted, every command checks lineage: all upstream stages must be PASSED or SKIPPED, otherwise `feat is waiting for contract, data to pass`.
 
-The tests hold three invariants over every allowed transition: only a submission (or the approval of a contract) can produce PASSED; a submission always ends in PASSED, FAILED, or TAINTED at the machine level; and no command produces SKIPPED directly. There is no SUBMITTED state: a submission runs synchronously and records its verdict in the same step.
+The tests hold three invariants over every allowed transition: only a submission (or the approval of a contract) can produce PASSED; a submission always ends in PASSED, FAILED, TAINTED, or INSUFFICIENT at the machine level; and no command produces SKIPPED directly. There is no SUBMITTED state: a submission runs synchronously and records its verdict in the same step.
 
 ### Versions
 
@@ -371,7 +375,7 @@ Every command requires all upstream stages to be PASSED or SKIPPED. Registering 
 
 A second lock sits in the freeze. Each stage's freeze includes `upstream:<stage>`, the freeze hash of each upstream stage's latest approval. If an upstream stage is approved again, any downstream submission against the old freeze would be TAINTED even without the STALE mark.
 
-From M3c, each verdict also records the hashes of the upstream outputs it consumed, and a stage may only use upstream outputs that passed. For example, `signal` may only read feature versions that passed `feat`; it cannot compute a new, unjudged feature of its own.
+Later, each verdict will also record the hashes of the upstream outputs it consumed, and a stage may only use upstream outputs that passed. For example, `signal` may only read feature versions that passed `feat`; it cannot compute a new, unjudged feature of its own.
 
 ### Optional stages
 
@@ -385,7 +389,7 @@ A checkpoint is registered with its plan in advance: the k candidates for `seal`
 
 ### Exploration
 
-Exploration is allowed in any state. It never changes the state and is never counted as a trial. On the explore tier every number is shown, as often as the agent wants (planned command: `rci <layer> explore`, M3c).
+Exploration is allowed in any state. It never changes the state and is never counted as a trial. On the explore tier every number is shown, as often as the agent wants. `rci feat explore <file>` runs only the checks a submission must pass before it is judged; numbers from the criteria come from the agent's own code.
 
 Exploration is free because it is how agents find ideas; counting it would only push work off the record. It is safe because it never produces a verdict, the tests are frozen before any submission, and the seal and forward tiers are out of reach. One weakness remains: an agent can look at explore results and then choose which criteria to register. The seal and forward checkpoints are the backstop.
 
@@ -403,6 +407,7 @@ The engine is passive. `next_actions(status)` returns what should happen next as
 | layer | CHECKED | human | `rci approve --stage <layer>` | review the tests and freeze them |
 | layer | FROZEN | agent | `rci <layer> submit` | submit the research code, with trials left |
 | layer | FAILED, TAINTED | agent | `rci <layer> submit` | the verdict and its note; change the research code |
+| layer | INSUFFICIENT | human | `rci <layer> show` | the data cannot decide yet: wait for new data, submit other research code, or drop it |
 | layer | PAUSED | human | `rci approve --stage <layer> --extend N` | all submissions used; extend the budget or drop the idea |
 | layer | STALE | agent | `rci <layer> register` | which stage was reopened; register to start the next version |
 | checkpoint | OPEN, STALE | agent | `rci <checkpoint> register` | declare the plan before the checkpoint runs |
@@ -410,7 +415,7 @@ The engine is passive. `next_actions(status)` returns what should happen next as
 | checkpoint | FROZEN | human or scheduler | `rci seal run`, `rci forward --all`, `rci capital run`, `rci monitor --all` | run the checkpoint once |
 | checkpoint | FAILED, TAINTED | human | `rci <layer> register` | the checkpoint ran once; reopen a layer, which restarts the checkpoints |
 
-The per-layer and checkpoint commands in this table do not exist yet (M3c and later), although `rci next` already prints them. An approval that `rci next` assigns to a person can also be relayed by an agent or, in fully automatic research, given by the agent (see [Approval provenance](#approval-provenance)). Who does what:
+For `feat`, `rci feat register` registers, challenges, and checks in one step, as `rci data check` does; the commands of `signal`, `algo`, and the checkpoints do not exist yet, although `rci next` already prints them. An approval that `rci next` assigns to a person can also be relayed by an agent or, in fully automatic research, given by the agent (see [Approval provenance](#approval-provenance)). Who does what:
 
 ```text
 research agent           challenger              person                 scheduler
@@ -437,7 +442,7 @@ A later orchestrator needs nothing new: it loops over ideas, reads `next_actions
 
 ### Commands that exist today
 
-`rci init <idea> -t <template>` creates the idea, writes a `contract.py` skeleton with every required field and `TODO` placeholders, and opens the ledger with an `init` record. `rci contract derive` loads and validates `contract.py`, checks its template and `skip` list, derives the Spec (see [What derive computes](#what-derive-computes)), records the fields, the Spec, and the dependencies in the ledger, and prints the ContractCard. `rci approve --stage <stage>` shows everything it will freeze (for the contract, the ContractCard), asks for confirmation, freezes, and prints a suggested git command; with `--relayed "<words>"` or `--auto` it records a relayed or automatic approval without asking (see [Approval provenance](#approval-provenance)); with `--extend N` it adds submissions to a PAUSED layer instead, which needs a terminal. `rci data check` admits the data source if needed and checks the data (see [The data layer](#the-data-layer)); `rci source approve` admits a source once; `rci data submit` records the frozen data; `rci data show` and `rci source show` print the last cards. `rci status`, `rci next`, and `rci inbox` show the state, the next action, and the person's queue, with `--json` for agents. `rci verify` checks the ledger and prints `ledger ok: N records`. `status`, `next`, `verify`, `contract derive`, and `approve` take `-i <idea>` and default to the current directory; `inbox` takes a root directory. The [README](../README.md#cli) has the full table.
+`rci init <idea> -t <template>` creates the idea, writes a `contract.py` skeleton with every required field and `TODO` placeholders, and opens the ledger with an `init` record. `rci contract derive` loads and validates `contract.py`, checks its template and `skip` list, derives the Spec (see [What derive computes](#what-derive-computes)), records the fields, the Spec, and the dependencies in the ledger, and prints the ContractCard. `rci approve --stage <stage>` shows everything it will freeze (for the contract, the ContractCard), asks for confirmation, freezes, and prints a suggested git command; with `--relayed "<words>"` or `--auto` it records a relayed or automatic approval without asking (see [Approval provenance](#approval-provenance)); with `--extend N` it adds submissions to a PAUSED layer instead, which needs a terminal. `rci data check` admits the data source if needed and checks the data (see [The data layer](#the-data-layer)); `rci source approve` admits a source once; `rci data submit` records the frozen data; `rci data show` and `rci source show` print the last cards. `rci feat register` registers the feat method and prints the MethodCard; `rci feat explore <file>` runs the floors on a features file; `rci feat submit <file>` judges it and prints the ResultCard; `rci feat show` prints them all (see [The feat layer](#the-feat-layer)). `rci status`, `rci next`, and `rci inbox` show the state, the next action, and the person's queue, with `--json` for agents. `rci verify` checks the ledger and prints `ledger ok: N records`. `status`, `next`, `verify`, `contract derive`, and `approve` take `-i <idea>` and default to the current directory; `inbox` takes a root directory. The [README](../README.md#cli) has the full table.
 
 The fields of `Contract` and what it refuses are in [The contract](#the-contract).
 
@@ -654,6 +659,90 @@ verdict    READY
 
 Here a venue lists another asset under one ticker. The guard drops a fifth of the candidate rows; the mean barely moves, but the noise falls by more than half, which the power block shows.
 
+## The feat layer
+
+> **Status:** implemented (M3c): the method (criteria, null worlds that shuffle within buckets, coverage of the contract's alternatives, calibration), submissions (checks that the scores read nothing ahead and rank the candidates, every criterion against every world that applies, the decisive effect on a label or through the consumer), the MethodCard and ResultCard, `rci feat register`, `explore`, `submit`, and `show`, and the INSUFFICIENT state. The other null generators (`BlockPermute`, `ShiftTime`, `ReplaceField`, `RandomEvents`), learning from labels (`fit`), dedup by correlation, and evidence levels are planned.
+
+The feat layer answers one question: do these scores carry information about the contract's labels that the alternative explanations do not? It reads only what the data layer froze: the treated data and the candidates it kept.
+
+### The method
+
+Registered once per version with `rci feat register`, from two files of the idea:
+
+- `feat.py` defines `CRITERIA = [Criterion(name, evaluate, label=None, horizons=None, combine="max", required=True, note=""), ...]`. `evaluate(table)` returns one value per decision time (`t`, `value`) from the evaluation table of one horizon. Any metric works; `research_ci.reference_plugins.stats` has rank IC, a quantile spread, and a filter that leaves out the entities with the largest outcomes, with no privileges over an idea's own.
+- `nulls/feat.py`, written by the challenger, defines `NULLS = [Null(explains, world, keeps=None, criteria=(), reps=200, note=""), ...]`. `explains` is the id of an alternative in the contract; `keeps` names the column that alternative rests on (a `PermuteWithin` world keeps its own bucket unless told otherwise); `criteria` limits the world to some criteria.
+
+The evaluation table has one row per candidate and decision time whose label is complete before the explore data ends: `t`, `entity`, `score`, `y` (the label at that horizon) and its components (`y_flow`, `y_price`, ...), and every universe column; a universe column named like one of these gets the suffix `_candidate`. With more than 1,000 decision times, every k-th is kept.
+
+The engine adds the floor world: scores shuffled across clusters at each decision time, the same way within a horizon. It answers `chance` and `timing` and judges every criterion; `fewer`, when there is a consumer, is answered by the decisive comparison with random changes. Then:
+
+| Check | Fails when |
+| --- | --- |
+| null worlds | a world is not a `PermuteWithin` yet, or names an alternative the contract does not have, or a column the table does not have |
+| alternatives covered | an alternative of the contract, or a floor one, has no world that judges a required criterion |
+| calibration | in some world, a criterion cannot tell real information from what the world keeps (see below) |
+| target reads the score | a label effect's target gives the same number for any scores |
+
+A blocked method leaves the layer CHALLENGED; a ready one leaves it CHECKED. `rci approve --stage feat` freezes the method's ledger record, both files, and the code of every plugin feat runs; a submission is refused, without spending a trial, if any of them changed since.
+
+### Null worlds on scores
+
+`PermuteWithin(bucket_by, clusters, block)` shuffles the scores, never the labels, among the rows of each decision time and bucket (`"time"`: one bucket per decision time). Whole clusters move: a cluster's rows take the scores of another cluster with as many rows, in random order. What a cluster's scores share survives; their link to its members' labels does not. Mapping row for row in a fixed order would keep whatever the position inside a cluster tells, such as the same venue pair under every symbol. With `block="horizon"` the shuffle is the same at every decision time within one horizon, so overlapping label windows see one shuffle.
+
+### Calibration
+
+Every criterion is calibrated in every world that judges it, on the criterion's shortest horizon and at most 300 decision times:
+
+- **Stand-in**: the label's mean in each value of `keeps` at each decision time (or at each time, for a world that keeps only time), standardized, plus noise. It carries exactly what the world claims to keep. Even in a correct world it beats `z_base` by chance, at the rate of a t distribution with as many degrees of freedom as null shuffles; it may live no more often than that rate plus three binomial standard errors. With 100 stand-ins and 30 shuffles it must die at least 92% of the time.
+- **Planted**: the stand-in plus the label's residual around that level, sized so the criterion moves by 1.5 times its smallest detectable effect. It must live at least 80% of the time.
+- **Kept**: the share of rows whose kept level survives a shuffle; shown, not gating.
+
+A world that claims to keep the venue pair but shuffles only within each decision time lets the stand-in live, and the method is returned before anything is judged.
+
+### Submissions
+
+`rci feat submit <file>` judges one file that defines `features(fields, candidates)`: one score per candidate row (`t`, `entity`, `score`) for every decision time at once, from the frozen data and the candidates. Labels never reach it. Each submission names its own file; the criteria and worlds stay frozen.
+
+1. **Floors.** The features run again on the data cut at three decision times; rows at or before each cut must not change (`rtol=1e-9`). A change TAINTS the submission and nothing else runs. Scores that rank the candidates at fewer than half of the decision times FAIL. Scores identical to an earlier submission's are refused without spending a trial.
+2. **Criteria.** Each criterion against each world that applies: its value per decision time, averaged in blocks one horizon long, against the same average with shuffled scores, as `z = (real - mean(null)) / sd(null)`. Over several horizons with `combine="max"`, the best standardized horizon is compared with the best of each shuffle (GridMax); horizons with fewer than five blocks are shown but not counted. A required criterion passes when it beats every world that judges it with `z ≥ z_base·√(1 + ln n)` on the n-th submission of the layer, with `z_base = 2`.
+3. **Decisive effect.** On a label: the contract's target with these scores, per horizon, with the floor world's z. Through the consumer: the consumer runs with these scores, and 20 times with the contract's `pilot` change, applied to the baseline's scores when there is a baseline and to these scores otherwise. The effect is over the baseline, or over the mean of the changed runs; the spread of the changed runs is the noise. With `Branch`, each branch point runs these scores, and the change, for one horizon from the baseline's own state.
+4. **Verdict.** For each effect: failed when `effect + 2·se < at_least`; passed when `z ≥ z_need` and `effect − 2·se ≥ at_least`; otherwise insufficient. A label effect passes when one counted horizon passes and fails when all of them fail. The submission is TAINTED by a leak; otherwise FAILED when the scores do not rank, a required criterion does not beat a world, or an effect failed; otherwise INSUFFICIENT unless every effect passed.
+
+INSUFFICIENT is a stage state: the data cannot decide yet. It costs a trial like any submission, and a person decides what comes next: wait for new data, submit other research code, or drop the idea.
+
+`rci feat explore <file>` runs only the floors and records nothing: it says whether a submission would be judged, never how it would do. `rci feat show` prints the MethodCard and every ResultCard.
+
+### The cards
+
+On the toy, abridged:
+
+```text
+MethodCard · carry · feat v1
+criteria   ic: carry · H 8h 24h · best of its horizons · required
+criteria   ic without the top symbol: carry · H 8h 24h · best of its horizons · required
+worlds     floor (engine): PermuteWithin(time, clusters=symbol, block=horizon) · keeps time · explains chance, timing
+worlds     null 1 (idea): PermuteWithin(time, clusters=symbol, block=horizon) · keeps time · explains tail
+calibrate                          world     H        dies  lives  kept       MDE  dies needs
+           ic                      floor     8h        95%   100%    --   0.09403  ≥ 88%
+           ic without the top symb null 1    8h        95%    90%    --    0.1043  ≥ 88%
+decisive   carry ≥ 3.0 bp per entry after the round trip · target ref.mean with the scores
+checks     ok   alternatives covered: chance: floor · timing: floor · tail: null 1
+           ok   calibration: 3 pairs hold
+verdict    READY
+
+ResultCard · carry · feat v1 · submission 2 of 3
+floors     ok   scores rank candidates: scores 100% of candidate rows; ranks candidates at 100% of decision times
+           ok   scores read nothing ahead: the same scores with the data cut at 2 decision times
+need       z ≥ 2.60 on submission 2
+criteria   ok   ic vs floor (chance, timing): z 3.205 at 24h · best of 2 horizons
+                  8h     value     0.1699 ± 0.03826    null   0.003146 sd 0.05379      41 blocks  z 3.099
+                  24h    value      0.269 ± 0.05959    null  -0.005505 sd 0.0834       13 blocks  z 3.292
+decisive   carry: 25.4 bp ± 6.4 at 24h · z 3.526 · needs ≥ 3.0 bp · PASSED
+verdict    PASSED
+```
+
+The first submission, pure noise, reached z 1.5 against a need of 2.0 and FAILED; a second copy of it was refused. The GridMax z (3.2) sits below the best single horizon (3.3): picking the best of two horizons is priced in.
+
 ## Time and lookahead
 
 > **Status:** implemented (M1): FieldTable, `asof`, `step`, `check_leaks`. Decision grids from the contract in M3a; decision times derived from events and latencies are planned.
@@ -691,7 +780,7 @@ Two examples from the tests. An inventory figure for `T` published at `T + 30h` 
 
 ### Stepping
 
-`step(features, fields, decision_times, lookback=None, panel_format="pandas")` calls the research function once per decision time, on the panel known at that time, and keeps each entity's latest output row at or before `t`. The result has columns `t`, `entity`, and one column per output value. Research code can be written vectorized over the whole panel, as usual; causality comes from how it is called, not from how it is written. The values used for verdicts come from stepping on the real table.
+`step(features, fields, decision_times, lookback=None, panel_format="pandas")` calls the research function once per decision time, on the panel known at that time, and keeps each entity's latest output row at or before `t`. The result has columns `t`, `entity`, and one column per output value. Research code can be written vectorized over the whole panel, as usual; causality comes from how it is called, not from how it is written. Feat does not step: it runs a features file once and again on the data cut at a few decision times, which costs a few runs instead of one per decision time (see [Submissions](#submissions)).
 
 The output contract: pandas features return a Series or DataFrame indexed by `(time, entity)`; polars features return a frame with `time` and `entity` columns. Values are cast to float and NaN becomes null. A column named `t` is reserved.
 
@@ -781,11 +870,11 @@ If no price for an entity became known at or after `t + h`, the data does not ye
 
 This rule makes a separate purge at the tier boundary unnecessary. Labels on `visible(fields, EXPLORE, tiers)` can never reach past `explore_end`: any label that would need a price published after the cutoff is missing. The tests check this for the reference labels, and the `label_truncation` protocol test checks the underlying property for every label plugin: labels whose window ends by a cut point do not change when the data stops at that cut.
 
-Walk-forward is a different case and still needs purging (planned, M3c). Code that learns from labels gets them only through `fit`. The engine passes `fit` only the labels of the training folds, and it drops training samples whose label window overlaps the test period.
+Walk-forward is a different case and still needs purging (planned). Code that learns from labels gets them only through `fit`. The engine passes `fit` only the labels of the training folds, and it drops training samples whose label window overlaps the test period.
 
 ### Who sees labels
 
-Label definitions are plugins; label custody belongs to the engine. Research code never builds the labels its verdict is judged on. The contract names each label's plugin, its options, and its horizons, so none of them can be changed after results; changing one is a new contract version, recorded in the same idea's ledger. The engine decides which data a label plugin sees (the tier's fields, or cut and perturbed copies in protocol tests), when it runs, and who gets the values. From M3c and M4, labels reach research code only through evaluators and `fit`, and only the labels the current tier allows. Components such as `flow` and `price` stay separate in the label, and costs come from the contract's cost model, applied by the target. Label types that need simulated fills call a plugin.
+Label definitions are plugins; label custody belongs to the engine. Research code never builds the labels its verdict is judged on. The contract names each label's plugin, its options, and its horizons, so none of them can be changed after results; changing one is a new contract version, recorded in the same idea's ledger. The engine decides which data a label plugin sees (the tier's fields, or cut and perturbed copies in protocol tests), when it runs, and who gets the values. Since M3c, labels reach research code only through the evaluation table that criteria read, and only the labels the explore tier allows; `fit` is planned. Components such as `flow` and `price` stay separate in the label, and costs come from the contract's cost model, applied by the target. Label types that need simulated fills call a plugin.
 
 ### Data generated by LLMs
 
@@ -799,24 +888,30 @@ Each record is judged against the context as it was at the time, for example the
 
 ## Judging
 
-> **Status:** planned (M3c), with the `algo` parts (fill models, `RandomizeTiming`, stress worlds, limit criteria) in M6. Nothing computes a verdict today; the workflow records verdicts passed in by tests. Criteria and null worlds can already be declared in `research_ci.api` (M3a), and derive computes power (see [Power](#power)).
+> **Status:** partly implemented. The feat layer judges with criteria on an evaluation table, `PermuteWithin` worlds, z thresholds that rise with the trial count, GridMax over horizons, and calibration by stand-ins and planted signals (M3c; see [The feat layer](#the-feat-layer)). The other null generators, limit criteria, mutants outside the data layer, dedup by correlation, evidence levels and caps are planned, and the `algo` parts (fill models, `RandomizeTiming`, stress worlds) come in M6.
 
 ### Evaluators and criteria
 
-The agent writes evaluators: functions that turn a layer's outputs and a context into one number. Each is registered in advance as a criterion and frozen at approval. A layer file lists them in `CRITERIA`; `Criterion` is declared in `research_ci.api` (M3a), and nothing runs it until M3c:
+The agent writes evaluators: functions of the evaluation table that return one value per decision time. Each is registered in advance as a criterion and frozen at approval. A layer file lists them in `CRITERIA`:
 
 ```python
+import polars as pl
+
 from research_ci.api import Criterion
+from research_ci.reference_plugins.stats import rank_ic
 
 
-def resid_ic(outputs, ctx) -> float:
-    return ctx.rank_ic(ctx.residualize(outputs["score"], outputs["b_move_200ms"]), ctx.label("markout"))
+def beyond_b_move(table: pl.DataFrame) -> pl.DataFrame:
+    """Rank IC of the score with the markout, within each fifth of B's own move."""
+    bucket = (pl.col("b_move_200ms").rank() / pl.len() * 5).ceil().over("t").alias("bucket")
+    per = table.with_columns(bucket).group_by("t", "bucket").agg(pl.corr("score", "y", method="spearman"))
+    return per.group_by("t").agg(pl.col("score").mean().alias("value"))
 
 
-CRITERIA = [Criterion("increment_over_b_move", evaluate=resid_ic, kind="stat", horizons=("60ms",))]
+CRITERIA = [Criterion("increment over b_move", beyond_b_move, horizons=("60ms",)), Criterion("ic", rank_ic)]
 ```
 
-`Criterion(kind="stat")` is compared with its null distribution as a z score. `Criterion(kind="limit", limit=...)` is a hard constraint, such as "the 99th percentile loss per cycle stays within the limit", compared directly with no null distribution; `direction` says which side passes. `horizons` picks label horizons from the contract (all by default); with `combine="max"` (the default) the whole family counts once and each null world keeps its own maximum, after each horizon is standardized. `required=False` records a reference criterion that appears on the card but does not decide the verdict. The context (`Context` in `api/study.py`) gives evaluators the current horizon, `label(name)`, `baseline()`, `rank_ic`, `residualize`, and `consume(scores)`, which runs the consumer, all restricted to the current tier and world.
+The table has `t`, `entity`, `score`, the label `y` at one horizon and its components, and every universe column. Criteria are compared with their null distribution as z scores. `horizons` picks label horizons from the contract (all by default); with `combine="max"` (the default) the whole family counts once and each null world keeps its own maximum, after each horizon is standardized. `required=False` records a reference criterion that appears on the card but does not decide the verdict. Limit criteria, hard constraints compared directly with no null distribution, such as "the 99th percentile loss per cycle stays within the limit", are planned with `algo`.
 
 The engine never reads what an evaluator means. It runs the same evaluator in the real world and in the null worlds and compares the numbers. Two properties follow. Any metric works, so the variety of ideas does not require the engine to understand them. And any search hidden inside an evaluator runs again in every null world, so its benefit is priced in automatically.
 
@@ -840,11 +935,11 @@ Every claim has alternative explanations: "it is only X". For each one, a null w
 | parameter search | `GridMax`: run the same grid in each null world and keep its maximum | the grid | the luck of picking the best cell |
 | trading or cancelling less often | `RandomizeTiming(keep="rate")`, `algo` only | the decision rate | the decision timing |
 
-`PermuteWithin` expresses most "it is only X" explanations. It always moves whole event clusters (the universe's `clusters` column), so dependence inside a cluster survives. The declared forms are in `api/nulls.py`: `BlockPermute(block)`, `PermuteWithin(bucket_by, clusters, block)`, `ShiftTime(min_shift, max_shift, whole_years)`, `ReplaceField(fields)`, `RandomEvents(pool)`, and `RandomizeTiming(keep)`. The walkthroughs write null worlds in a shorter notation, and some of what they use, such as a shift on one venue only, is not declared yet. A bucket variable may be something that is not known at decision time, such as the size of the incoming trade: that cannot be a feature, because using it is lookahead, but it can bucket outcomes on the evaluation side.
+`PermuteWithin` expresses most "it is only X" explanations. In feat it shuffles scores against fixed labels and moves whole clusters (the universe's `clusters` column) in random inner order, so what a cluster's scores share survives (see [Null worlds on scores](#null-worlds-on-scores)). The declared forms are in `api/nulls.py`: `BlockPermute(block)`, `PermuteWithin(bucket_by, clusters, block)`, `ShiftTime(min_shift, max_shift, whole_years)`, `ReplaceField(fields)`, `RandomEvents(pool)`, and `RandomizeTiming(keep)`. The walkthroughs write null worlds in a shorter notation, and some of what they use, such as a shift on one venue only, is not declared yet. A bucket variable may be something that is not known at decision time, such as the size of the incoming trade: that cannot be a feature, because using it is lookahead, but it can bucket outcomes on the evaluation side.
 
 Null worlds differ in cost. Worlds that only reorder labels or outputs (block permutation, shuffles within buckets) are cheap and run 200 times or more. Worlds that perturb inputs and recompute features (clock shifts, ablation, latency quantiles) are expensive and run 30 to 50 times in parallel. Sequential testing can stop early when a result is clearly failing.
 
-The challenger declares null worlds in `nulls/<layer>.py` as `NULLS = [Null(explains, world, criteria=(), reps=200), ...]`, with at least 20 repetitions each; `explains` names the alternative explanation the world keeps. Every alternative explanation listed on the ContractCard must map to at least one null world: the idea's own, and the floor ones the engine adds (`chance` and `timing`, and `fewer` when there is a consumer or a baseline). Choosing the wrong generator produces false greens, for example ruling out seasonality with a random shift instead of a whole-year shift; the challenger and calibration exist to catch that.
+The challenger declares null worlds in `nulls/<layer>.py` as `NULLS = [Null(explains, world, keeps=None, criteria=(), reps=200, note=""), ...]`, with at least 20 repetitions each; `explains` is the id of the alternative the world keeps and `keeps` the column it rests on. Every alternative explanation listed on the ContractCard must be kept by a null world that judges a required criterion: the idea's own, and the floor ones the engine adds (`chance` and `timing` by the floor world, and `fewer`, when there is a consumer, by the decisive comparison with random changes). Choosing the wrong generator produces false greens, for example ruling out seasonality with a random shift instead of a whole-year shift; the challenger and calibration exist to catch that.
 
 ### Stress worlds
 
@@ -864,15 +959,15 @@ Every real incident becomes a stress world that similar strategies must pass lat
 
 ### Calibration: the test of the tests
 
-`calibrate` runs at `rci <layer> check`, before the freeze. A stage becomes CHECKED only when every test and null world passes it; failures are sent back and never count as trials.
+`calibrate` runs before the freeze (in feat, at `rci feat register`). A stage becomes CHECKED only when every test and null world passes it; failures are sent back and never count as trials. The feat recipe as built is in [Calibration](#calibration); the list below is the general design.
 
-- **StandIn**: an output that contains only the alternative explanation, for example `rank(X)` plus noise with the same correlation to X as the real feature. It must be killed in at least 95% of 50 runs. If it survives, the null world is too weak.
+- **StandIn**: an output that contains only the alternative explanation, for example `rank(X)` plus noise. It must be killed as often as a correct world kills it, allowing for chance. If it survives, the null world is too weak.
 - **Planted**: the stand-in plus real information, `stand_in + lambda * residual(label on X)`, sized so its residual IC is about 1.5 times the MDE. It must pass in at least 80% of runs. If it is killed, the null world is too strict. It uses labels on purpose and is never a real feature.
-- **Preservation**: a null world must keep what it claims to keep; the correlation of the permuted output with X must stay close to the original.
+- **Preservation**: a null world must keep what it claims to keep; in feat the card shows the share of rows whose level of X survives a shuffle.
 - **Mutant**: a copy of the data or of an evaluator with a planted defect. Each data test declares which risks it `covers`, must pass on clean synthetic data, and must fail on every mutant it covers. A mutant must be harmful: a naive feature on the mutated data must deviate clearly, for example show an inflated IC after a planted leak.
 - **Coverage**: a risk flagged on a field, with no test that fails on the matching mutant, is a coverage gap, and approval is refused until it is closed.
 
-In `algo`, calibration changes shape: a stand-in strategy that trades at random at the same rate must have a false pass rate of at most alpha against the random-timing null; an unprotected stand-in (no stops, no failure handling) must breach its limits in the stress worlds, which proves the stress is strong enough; and the execution simulator must pass known-answer tests (see [The algo layer](#the-algo-layer)). The rates, repetition counts, and sizes above are the planned recipe and may change in M3c.
+In `algo`, calibration changes shape: a stand-in strategy that trades at random at the same rate must have a false pass rate of at most alpha against the random-timing null; an unprotected stand-in (no stops, no failure handling) must breach its limits in the stress worlds, which proves the stress is strong enough; and the execution simulator must pass known-answer tests (see [The algo layer](#the-algo-layer)). The rates, repetition counts, and sizes for `algo` are the planned recipe.
 
 The [maker-taker walkthrough](walkthroughs.md#cross-venue-maker-taker) shows a calibration failure: a clock-skew null written too narrow let a stand-in survive and was sent back to the challenger before anything counted.
 
@@ -891,7 +986,7 @@ z_need = z_base * sqrt(1 + ln n)
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `z_need` | 2.00 | 2.60 | 2.90 | 3.23 | 3.63 | 4.00 | 4.43 |
 
-Thresholds are z scores, not p-values, because permutation p-values run out of resolution: with 200 permutations the smallest p is about 0.005, and `z = 2.6` already corresponds to a one-sided p of about 0.005. After a few trials, a p threshold would ask for more precision than the permutations can give. The empirical rank of the real score in the null distribution stays as a secondary check. The threshold grows with the square root of `ln n`, the same rate at which the best of n independent z scores grows. The value of `z_base` is not fixed yet.
+Thresholds are z scores, not p-values, because permutation p-values run out of resolution: with 200 permutations the smallest p is about 0.005, and `z = 2.6` already corresponds to a one-sided p of about 0.005. After a few trials, a p threshold would ask for more precision than the permutations can give. The empirical rank of the real score in the null distribution stays as a secondary check. The threshold grows with the square root of `ln n`, the same rate at which the best of n independent z scores grows. Feat uses `z_base = 2.0`.
 
 Every submission counts as a trial, including TAINTED ones and resubmissions of the same idea under a new look (see [Dedup](#dedup)). Exploration and calibration failures never count.
 
@@ -905,7 +1000,7 @@ A parameter grid is declared in advance as a family. Each null world runs the wh
 
 ### Dedup
 
-A new output whose correlation with an existing one, such as an earlier version of the same idea, is above 0.9 counts as the same idea. It still costs a trial. This stops an agent from submitting the same signal under a new name to win a lower threshold.
+A new output whose correlation with an existing one, such as an earlier version of the same idea, is above 0.9 counts as the same idea. It still costs a trial. This stops an agent from submitting the same signal under a new name to win a lower threshold. Today feat refuses scores identical to an earlier submission's, without spending a trial; the correlation rule is planned.
 
 ### Information gain in layers
 
@@ -937,11 +1032,11 @@ Caps:
 - A strategy whose outcomes depend on its own actions is capped at L3 until live results exist.
 - A stage approved by relay or by the agent will be capped (see [Approval provenance](#approval-provenance)); the caps are not set yet.
 
-Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because criteria on the same data are not independent evidence. The final definitions follow the first real case in M3c.
+Downstream stages consume by level; for example, `algo` may only use features at L2 or above, and capital requires L4. L4 needs new data because criteria on the same data are not independent evidence. The final definitions follow the first real cases.
 
 ### Verdict states
 
-A verdict is one of `PASS`, `FAIL`, `INSUFFICIENT` (the sample is too small to detect the claimed effect; the card says how much longer to collect at the current rate), `TAINTED` (something frozen changed, or a lookahead was found), `STALE` (an upstream stage was reopened), or `DEV` (made with an editable engine). In the M2 workflow a submission records PASSED, FAILED, or TAINTED, and STALE is a stage state. How INSUFFICIENT and DEV map onto stage states is decided in M3c. The status derive puts on the ContractCard (DECIDABLE, INSUFFICIENT, or BLOCKED) is not a verdict: it says, before any test, whether the data can decide the claim.
+A verdict is one of `PASS`, `FAIL`, `INSUFFICIENT` (the data cannot yet tell whether the effect reaches the smallest one worth having), `TAINTED` (something frozen changed, or a lookahead was found), `STALE` (an upstream stage was reopened), or `DEV` (made with an editable engine). A submission records PASSED, FAILED, TAINTED, or INSUFFICIENT (M3c), and STALE is a stage state; INSUFFICIENT costs a trial like the others. How DEV maps onto stage states is still open. The status derive puts on the ContractCard (DECIDABLE, INSUFFICIENT, or BLOCKED) is not a verdict: it says, before any test, whether the data can decide the claim.
 
 ### Example verdict card
 
@@ -993,12 +1088,12 @@ An illustration of why this comes first: ten years of weekly decisions give abou
 
 ### Walk-forward and fit
 
-There are two ways to run research code (planned, M3c). A layer file, `ideas/<idea>/<layer>.py`, declares `features` or `fit` and `predict`, `LOOKBACK` (how far back `features` reads, or `None` for all history), `PANEL_FORMAT`, and `CRITERIA` (`api/study.py`):
+There are two ways to run research code. A features file defines `features` or, later, `fit` and `predict`; the layer file `ideas/<idea>/<layer>.py` holds the `CRITERIA` (`api/study.py`):
 
 | Path | Written as | Run by the engine as |
 | --- | --- | --- |
-| Uses no labels | `features(panel, candidates)`, one row per candidate (`candidates` is `None` without a universe) | Stepping at each decision time |
-| Learns from labels | `fit(X, y)` and `predict(X)` or `transform(X)` | Walk-forward: `fit` sees only training-fold labels, purged of overlap with the test period |
+| Uses no labels | `features(fields, candidates)`, one score per candidate row for every decision time at once | Once, then again on the data cut at a few decision times; rows at or before each cut must not change (M3c) |
+| Learns from labels | `fit(X, y)` and `predict(X)` or `transform(X)` | Walk-forward: `fit` sees only training-fold labels, purged of overlap with the test period (planned) |
 
 The rule is: anything that uses labels gets them through `fit`. Rolling statistics, z-scores, seasonal adjustment, and hedge ratios estimated on past prices need no labels. Selecting features by IC, IC weighting, target encoding, tree models, and symbolic search do; the whole search goes inside `fit` and is repeated in each fold. An agent that picks features by hand while looking at explore labels has done a manual `fit` the engine cannot see. Writing the selection as code, such as `SelectByIC(k=5)` inside a pipeline, gets it a nested walk-forward; otherwise the ledger, the seal, and forward data are the backstop. LLM scores need no labels, but the model's pretraining carries knowledge of the future, which is why the `event` template is confirmed on forward data only.
 
@@ -1053,8 +1148,8 @@ Judging is done by deterministic kernel code. The challenger contributes tests a
 | Kind | Payload besides `from`, `to`, `version` |
 | --- | --- |
 | `init` | `template` only; stage `idea`; always the first record |
-| `register` | For the contract: its file hash (`contract`), every field (`fields`), the derived Spec (`spec`), and the dependencies derive recorded (`deps`: plugin code, baseline files, the data snapshot). For other stages: the declarations (from M3c). |
-| `challenge` | The challenger's declarations (from M3c) |
+| `register` | For the contract: its file hash (`contract`), every field (`fields`), the derived Spec (`spec`), and the dependencies derive recorded (`deps`: plugin code, baseline files, the data snapshot). For data: the check (`spec`) and its dependencies. For feat: the method (`spec`: criteria, worlds, coverage, calibration) and its dependencies (`deps`: the criteria and nulls files, the code of every plugin feat runs). |
+| `challenge` | The challenger's declarations: for feat, the worlds and the hash of `nulls/feat.py` |
 | `check` | `passed`, `note` |
 | `approve` | `freeze` hash, `deps`, `approval` (who approved and through which channel, with a relayed person's words), and `note`; for the contract also `budget`, `skip`, and `derived`, the hash of the `register` record it approves |
 | `submit` | `verdict`, `note`, `environment` |
@@ -1129,9 +1224,9 @@ A freeze is `Freeze(stage, deps, hash, at_ns)`, where the hash covers only the s
 | `python` | Interpreter and version, for example `CPython 3.11.15` |
 | `engine_packages` | The engine's version and the installed versions of its direct dependencies |
 | `upstream:<stage>` | The freeze hash of each upstream stage's latest approval; skipped stages are left out |
-| From M3c | Evaluators and null worlds; plugins and the data snapshot in each layer's freeze |
+| From M3c | For feat: the method's ledger record, `feat.py`, `nulls/feat.py`, and the code of every plugin feat runs |
 
-The contract stage freezes only `contract`. Its other dependencies are recorded at derive and checked when the contract is approved (see [Approval reads the ledger](#approval-reads-the-ledger)): `plugin:<name>` (a tree hash of the directory holding the plugin's module), `baseline:config`, `baseline:code:<file>`, and `baseline:live_config`, and `data` (the content hash of the snapshot in the vault). They do not join layer freezes yet, so until M3c a lab plugin whose code changes after the contract's approval is not noticed at a layer submission. The reference plugins are part of the engine source, which layer freezes do pin. At each submission the engine recomputes the dependencies and compares them with the ledger. Any change, added key, or missing key makes the submission TAINTED, with a note that lists what moved, for example `frozen dependencies changed: contract`.
+The contract stage freezes only `contract`. Its other dependencies are recorded at derive and checked when the contract is approved (see [Approval reads the ledger](#approval-reads-the-ledger)): `plugin:<name>` (a tree hash of the directory holding the plugin's module), `baseline:config`, `baseline:code:<file>`, and `baseline:live_config`, and `data` (the content hash of the snapshot in the vault). Since M3c the feat freeze pins the code of every plugin feat runs, so a lab plugin whose code changes after approval is noticed before a feat submission runs. The reference plugins are part of the engine source, which layer freezes do pin. At each submission the engine recomputes the dependencies and compares them with the ledger. Any change, added key, or missing key makes the submission TAINTED, with a note that lists what moved, for example `frozen dependencies changed: contract`.
 
 The research environment is recorded, not frozen. Each submission records a hash of every installed package with its version and the hash of the nearest `uv.lock` in the idea directory or above it (`none` if there is none). The reason is the normal loop: after a FAIL the agent changes its code and resubmits, and adding a research library changes `uv.lock`. If the lock file were frozen, that normal resubmission would be TAINTED. What must not move is the machinery that judges; the rest is recorded so any verdict can be reproduced. The interpreter version is frozen because uv resolves dependencies per Python version (3.11 gets numpy 2.4.x, 3.12 gets 2.5.x), and floating-point results can differ across them.
 
@@ -1155,7 +1250,7 @@ When deliberate cheating has to be stopped, the options are, in order of cost: t
 
 ## Layers and templates
 
-> **Status:** partly implemented: templates and stage lists in M2, the optional stages of `factor` in M3a; layer policies planned from M3c (`feat` first), data plugins in M5, `algo` in M6, checkpoint commands later.
+> **Status:** partly implemented: templates and stage lists in M2, the optional stages of `factor` in M3a; the data layer in M3b, the feat layer in M3c, data plugins in M5, `algo` in M6, checkpoint commands later.
 
 Each layer runs the same inner loop. What changes is the question, the output shape, the labels, the kind of null world, and what calibration checks.
 
@@ -1193,7 +1288,7 @@ The data layer is where many ideas should die early. If a core field exists only
 
 ### The feat layer
 
-The feat layer judges whether a feature adds information beyond what is already known. Its output is Scores. Features that use no labels are stepped; features that learn from labels go through `fit` and walk-forward (see [Walk-forward and fit](#walk-forward-and-fit)).
+The feat layer judges whether a feature adds information beyond what is already known. Its output is Scores. Features that use no labels run once and are checked on the data cut at a few decision times; features that learn from labels will go through `fit` and walk-forward (see [Walk-forward and fit](#walk-forward-and-fit)). What runs today is in [The feat layer](#the-feat-layer).
 
 The agent picks criteria from a menu and registers them in advance:
 
@@ -1213,7 +1308,7 @@ The agent picks criteria from a menu and registers them in advance:
 
 Typical null worlds are `BlockPermute`, `ShiftTime`, `PermuteWithin`, and `ReplaceField`. Calibration uses stand-ins, for example a pure seasonal feature plus noise that the whole-year shift must kill, and planted features that must survive.
 
-Typical pitfalls: two-sided filters and seasonal decompositions (caught by stepping), normalization over the full sample, features built from the very event the strategy has to anticipate, and features picked by hand on explore labels. For a strategy that depends on its own actions, the labels are the observable terms of its profit formula, and decision times are event times minus the action's latency.
+Typical pitfalls: two-sided filters and seasonal decompositions (caught by the cut check), normalization over the full sample, features built from the very event the strategy has to anticipate, and features picked by hand on explore labels. For a strategy that depends on its own actions, the labels are the observable terms of its profit formula, and decision times are event times minus the action's latency.
 
 Passing stores the feature under its version hash. Downstream stages may reference only that version, at the level it reached.
 
@@ -1432,9 +1527,9 @@ A plugin or tool moves from a lab into the engine only when all of these hold: a
 - **Alternatives**: a 3.12 floor; older floors such as pandas 2.x.
 - **Why**: environments pinned to 3.11 must be able to host ideas, so development defaults to 3.11. Current floors keep one set of behaviors to test (pandas 3 changed time resolution, for example). The cost: the engine cannot install next to pinned older versions such as pandas 2.x.
 
-### Per-layer CLI deferred until the judge exists
+### Per-layer CLI arrives with each layer's judge
 
-- **Decision**: `register`, `challenge`, `check`, and `submit` are implemented and tested in the workflow, but their CLI commands arrive with M3c. `rci next` already names them.
+- **Decision**: `register`, `challenge`, `check`, and `submit` are implemented and tested in the workflow, but a layer's CLI commands arrive only with its judge: feat's in M3c, the others later. `rci next` already names them.
 - **Alternatives**: expose them now.
 - **Why**: without a judge, the workflow's `submit` takes the verdict as an argument. A CLI command like that would let an agent declare its own verdict, which is exactly what the engine exists to prevent.
 
@@ -1577,7 +1672,7 @@ A reinforcement learning view makes the same point. The engine is an environment
 
 ## Roadmap and open decisions
 
-> **Status:** M0 to M3a done; M3c is next.
+> **Status:** M0 to M3c done; the signal and algo layers and the checkpoints are next.
 
 ### Roadmap
 
@@ -1587,7 +1682,8 @@ A reinforcement learning view makes the same point. The engine is an environment
 | M1 | `kernel/tables`, `kernel/time` (FieldTable, `asof`, `step`, `check_leaks`) | Every planted lookahead is caught; plain rolling features report zero mismatches | Done |
 | M2 | `kernel/hashing`, `kernel/holdout` (tiers, and label builders that M3a moved into reference plugins), `store` (workspace, ledger with head anchors, freeze, environment), `workflow` (machine, templates, lineage, next, commands), `api/contract`, CLI `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, `approve` (with `--extend`) | The state machine rejects out-of-order calls; a one-byte edit breaks ledger verification | Done |
 | M3a | The contract: `api/contract` (every field), `api/plugins` (protocols), `api/study` and `api/nulls` (declarations), `runner/plugins` (entry-point loading, code hashes), `store/vault`, `kernel/judge/protocol` and `kernel/judge/power`, `stages/contract` (derive), `render/card` (ContractCard), `reference_plugins`, approval provenance (`--relayed`, `--auto`) | Each deliberately broken toy plugin is caught by the protocol test that claims to catch it; approval refuses failed tests and anything changed since derive | Done |
-| M3c | `kernel/judge` (null worlds, z thresholds, evidence levels and caps, calibrate), the `feat` policy, and the per-layer CLI commands (`rci <layer> explore/register/challenge/check/submit`) | The `feat` layer runs end to end on the first real case | Planned |
+| M3b | The data layer: `stages/source` (admission by replay and reconciliation), `stages/data` (declared checks, idea tests and their calibration, treatments weighed by influence), `kernel/checks`, the SourceCard and DataCard | A source that repairs with hindsight is refused; a treatment that moves the decisive number is shown to a person | Done |
+| M3c | `kernel/judge` (shuffles on the evaluation table, z thresholds, GridMax, calibration, verdicts), the `feat` policy, the MethodCard and ResultCard, `rci feat register/explore/submit/show`, the INSUFFICIENT state | The `feat` layer runs end to end on the first real case | Done; evidence levels and caps follow |
 | M4 | `runner`: research code in a child process, data exchanged as Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | The plugins pass conformance | Planned |
 | M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria; a maker-taker case end to end | The cross-venue maker-taker case runs end to end | Planned |
@@ -1595,12 +1691,12 @@ A reinforcement learning view makes the same point. The engine is an environment
 
 ### Open decisions
 
-- **The first real case for M3c.** Candidates: a cross-sectional residual factor whose data is already local; a futures spread time series; and the cross-venue maker-taker case, which is event-driven and depends on its own actions.
-- **Final definitions of L0 to L4**, after M3c has run a real case. With them: the list of floor criteria each stage enforces, the null worlds that answer the floor alternatives (`chance`, `timing`, `fewer`), the standard contents of the evaluator context, the value of `z_base`, and the caps for relayed and automatic approval.
+- **The next real cases.** Candidates: a cross-sectional residual factor whose data is already local; a futures spread time series; and the cross-venue maker-taker case, which is event-driven and depends on its own actions.
+- **Final definitions of L0 to L4**, after real cases have run through feat. With them: the list of floor criteria each stage enforces, and the caps for relayed and automatic approval.
 - **How event-driven decision times are declared.** `Execution` and a consumer's `Timing` describe a fixed grid. Decisions at an event minus a latency, or at a signal's publish time, need a declaration of their own.
 - **How the maker-taker hedge legs are closed.** The strategy is opportunity-driven: it quotes on venue A and, after any fill, hedges on venue B at once, so it never carries one-sided inventory. Each cycle leaves a leg on each venue. Option A closes them with a reverse cycle when the opposite spread appears; option B holds them and closes periodically, which adds funding, margin, and liquidation-distance criteria to `algo`; option C closes each cycle separately.
 - **Graveyard cases**: which past failed research cases to replay, with what they died of and when.
-- **How INSUFFICIENT and DEV map onto stage states**, and whether an INSUFFICIENT verdict costs a trial.
+- **How DEV maps onto stage states.**
 - **How an ongoing monitor fits the one-shot checkpoint**: in the M2 machine `monitor` runs once like the other checkpoints, while the design has it run on a schedule and reopen layers on drift.
 - **Output shapes for options**: whether volatility surfaces or exposures to Greeks fit the five shapes.
 - **For the text event case**: the knowledge cutoff of the LLM that produced the signals, and whether the unfiltered event pool that `RandomEvents` needs is available.
