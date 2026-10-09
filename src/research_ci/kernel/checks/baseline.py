@@ -30,13 +30,15 @@ def events(fields: pl.DataFrame) -> pl.DataFrame:
 
 def baseline(
     fields: pl.DataFrame,
+    levels: tuple[str, ...] = (),
+    shift_ratio: float = 0.0,
+    window: int = 0,
     gap_factor: float = 3.0,
     near_ns: int = 60 * 10**9,
-    shift_ratio: float = 5.0,
-    window: int = 24,
 ) -> tuple[list[Check], pl.DataFrame]:
-    """Generic checks, and the anomalies they flag: long gaps between events, events closer than ``near_ns``, and
-    level shifts of ``shift_ratio`` or more that persist over the next ``window`` events."""
+    """Generic checks, and the anomalies they flag: long gaps between events and events closer than ``near_ns``; and,
+    in the fields the source declares as ``levels``, shifts of ``shift_ratio`` or more that persist over the next
+    ``window`` events."""
     e = events(fields)
     checks = []
     bad = fields.filter(pl.col("value").is_null() | ~pl.col("value").is_finite()).height
@@ -45,35 +47,25 @@ def baseline(
     checks.append(_count("known no earlier than the event", early, "rows known before their event time"))
     gaps = e.filter((pl.col("n") >= 3) & (pl.col("gap") > gap_factor * pl.col("spacing")))
     near = e.filter(pl.col("gap") < near_ns)
-    level = pl.col("value")
-    e = e.filter(pl.col("field").is_in(levels(e))).with_columns(
-        before=level.shift(1).over("entity", "field"),
-        after=level.rolling_median(window).shift(-(window - 1)).over("entity", "field"),
-    )
-    big = _ratio("value", "before", shift_ratio) & _ratio("after", "before", shift_ratio)
-    shifts = e.filter((pl.col("before") > 0) & (pl.col("value") > 0) & big)
     checks.append(_count("no long gaps", gaps.height, f"gaps longer than {gap_factor:g}× the usual spacing", gaps))
     checks.append(
         _count("no near-duplicate events", near.height, f"events within {near_ns / 1e9:g}s of the last", near)
     )
-    checks.append(_count("no level shifts", shifts.height, f"lasting moves of {shift_ratio:g}× or more", shifts))
-    anomalies = pl.concat(
-        [
-            _anomalies(gaps, "gap"),
-            _anomalies(near, "near"),
-            _anomalies(shifts, "shift"),
-        ]
-    )
-    return checks, anomalies
-
-
-def levels(e: pl.DataFrame, smooth: float = 0.05) -> list[str]:
-    """Fields that behave like price levels: positive, never constant, and usually moving by less than ``smooth``
-    (relative) from one event to the next. A lasting jump means something only in such a field; volumes, rates and
-    step functions such as settlement intervals jump by design."""
-    step = (pl.col("value") / pl.col("value").shift(1).over("entity", "field")).log().abs()
-    moves = e.filter(pl.col("value") > 0).with_columns(step=step).group_by("field").agg(pl.col("step").median())
-    return moves.filter((pl.col("step") > 0) & (pl.col("step") < smooth))["field"].sort().to_list()
+    found = [_anomalies(gaps, "gap"), _anomalies(near, "near")]
+    if levels:
+        level = pl.col("value")
+        e = e.filter(pl.col("field").is_in(list(levels))).with_columns(
+            before=level.shift(1).over("entity", "field"),
+            after=level.rolling_median(window).shift(-(window - 1)).over("entity", "field"),
+        )
+        big = _ratio("value", "before", shift_ratio) & _ratio("after", "before", shift_ratio)
+        shifts = e.filter((pl.col("before") > 0) & (pl.col("value") > 0) & big)
+        what = f"lasting moves of {shift_ratio:g}× or more"
+        checks.append(_count("no level shifts", shifts.height, what, shifts))
+        found.append(_anomalies(shifts, "shift"))
+    else:
+        checks.append(Check("no level shifts", "skip", "the source declares no level fields"))
+    return checks, pl.concat(found)
 
 
 def _ratio(a: str, b: str, k: float) -> pl.Expr:

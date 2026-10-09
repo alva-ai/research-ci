@@ -20,7 +20,7 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import Contract, ContractError, Use, as_use, span
-from research_ci.api.data import DataTest, pits_of, tests_of
+from research_ci.api.data import DataTest, Hedge, pits_of, tests_of
 from research_ci.api.plugins import CostModel, LabelPlugin, TargetPlugin
 from research_ci.kernel.checks import invariants as inv
 from research_ci.kernel.checks import treatments as tr
@@ -33,7 +33,7 @@ from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import DEFAULT_TARGET, _norm_candidates, _per_t, _use_named
-from research_ci.stages.source import SourceSettings, admit
+from research_ci.stages.source import SourceSettings, admit, declared_levels
 from research_ci.store import vault
 from research_ci.store.sources import Sources, source_key
 
@@ -49,11 +49,6 @@ class DataSettings:
     source: SourceSettings = field(default_factory=SourceSettings)
     materiality: float = 0.5
     stale_after: str = "2 days"
-    hedge_ratio: float = 1.2
-    hedge_corr: float = 0.3
-    hedge_window: int = 72
-    hedge_min_obs: int = 48
-    mask_around: str = "24h"
     seeds: int = 2
 
 
@@ -95,6 +90,7 @@ class _DataCheck:
         started = time.monotonic()
         use = as_use(self.c.data)
         plugin = self._plugin(use)
+        self.source_plugin = plugin
         everything = field_table(plugin.fetch())
         digest, _ = vault.put(use.name, everything)
         self.deps["data"] = digest
@@ -226,32 +222,29 @@ class _DataCheck:
 
     def _treatments(self, fields: pl.DataFrame, cands: pl.DataFrame | None, source: dict[str, Any]) -> list[Any]:
         out: list[tr.Treatment] = []
-        _, anomalies = baseline(fields)
+        _, anomalies = baseline(fields, *declared_levels(self.source_plugin))
         shifts = anomalies.filter(pl.col("kind") == "shift")
         unconfirmed = shifts.join(_confirmed(source["spec"]), on=["entity", "field", "end"], how="anti")
         if unconfirmed.height:
+            around = span_ns(span(self.source_plugin.levels.mask))
             reason = f"{unconfirmed.height} level shifts the independent source did not confirm"
-            out.append(tr.mask_windows("mask unconfirmed level shifts", reason, unconfirmed, self._around(), fields))
+            out.append(tr.mask_windows("mask unconfirmed level shifts", reason, unconfirmed, around, fields))
         if shifts.height > unconfirmed.height:
             self.checks.append(
                 Check("level shifts", "pass", f"{shifts.height - unconfirmed.height} confirmed by the source; kept")
             )
-        price = getattr(self.universe, "hedge_price", None) if cands is not None else None
-        if cands is not None and price and {"long", "short"} <= set(cands.columns):
+        hedge = getattr(self.universe, "hedge", None) if cands is not None else None
+        if hedge is not None and not isinstance(hedge, Hedge):
+            raise TypeError("a universe plugin's hedge must be an research_ci.api.Hedge")
+        if cands is not None and hedge is not None and {"long", "short"} <= set(cands.columns):
             assert self.c.universe is not None
             keep = (self.c.universe.clusters,) if self.c.universe.clusters in cands.columns else ()
+            h = hedge
             legs = inv.hedged_legs(
-                cands,
-                fields,
-                price,
-                self.s.hedge_ratio,
-                self.s.hedge_corr,
-                self.s.hedge_window,
-                self.s.hedge_min_obs,
-                keep,
+                cands, fields, h.price, h.max_ratio, h.min_corr, h.window, h.min_obs, h.min_move, keep
             )
             by = keep[0] if keep else "pair"
-            self.checks.append(inv.hedge_check(legs, price, self.s.hedge_ratio, self.s.hedge_corr, by))
+            self.checks.append(inv.hedge_check(legs, h.price, h.max_ratio, h.min_corr, by))
             bad = legs.filter(~pl.col("ok"))
             if bad.height:
                 reason = f"{bad.height:,} candidate rows whose legs do not trade as one asset"
@@ -446,9 +439,6 @@ class _DataCheck:
         if decide:
             return {"status": "decide", "notes": ["a person decides; approving applies every treatment listed"]}
         return {"status": "ready", "notes": ["approving freezes the treated data; feat reads only that"]}
-
-    def _around(self) -> int:
-        return span_ns(span(self.s.mask_around))
 
 
 def current_data_deps(

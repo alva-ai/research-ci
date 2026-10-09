@@ -14,7 +14,7 @@ from research_ci.api.contract import (
     Usage,
     Use,
 )
-from research_ci.api.data import BUILTIN_PITS, DataTest, OnFail, Pit
+from research_ci.api.data import BUILTIN_PITS, DataTest, Hedge, Levels, OnFail, Pit
 from research_ci.api.nulls import (
     BlockPermute,
     Null,
@@ -67,9 +67,11 @@ __all__ = [
     "Execution",
     "Forward",
     "FullPath",
+    "Hedge",
     "Label",
     "LabelCase",
     "LabelPlugin",
+    "Levels",
     "NativeWriter",
     "Null",
     "OnFail",

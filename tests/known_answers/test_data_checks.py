@@ -58,7 +58,8 @@ def test_hedged_legs_flag_an_asset_listed_under_another_ticker() -> None:
         fields = field_table(plugin.fetch())
         times = fields.filter(pl.col("field") == "close")["available_at"].unique().sort().to_list()[::6]
         cands = ToyPairs().candidates(fields, times)
-        legs = inv.hedged_legs(cands, fields, "close", window=24, min_obs=12, keep=("symbol",))
+        h = ToyPairs.hedge
+        legs = inv.hedged_legs(cands, fields, h.price, h.max_ratio, h.min_corr, 24, 12, h.min_move, keep=("symbol",))
         bad = legs.filter(~pl.col("ok"))
         assert (bad.height > 0) is expect_bad
         if expect_bad:
@@ -83,9 +84,13 @@ def test_baseline_flags_gaps_near_duplicates_and_level_shifts() -> None:
     later = pl.col("event_time") > fields["event_time"].min() + pl.duration(hours=72, time_unit="ns")
     hit = (pl.col("entity") == "a:X") & (pl.col("field") == "close") & later
     shifted = field_table(fields.with_columns(value=pl.when(hit).then(pl.col("value") * 10).otherwise("value")))
-    clean_checks, clean = baseline(fields)
-    _, found = baseline(broken)
-    _, moved = baseline(shifted)
+    levels = (("close",), 5.0, 24)
+    clean_checks, clean = baseline(fields, *levels)
+    _, found = baseline(broken, *levels)
+    _, moved = baseline(shifted, *levels)
     assert clean.is_empty() and all(c.status == "pass" for c in clean_checks)
     assert {"gap", "near"} <= set(found["kind"])
     assert moved.filter(pl.col("kind") == "shift")["entity"].to_list() == ["a:X"]
+    undeclared_checks, undeclared = baseline(shifted)
+    assert undeclared.filter(pl.col("kind") == "shift").is_empty()
+    assert {c.name: c.status for c in undeclared_checks}["no level shifts"] == "skip"

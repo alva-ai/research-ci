@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from research_ci.api import ConsumerResult, LabelCase, Reference, Timing
+from research_ci.api import ConsumerResult, Hedge, LabelCase, Levels, Reference, Timing
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME
 from research_ci.reference_plugins.labels import PairCarry
@@ -44,6 +44,8 @@ def toy_fields(hours: int = 24 * 25, seed: int = 0) -> pl.DataFrame:
 class ToyData:
     """Replays as of any time, and answers reconciliation from the venue, here the same generator run apart; the
     venue keeps no history of funding intervals."""
+
+    levels = Levels(fields=("close",), factor=5.0, window=24, mask="24h")
 
     reference_note = "the toy venue"
 
@@ -116,7 +118,7 @@ class ToyPairs:
     """Every venue pair of a symbol; long the venue with the lower latest funding rate per hour."""
 
     peek = False
-    hedge_price = "close"
+    hedge = Hedge(price="close", max_ratio=1.2, min_corr=0.3, window=72, min_obs=48, min_move=1e-3)
 
     def candidates(self, fields: pl.DataFrame, times: Sequence[Any]) -> pl.DataFrame:
         funding = fields.filter(pl.col("field") == "funding_rate").sort("available_at")

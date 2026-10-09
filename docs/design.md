@@ -606,11 +606,13 @@ Once per plugin, options, and code; every idea that uses the source reuses the r
 
 | Step | What the engine does | When it fails |
 | --- | --- | --- |
-| Baseline | Finite values, rows known no earlier than their event, long gaps, near-duplicate events, and lasting jumps of 5x or more in fields that behave like price levels | Never by itself: what it flags goes to reconciliation first |
+| Baseline | Finite values, rows known no earlier than their event, long gaps, near-duplicate events, and, in the fields the plugin declares as levels (`levels = Levels(fields, factor, window, mask)`), jumps of `factor` or more that last over the next `window` events | Never by itself: what it flags goes to reconciliation first |
 | Replay | `fetch(as_of=T, entities=...)` at cut points the engine picks: inside every hole of the full output, a day before each week's newly appearing entities, and at random; each must equal the full fetch cut at `T` | The plugin built, repaired, or filtered rows with later information: it is not admitted, and no person can override that |
 | Reconciliation | The plugin's independent source (`ReferenceSource.reference`) answers a random sample of every field and every flagged anomaly; a gap must be empty at the source too, other anomalies must be there | Any disagreement; an anomaly the source confirms is faithful data and is never flagged again |
 | Canaries | A deletion made with hindsight must be caught by the replay; values altered on our side must be caught by the reconciliation | The checks did not bite on this data |
 | Grades | Each field is verified (the source agreed), unverified (the source cannot answer it), or failed | A failed field fails admission |
+
+The numbers that depend on what a field means, such as how large a jump must be to count or how closely two legs of one asset must track, come from the plugins' declarations; the engine has none of its own, and a plugin that declares nothing is not checked for them.
 
 A person reads the SourceCard and admits the source once (`rci source approve`, or `--relayed` / `--auto`). The engine cannot tell an independent source from one that reads the plugin's own files; that is what the person checks, from the `reference_note` on the card.
 
@@ -619,9 +621,9 @@ A person reads the SourceCard and admits the source once (`rci source approve`, 
 Once per idea, after the contract is approved, with `rci data check`:
 
 1. The source must be admitted under its current code; if it has no admission yet, the check runs it first.
-2. The checks the contract and plugins declare: freshness; legs of one asset, when the universe plugin names the field that prices them (`hedge_price`), are at about the same level and move together over the recent past, using only prices known at each decision time; and the grade of every field the decisive number reads. A verdict that reads an unverified field is explore-grade at most.
+2. The checks the contract and plugins declare: freshness; legs of one asset, when the universe plugin declares a hedge (`hedge = Hedge(price, max_ratio, min_corr, window, min_obs, min_move)`), are within `max_ratio` of each other and, when both move enough to tell, correlate over the recent past, using only prices known at each decision time; and the grade of every field the decisive number reads. A verdict that reads an unverified field is explore-grade at most.
 3. The idea's own tests, if `ideas/<idea>/data.py` defines `TESTS`. They can only add checks. Each names the (category, field) pairs it covers; the engine plants built-in pits and the challenger's `PITS` from `nulls/data.py` in a clean copy, and a pit that moves the decisive number by the threshold or more must be flagged, or the test is returned.
-4. Every flagged problem becomes a treatment, applied by default: candidates whose legs do not trade as one asset are dropped; level jumps the source did not confirm are masked; flagged test rows are masked or their entities dropped.
+4. Every flagged problem becomes a treatment, applied by default: candidates whose legs do not trade as one asset are dropped; level jumps the source did not confirm are masked for the declared `mask` on each side; flagged test rows are masked or their entities dropped.
 5. The influence of each treatment, and of all of them together, on the contract's decisive number per horizon, in units of the MDE: the finer of the MDE on the untreated and on the treated data. Below the threshold (0.5 MDE by default) a treatment is applied and logged; above it, the card asks a person, and an agent cannot approve with `--auto`. Only sizes are shown, never the direction or the level, so no one picks a treatment by its result.
 6. Power again, on the treated data.
 
