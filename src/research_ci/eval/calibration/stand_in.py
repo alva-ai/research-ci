@@ -19,7 +19,11 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
+from research_ci.api.methods import Case, Market
+from research_ci.eval.statistics.ic import rank_ic
+from research_ci.eval.synthetic import HOUR_NS, market
 from research_ci.kernel.verdict.judge import Evaluate, blocks, per_t, with_scores
+from research_ci.kernel.verdict.permute import Permutation
 
 Z_BETA = 0.84
 
@@ -98,3 +102,20 @@ def _size(gain: Callable[[float], float], target: float) -> float:
 def _standard(x: np.ndarray) -> np.ndarray:
     sd = float(np.nanstd(x))
     return (x - float(np.nanmean(x))) / sd if sd > 0 else np.zeros_like(x)
+
+
+def _calibrated(bucket: str | None) -> bool:
+    """On a market whose labels rest partly on the group, a world shuffling within ``bucket`` claims to keep it."""
+    table = market(Market(group_share=0.4, tail=None), seed=0)
+    shuffle = Permutation(table, bucket, "cluster", HOUR_NS).index
+    return calibrate(rank_ic, table, HOUR_NS, "group", shuffle, reps=40, nulls=20, z_base=2.0)["ok"]
+
+
+CASES = [
+    Case("a world that keeps the group passes", lambda: _calibrated("group"), True),
+    Case(
+        "a world shuffling only within time does not keep the group: returned",
+        lambda: _calibrated(None),
+        False,
+    ),
+]
