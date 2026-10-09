@@ -5,6 +5,8 @@ the recent past, using only prices known by then."""
 
 import polars as pl
 
+from research_ci.api.methods import Case, Source
+from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.check import Check
 
@@ -61,3 +63,29 @@ def hedge_check(legs: pl.DataFrame, price: str, max_ratio: float, min_corr: floa
     worst = bad.group_by(by).len().sort("len", descending=True).head(6)[by].cast(pl.String).to_list()
     share = bad.height / max(legs.height, 1)
     return Check(name, "warn", f"{share:.2%} of candidate rows fail ({rule}); mostly {', '.join(worst)}")
+
+
+def _bad_share() -> dict[str, float]:
+    """e1 is e0 on another venue, a little apart; e2 is another asset at the same level."""
+    f = source(Source(entities=3), 0).filter(pl.col("field") == "price")
+    e0 = f.filter(pl.col("entity") == "e0")
+    twin = e0.with_columns(entity=pl.lit("e1"), value=pl.col("value") * 1.002)
+    f = pl.concat([e0, twin, f.filter(pl.col("entity") == "e2")])
+    hours = range(80, 300)
+    rows = [
+        (START_NS + h * HOUR_NS, pair, "e0", other) for h in hours for pair, other in (("e0>e1", "e1"), ("e0>e2", "e2"))
+    ]
+    cands = pl.DataFrame(rows, schema=["t", "entity", "long", "short"], orient="row")
+    cands = cands.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"))
+    legs = hedged_legs(cands, f, "price", 1.2, 0.3, 72, 48, 1e-3)
+    bad = legs.group_by("entity").agg((~pl.col("ok")).mean().alias("bad"))
+    return {str(e): float(v) for e, v in bad.iter_rows()}
+
+
+CASES = [
+    Case(
+        "one asset on two venues holds; another asset at the same level is caught",
+        lambda: {k: v > 0.5 for k, v in _bad_share().items()},
+        {"e0>e1": False, "e0>e2": True},
+    ),
+]

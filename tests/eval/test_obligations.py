@@ -12,7 +12,7 @@ from research_ci.api.methods import Case, Market, Power, Recovers
 from research_ci.eval.obligations import obligations
 from research_ci.eval.statistics.ic import rank_ic
 
-DECLARING = ("statistics", "structure", "calibration")
+DECLARING = ("data", "statistics", "structure", "calibration")
 
 
 def _modules() -> list[ModuleType]:

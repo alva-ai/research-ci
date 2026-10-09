@@ -1,4 +1,5 @@
-"""Synthetic markets the engine builds to check methods: evaluation tables whose information is known."""
+"""Synthetic markets and sources the engine builds to check methods: evaluation tables whose information is
+known, and field tables whose faults are known."""
 
 import math
 from collections.abc import Mapping
@@ -7,10 +8,12 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Market
+from research_ci.api.methods import Market, Source
+from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME
 
 HOUR_NS = 3_600 * 10**9
+START_NS = 1_767_225_600 * 10**9
 
 
 def market(m: Market, seed: int) -> pl.DataFrame:
@@ -38,6 +41,56 @@ def market(m: Market, seed: int) -> pl.DataFrame:
         }
     )
     return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))
+
+
+def source(s: Source, seed: int) -> pl.DataFrame:
+    """A field table: ``price`` hourly, known at its event; ``flow`` at each settlement, known ``lag`` hours later,
+    some of it revised one settlement after that as vintage 1."""
+    rng = np.random.default_rng(seed)
+    names = [f"e{i}" for i in range(s.entities)]
+    hours = np.arange(1, s.hours + 1, dtype=np.int64)
+    walk = 100 * np.exp(np.cumsum(rng.normal(0, 0.003, (s.entities, s.hours)), axis=1))
+    price_t = START_NS + np.tile(hours, s.entities) * HOUR_NS
+    rows = [
+        pl.DataFrame(
+            {
+                "entity": np.repeat(names, s.hours),
+                "field": "price",
+                "event_time": price_t,
+                "available_at": price_t,
+                "value": walk.ravel(),
+                "vintage": 0,
+            }
+        )
+    ]
+    settles = hours[hours % s.settle == 0]
+    level = rng.normal(0.0002, 0.0001, s.entities)
+    flow = level[:, None] + rng.normal(0, 0.00005, (s.entities, len(settles)))
+    flow_t = START_NS + np.tile(settles, s.entities) * HOUR_NS
+    lag = s.lag * HOUR_NS
+    rows.append(
+        pl.DataFrame(
+            {
+                "entity": np.repeat(names, len(settles)),
+                "field": "flow",
+                "event_time": flow_t,
+                "available_at": flow_t + lag,
+                "value": flow.ravel(),
+                "vintage": 0,
+            }
+        )
+    )
+    revised = rng.random(flow.size) < s.revised
+    if revised.any():
+        first = rows[-1].filter(pl.Series(revised))
+        later = pl.col("available_at") + s.settle * HOUR_NS
+        rows.append(first.with_columns(available_at=later, value=pl.col("value") * 1.01, vintage=pl.lit(1)))
+    frame = pl.concat(rows).with_columns(
+        pl.col("event_time").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"),
+        pl.col("available_at").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"),
+        source=pl.lit("synthetic"),
+    )
+    return field_table(frame)
 
 
 def hand(columns: Mapping[str, list[Any]], t: int = 0) -> pl.DataFrame:

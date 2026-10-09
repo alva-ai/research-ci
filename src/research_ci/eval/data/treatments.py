@@ -8,7 +8,9 @@ from typing import Literal
 
 import polars as pl
 
+from research_ci.api.methods import Case, Source
 from research_ci.eval.data.baseline import first_vintages
+from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import TIME
 
 
@@ -91,3 +93,51 @@ def apply_candidates(treatments: Sequence[Treatment], cands: pl.DataFrame) -> pl
         if t.on == "candidates":
             cands = t.apply(cands)
     return cands
+
+
+def _fields() -> pl.DataFrame:
+    return source(Source(entities=3, hours=48), 0)
+
+
+def _at(hour: int) -> pl.Expr:
+    return pl.lit(START_NS + hour * HOUR_NS).cast(pl.Datetime("ns")).dt.replace_time_zone("UTC")
+
+
+def _removed(t: Treatment) -> tuple[int, int]:
+    f = _fields()
+    return t.rows, f.height - t.apply(f).height
+
+
+def _windows() -> pl.DataFrame:
+    return pl.DataFrame({"entity": ["e0"], "field": ["price"]}).with_columns(start=_at(10), end=_at(11))
+
+
+def _flagged() -> pl.DataFrame:
+    return (
+        _fields()
+        .filter((pl.col("entity") == "e1") & (pl.col("field") == "price"))
+        .head(3)
+        .select("entity", "field", "event_time")
+    )
+
+
+def _lagged() -> list[float]:
+    f = _fields()
+    after = lag_field("flow", "", f).apply(f).filter((pl.col("entity") == "e0") & (pl.col("field") == "flow"))
+    before = f.filter((pl.col("entity") == "e0") & (pl.col("field") == "flow")).sort("event_time")
+    shifted = before["value"].head(before.height - 1).to_list()
+    return [round(a - b, 12) for a, b in zip(after.sort("event_time")["value"].to_list(), shifted, strict=True)]
+
+
+CASES = [
+    Case(
+        "masking a window drops its rows and an hour each side",
+        lambda: _removed(mask_windows("m", "", _windows(), HOUR_NS, _fields())),
+        (4, 4),
+    ),
+    Case("masking rows drops exactly them", lambda: _removed(mask_rows("m", "", _flagged(), _fields())), (3, 3)),
+    Case(
+        "dropping an entity drops all its rows", lambda: _removed(drop_entities("d", "", ["e2"], _fields())), (54, 54)
+    ),
+    Case("lagging a field gives each event the previous value", lambda: set(_lagged()), {0.0}),
+]

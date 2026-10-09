@@ -49,6 +49,25 @@ class Market:
 
 
 @dataclass(frozen=True)
+class Source:
+    """A synthetic field table: ``entities`` entities with an hourly ``price`` (a random walk) and a ``flow`` settled
+    every ``settle`` hours and known ``lag`` hours after it; a share ``revised`` of the flows gets a second vintage one
+    settlement later."""
+
+    entities: int = 12
+    hours: int = 24 * 14
+    settle: int = 8
+    lag: int = 0
+    revised: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.entities < 2 or self.hours < 4 * self.settle or self.settle < 1 or self.lag < 0:
+            raise ValueError("a source needs two entities and a few settlements")
+        if not 0 <= self.revised <= 1:
+            raise ValueError("revised is a share")
+
+
+@dataclass(frozen=True)
 class Size:
     """On markets with no information, the statistic must beat the floor world (z ≥ 2) no more often than chance
     allows, over ``markets`` seeds."""

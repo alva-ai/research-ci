@@ -9,7 +9,9 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from research_ci.api.methods import Case, Source
 from research_ci.eval.data.baseline import events
+from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import from_ns, lit_time
 from research_ci.kernel.verdict.check import Check
 
@@ -122,3 +124,46 @@ def _sample(frame: pl.DataFrame, k: int, rng: np.random.Generator) -> pl.DataFra
     if frame.height <= k:
         return frame
     return frame.sample(k, seed=int(rng.integers(0, 2**31)))
+
+
+def _cut(rows: pl.DataFrame, at: int, entities: list[str]) -> pl.DataFrame:
+    return rows.filter(pl.col("entity").is_in(entities) & (pl.col("available_at") <= lit_time(at)))
+
+
+def _honest(seed: int) -> str:
+    full = source(Source(lag=2, revised=0.3), seed)
+    cuts = cut_points(full, np.random.default_rng(seed))
+    return replay(lambda at, ents: _cut(full, at, ents), full, cuts)[0].status
+
+
+def _hindsight(seed: int) -> str:
+    """Rows of e0's price in hours 100 to 109 are deleted once hour 130 shows they preceded a jump; as of earlier
+    times the source still had them."""
+    original = source(Source(), seed)
+    t = pl.col("event_time").dt.epoch("ns")
+    window = (pl.col("entity") == "e0") & (pl.col("field") == "price")
+    window = window & t.is_between(START_NS + 100 * HOUR_NS, START_NS + 109 * HOUR_NS)
+    full = original.filter(~window)
+    learned = START_NS + 130 * HOUR_NS
+
+    def fetch(at: int, ents: list[str]) -> pl.DataFrame:
+        return _cut(original if at < learned else full, at, ents)
+
+    return replay(fetch, full, cut_points(full, np.random.default_rng(seed)))[0].status
+
+
+def _ahead(seed: int) -> str:
+    full = source(Source(lag=2), seed)
+    cuts = cut_points(full, np.random.default_rng(seed))
+    return replay(lambda at, ents: full.filter(pl.col("entity").is_in(ents)), full, cuts)[0].status
+
+
+CASES = [
+    Case(
+        "a source that replays honestly passes, with lags and revisions",
+        lambda: {_honest(s) for s in range(3)},
+        {"pass"},
+    ),
+    Case("a source that deleted rows with hindsight fails", lambda: {_hindsight(s) for s in range(3)}, {"fail"}),
+    Case("a source that answers with rows not yet known fails", lambda: {_ahead(s) for s in range(3)}, {"fail"}),
+]

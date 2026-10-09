@@ -6,7 +6,9 @@ from collections.abc import Callable
 import numpy as np
 import polars as pl
 
+from research_ci.api.methods import Case, Source
 from research_ci.eval.data.baseline import events
+from research_ci.eval.synthetic import source
 
 Plant = Callable[[pl.DataFrame, str, np.random.Generator], pl.DataFrame]
 NS = pl.Duration("ns")
@@ -117,3 +119,21 @@ BUILTIN: dict[str, Plant] = {
     "spike": spike,
     "swap": swap,
 }
+
+
+def _touched(name: str, seed: int) -> list[str]:
+    """The entities whose rows a pit changed, planted in prices of a synthetic source."""
+    clean = source(Source(), seed)
+    planted = BUILTIN[name](clean, "price", np.random.default_rng(seed))
+    keys = clean.columns
+    gone, new = clean.join(planted, on=keys, how="anti"), planted.join(clean, on=keys, how="anti")
+    return sorted(set(gone["entity"]) | set(new["entity"]))
+
+
+CASES = [
+    Case(
+        "every pit changes exactly one entity, on every source",
+        lambda: sorted({name for name in BUILTIN for seed in range(5) if len(_touched(name, seed)) != 1}),
+        [],
+    ),
+]

@@ -7,7 +7,11 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from research_ci.api.methods import Case, Source
 from research_ci.api.plugins import Reference
+from research_ci.eval.data.baseline import baseline
+from research_ci.eval.data.pits import gap
+from research_ci.eval.synthetic import source
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.check import Check
 
@@ -143,3 +147,57 @@ def _res(r: dict[str, Any], status: str, detail: str) -> dict[str, Any]:
 
 def _iso(ns: int) -> str:
     return str(np.datetime64(ns, "ns"))[:23] + "Z"
+
+
+TOL_NS = 60 * 10**9
+
+
+def _statuses(
+    ours: pl.DataFrame, theirs: pl.DataFrame, kind: str | None = None, answer: bool = True
+) -> dict[str, set[str]]:
+    """Request statuses by field, checking ``ours`` against ``theirs`` on the rows and anomalies the engine picks."""
+    _, anomalies = baseline(ours)
+    reqs = requests(ours, anomalies, 20, 10, TOL_NS, 0)
+    answered = reqs.select("rid") if answer else reqs.select("rid").head(0)
+    ref = Reference(theirs.select("entity", "field", "event_time", "value"), answered)
+    out: dict[str, set[str]] = {}
+    for r in compare(reqs, ours, ref, TOL_NS):
+        if kind is None or r["kind"] == kind:
+            out.setdefault(r["field"], set()).add(r["status"])
+    return out
+
+
+def _gapped(seed: int) -> pl.DataFrame:
+    return gap(_source(seed), "price", np.random.default_rng(seed))
+
+
+def _source(seed: int) -> pl.DataFrame:
+    return source(Source(), seed)
+
+
+def _off(field: str, k: float) -> pl.DataFrame:
+    hit = pl.col("field") == field
+    return _source(0).with_columns(value=pl.when(hit).then(pl.col("value") * k).otherwise("value"))
+
+
+CASES = [
+    Case("the same data agrees", lambda: _statuses(_source(0), _source(0)), {"flow": {"match"}, "price": {"match"}}),
+    Case(
+        "values off by a tenth disagree in that field only",
+        lambda: _statuses(_off("flow", 1.1), _source(0)),
+        {"flow": {"mismatch"}, "price": {"match"}},
+    ),
+    Case(
+        "a gap the source has too is faithful", lambda: _statuses(_gapped(0), _gapped(0), "gap"), {"price": {"match"}}
+    ),
+    Case(
+        "a gap the source does not have is a mismatch",
+        lambda: _statuses(_gapped(0), _source(0), "gap"),
+        {"price": {"mismatch"}},
+    ),
+    Case(
+        "what the source cannot answer is not agreement",
+        lambda: _statuses(_source(0), _source(0), answer=False),
+        {"flow": {"unanswered"}, "price": {"unanswered"}},
+    ),
+]
