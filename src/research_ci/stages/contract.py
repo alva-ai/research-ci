@@ -76,6 +76,7 @@ class _Derivation:
     def __init__(self, c: Contract, root: Path, registry: Registry | None, settings: Settings) -> None:
         self.c, self.root, self.registry, self.s = c, root, registry, settings
         self.checks: list[pr.Check] = []
+        self.later: list[tuple[int, Future[pr.Check]]] = []
         self.warnings: list[str] = []
         self.deps: dict[str, str] = {}
         self.spec: dict[str, Any] = {"claim": c.claim, "template": c.template}
@@ -86,12 +87,12 @@ class _Derivation:
         fields = self._data()
         consumer = self._plugin(as_use(self.c.consumer)) if self.c.consumer is not None else None
         times = self._decisions(consumer)
-        cands = self._universe(times)
-        self.costs: CostModel = self._plugin(as_use(self.c.costs))
-        self._costs(cands)
-        self._baseline_files()
         with ThreadPoolExecutor(max_workers=self.s.workers) as pool:
             self.pool = pool
+            cands = self._universe(times)
+            self.costs: CostModel = self._plugin(as_use(self.c.costs))
+            self._costs(cands)
+            self._baseline_files()
             self._labels(fields, cands)
             decisive = []
             for effect in self.c.decisive:
@@ -101,6 +102,8 @@ class _Derivation:
                     decisive.append(self._consumer_effect(effect, consumer, fields, cands))
                 else:
                     decisive.append(self._label_effect(effect, fields, cands))
+        for i, (at, job) in enumerate(self.later):
+            self.checks.insert(at + i, job.result())
         self.spec["decisive"] = decisive
         self._rest(decisive)
         self.spec["checks"] = [asdict(ch) for ch in self.checks]
@@ -172,9 +175,9 @@ class _Derivation:
             raise DeriveError(f"the universe has no column {', '.join(missing)}")
         per_t = full.group_by("t").agg(n=pl.len(), clusters=pl.col(u.clusters).n_unique())
         cuts = _quantile_times(per_t["t"], self.s.universe_cuts)
-        self.checks.append(pr.universe_pit(candidates, self.fields, full, cuts, self.period))
+        self._later(pr.universe_pit, candidates, self.fields, full, cuts, self.period)
         if cuts:
-            self.checks.append(pr.universe_causal(candidates, self.fields, full, cuts[len(cuts) // 2]))
+            self._later(pr.universe_causal, candidates, self.fields, full, cuts[len(cuts) // 2])
         self.spec["universe"] = {
             "plugin": use.name,
             "clusters": u.clusters,
@@ -187,6 +190,10 @@ class _Derivation:
             self.warnings.append("the candidate list was fixed with hindsight; history is explore-grade for it")
         self.times = sorted(int(t) for t in per_t.select(pl.col("t").dt.epoch("ns"))["t"])
         return full
+
+    def _later(self, check: Callable[..., pr.Check], *args: Any) -> None:
+        """Run a check in the pool alongside the rest; its result keeps its place among the checks."""
+        self.later.append((len(self.checks), self.pool.submit(check, *args)))
 
     def _costs(self, cands: pl.DataFrame | None) -> None:
         use = as_use(self.c.costs)
@@ -559,7 +566,7 @@ def _median(series: pl.Series) -> float:
 
 
 def _default_workers() -> int:
-    return max(1, min(6, (os.cpu_count() or 2) // 2))
+    return max(1, min(4, (os.cpu_count() or 2) // 2))
 
 
 def current_deps(
