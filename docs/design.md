@@ -1286,7 +1286,7 @@ Typical pitfalls: history that exists only in revised form, level breaks when a 
 
 The data layer is where many ideas should die early. If a core field exists only in revised form, history cannot produce a verdict, and only forward data can confirm the idea, at perhaps 52 samples a year for a weekly field. If a split at a break leaves too few samples, power is recomputed and the idea goes back to the contract as INSUFFICIENT. Passing unlocks `feat`, which may read only the passed fields; explore-grade fields cap everything downstream at L1. The [futures inventory spread walkthrough](walkthroughs.md#futures-inventory-spread) goes through the data layer in detail.
 
-### The feat layer
+### Feat
 
 The feat layer judges whether a feature adds information beyond what is already known. Its output is Scores. Features that use no labels run once and are checked on the data cut at a few decision times; features that learn from labels will go through `fit` and walk-forward (see [Walk-forward and fit](#walk-forward-and-fit)). What runs today is in [The feat layer](#the-feat-layer).
 
