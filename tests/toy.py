@@ -1,5 +1,7 @@
 """Small plugins on synthetic data for the engine's own tests, with broken variants the protocol tests must catch."""
 
+from bisect import bisect_left, bisect_right
+from collections import defaultdict
 from collections.abc import Sequence
 from itertools import combinations
 from typing import Any
@@ -153,9 +155,10 @@ class ToyNeedsNextBar(ToyPairs):
 
 
 class ToyCarry:
-    """Holds the top ``k`` pairs by score, equal weight per leg; flow and price accrue per hour after the decision."""
+    """Holds the top ``k`` pairs by score, equal weight per leg; flow and price accrue per hour after the decision. A
+    flow known in ``(t, t + 1h]`` is paid to the positions decided at ``t``."""
 
-    early = flip = fee_free = noisy = peek = False
+    early = flip = fee_free = noisy = peek = same_instant = False
 
     def __init__(self, k: int = 2, commission_bps: float = 1.0, slippage_bps: float = 1.0) -> None:
         self.k, self.cost = k, (commission_bps + slippage_bps) / 1e4
@@ -174,7 +177,12 @@ class ToyCarry:
         if self.peek:
             cands = cands.drop("score").join(self._future_flow(fields, times), on=["t", "entity"])
         by_t = {t: g for (t,), g in cands.group_by("t")}
-        flow_at = {(e, a): v for e, a, v in flows.select("entity", "available_at", "value").iter_rows()}
+        flow_at: dict[tuple[str, Any], float] = defaultdict(float)
+        bucket = bisect_right if self.same_instant else bisect_left
+        for e, a, v in flows.select("entity", "available_at", "value").iter_rows():
+            k = bucket(times, a)
+            if k < len(times):
+                flow_at[(e, times[k])] += v
         prices = {c: close[c].to_list() for c in close.columns if c != "available_at"}
         weights: dict[str, float] = {}
         legs: dict[str, tuple[str, str]] = {}
@@ -242,6 +250,27 @@ class EarlyCredit(ToyCarry):
 
 class FlippedFlow(ToyCarry):
     flip = True
+
+
+class SameInstantCredit(ToyCarry):
+    """Pays a flow known exactly at a decision time to the positions that decision opens."""
+
+    same_instant = True
+
+
+class LateBooking(ToyCarry):
+    """Pays the right positions the right amount, but books each period's flow one period late (the last period's
+    with its own, so the total is the same)."""
+
+    def run(self, fields: pl.DataFrame, scores: pl.DataFrame | None = None, fresh: bool = False) -> ConsumerResult:
+        r = super().run(fields, scores)
+        flow = r.net["flow"].to_numpy()
+        late = np.r_[0.0, flow[:-1]]
+        late[-1] += flow[-1]
+        net = r.net.with_columns(flow=pl.Series(late)).with_columns(
+            net=pl.col("flow") + pl.col("price") + pl.col("fees")
+        )
+        return ConsumerResult(net, r.positions, r.trades, r.turnover, r.checks, r.policies, r.marked)
 
 
 class NoFees(ToyCarry):

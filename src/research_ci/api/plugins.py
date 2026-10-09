@@ -84,7 +84,8 @@ class UniversePlugin(Protocol):
 @dataclass(frozen=True)
 class Timing:
     """When a consumer decides: every ``every`` from ``offset`` after midnight UTC. A decision at ``t`` may use what
-    is known at ``t`` and fills at the price known at ``t``; ``note`` says how, for people."""
+    is known at ``t`` and fills at the price known at ``t``; the positions it opens earn only what happens after
+    ``t``, so a flow at ``t`` belongs to the positions held up to ``t``. ``note`` says how, for people."""
 
     every: str
     offset: str = "0s"
