@@ -51,6 +51,16 @@ def test_holding_return_has_no_row_until_the_horizon_is_known_and_waits_for_publ
     assert _by_entity(label.values(late, _at((0, "a")), 3 * H)) == {"a": pytest.approx(0.1)}
 
 
+def test_a_price_is_current_until_the_next_is_due() -> None:
+    label = HoldingReturn()
+    half = _at((5, "a")).with_columns(pl.col("t") + pl.duration(minutes=30))
+    assert _by_entity(label.values(_prices(), half, 2 * H)) == {"a": pytest.approx(107 / 105 - 1)}
+    gap = _prices().filter(~((pl.col("entity") == "a") & pl.col("event_time").is_between(T0 + 10 * H, T0 + 14 * H)))
+    out = label.values(gap, _at((7, "a"), (9, "a"), (11, "a"), (15, "a")), 2 * H)
+    assert out["t"].to_list() == [T0 + 7 * H, T0 + 15 * H]
+    assert out["value"].to_list() == pytest.approx([109 / 107 - 1, 117 / 115 - 1])
+
+
 def test_markout_is_signed_by_side() -> None:
     out = _by_entity(Markout().values(_prices(), _at((5, "a", 1.0), (5, "b", -1.0)), H))
     assert out == {"a": pytest.approx(106 / 105 - 1), "b": pytest.approx(-(194 / 195 - 1))}

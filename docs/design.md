@@ -510,7 +510,7 @@ There is no holding period in the contract. How long to hold is an output of the
 8. **Power** for every decisive effect (see [Power](#power)), and for consumer effects the **pilot** and the baseline's own run (see [Consumer effects: Branch and FullPath](#consumer-effects-branch-and-fullpath)).
 9. **The rest.** The idea's alternatives plus the engine's floor: `chance` and `timing`, and `fewer` when there is a consumer or a baseline. Whether history can confirm. The forward source, with a warning if it is not installed. The deadline, budget, and skipped stages. A status.
 
-Consumer runs are spread over a thread pool of `RCI_WORKERS` threads (default: half the CPUs, at most 6).
+Consumer runs are spread over a thread pool of `RCI_WORKERS` threads (default: half the CPUs, at most 4, since each run of a real backtester can take gigabytes); the universe checks run in it alongside the label and consumer checks, and the card lists the results in the order above.
 
 History can confirm unless `used` affects the claim, the labels, or the costs, or affects the baseline when there is one, or the universe membership is static; then only new data can confirm. `universe` in `affects` is recorded but does not change this today.
 
@@ -1329,7 +1329,7 @@ A decision at `t` may use what is known at `t` and fills at the price known at `
 
 | Name | Kind | What it computes |
 | --- | --- | --- |
-| `ref.return` | label | `p(t + h) / p(t) - 1` of the candidate's entity, each price as first known at that moment; no row until `p(t + h)` is known |
+| `ref.return` | label | `p(t + h) / p(t) - 1` of the candidate's entity, each price as first known at that moment and current until the next is due: no row when the latest price at `t` or `t + h` is as old as the entity's usual spacing, because the series has stopped or the data does not reach that time. Whether later data exists plays no part, so the label is the same on data cut at any time after `t + h` |
 | `ref.markout` | label | `side * (p(t + h) / p(t) - 1)` for candidates with a `side` column, as a fraction |
 | `ref.carry` | label | A long/short pair from `t` to `t + h`, per unit of one leg's notional: `price`, plus `flow` when a flow field is named |
 | `ref.mean` | target | The mean label per decision time, each cluster weighted equally, after each candidate's round trip (`net=True`) |

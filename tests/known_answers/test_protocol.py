@@ -86,6 +86,16 @@ def test_label_truncation_catches_a_label_that_reads_past_its_window(fields: pl.
     assert check.status == status, check.detail
 
 
+def test_a_correct_label_passes_truncation_when_decisions_fall_between_prices(fields: pl.DataFrame) -> None:
+    """Decisions a minute after each close: the data cut at a decision ends a minute before it, at the close."""
+    minute = 60 * 10**9
+    cands = _cands(fields).with_columns(pl.col("t") + pl.duration(nanoseconds=minute))
+    cuts = [t + minute for t in _times(fields)[100:200:50]]
+    label = PairCarry(flow="funding_rate")
+    check = pr.label_truncation("carry", label.values, fields, cands, pd.Timedelta("8h"), cuts)
+    assert check.status == "pass", check.detail
+
+
 @pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (Peeking(), "fail")])
 def test_consumer_truncation_catches_a_consumer_that_trades_on_the_future(fields: pl.DataFrame, plugin, status) -> None:
     base = plugin.run(fields)
