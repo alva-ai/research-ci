@@ -10,10 +10,10 @@ from research_ci.stages.contract import Settings
 from research_ci.stages.feat import FeatError, FeatSettings
 from research_ci.workflow.commands import Approval, Idea
 from research_ci.workflow.machine import State, WorkflowError
-from toy import label_contract
+from toy import consumer_contract, label_contract
 
 FAST = Settings(workers=2, universe_cuts=2, label_cuts=1, consumer_cuts=1, pilot=((1, 3), (2, 2)))
-QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
+QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, consumer_reps=6, cuts=2)
 
 CRITERIA = """
 from research_ci.api import Criterion
@@ -76,9 +76,23 @@ def _contract() -> str:
     return text
 
 
-def _idea(tmp_path: Path, keeps: str = "") -> Idea:
+def _random_scores_contract() -> str:
+    """The consumer judges the claim against random scores of the same candidates; there is no baseline."""
+    decisive = (
+        "decisive=(Effect(on='consumer', at_least=0.05, unit='per year over random scores', "
+        "pilot=Perturb('shuffle', 1.0, block='24h'), design=FullPath()),),"
+    )
+    text = label_contract().replace("execution=Execution(every='1h')", "consumer='toy.carry'")
+    old = "decisive=(Effect(on='carry', at_least=0.001, unit='per entry after the round trip'),),"
+    assert old in text and "consumer='toy.carry'" in text
+    return text.replace(old, decisive)
+
+
+def _idea(tmp_path: Path, keeps: str = "", contract: str | None = None, nulls: str | None = None) -> Idea:
     idea = Idea.init(tmp_path / "idea", "factor", settings=FAST, feat_settings=QUICK)
-    (idea.root / "contract.py").write_text(_contract())
+    (idea.root / "contract.py").write_text(contract or _contract())
+    for name, text in (("strategy.toml", "[s]\nk = 2\n"), ("live.toml", "[s]\nk = 2\n"), ("strategy.py", "K = 2\n")):
+        (idea.root / name).write_text(text)
     idea.derive_contract()
     idea.approve("contract")
     idea.check_data()
@@ -88,7 +102,7 @@ def _idea(tmp_path: Path, keeps: str = "") -> Idea:
     assert idea.submit_data() is State.PASSED
     (idea.root / "feat.py").write_text(CRITERIA)
     (idea.root / "nulls").mkdir()
-    (idea.root / "nulls" / "feat.py").write_text(NULLS.format(keeps=keeps))
+    (idea.root / "nulls" / "feat.py").write_text(nulls or NULLS.format(keeps=keeps))
     return idea
 
 
@@ -161,3 +175,37 @@ def test_the_method_is_pinned_once_approved(tmp_path: Path) -> None:
     with pytest.raises(WorkflowError, match="feat_file"):
         idea.submit_feat(_file(idea, "spread", SPREAD))
     assert idea.status().stage("feat").trials == 0
+
+
+def test_through_the_consumer_a_spread_beats_random_scores_and_noise_does_not(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, contract=_random_scores_contract())
+    spec, card = idea.register_feat()
+    assert spec["verdict"]["status"] == "ready", card
+    assert "over random changes to the submitted scores" in card
+    idea.approve("feat", approval=_relayed(idea, "feat"))
+
+    result, text, _ = idea.submit_feat(_file(idea, "noise", NOISE))
+    decisive = result["decisive"][0]
+    assert (decisive["kind"], decisive["design"], decisive["runs"]) == ("consumer", "full_path", 6), text
+    assert decisive["outcome"] != "passed", text
+
+    result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
+    decisive = result["decisive"][0]
+    assert decisive["outcome"] == "passed" and decisive["z"] > result["need"], text
+    assert decisive["over"].startswith("the mean of runs") and decisive["run"]["trades"] > 0
+    assert state is State.PASSED, text
+
+
+def test_branching_from_the_baseline_gains_nothing_with_the_baseline_own_scores(tmp_path: Path) -> None:
+    """The toy baseline already ranks by the spread: submitting the same scores changes no branch. Fourteen days
+    of toy branches are too noisy to rule out 5% a year, so the data cannot decide."""
+    nulls = NULLS.format(keeps="").replace('"tail"', '"level"').replace('criteria=("ic without the top symbol",), ', "")
+    idea = _idea(tmp_path, contract=consumer_contract(), nulls=nulls)
+    spec, card = idea.register_feat()
+    assert spec["verdict"]["status"] == "ready", card
+    idea.approve("feat", approval=_relayed(idea, "feat"))
+    result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
+    decisive = result["decisive"][0]
+    assert (decisive["design"], decisive["over"]) == ("branch", "the baseline"), text
+    assert decisive["branches"] > 3 and decisive["effect"] == 0.0
+    assert decisive["outcome"] == "insufficient" and state is State.INSUFFICIENT, text
