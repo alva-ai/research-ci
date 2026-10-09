@@ -1329,7 +1329,7 @@ A decision at `t` may use what is known at `t` and fills at the price known at `
 
 | Name | Kind | What it computes |
 | --- | --- | --- |
-| `ref.return` | label | `p(t + h) / p(t) - 1` of the candidate's entity, each price as first known at that moment; no row until `p(t + h)` is known |
+| `ref.return` | label | `p(t + h) / p(t) - 1` of the candidate's entity, each price as first known at that moment and current until the next is due: no row when the latest price at `t` or `t + h` is as old as the entity's usual spacing, because the series has stopped or the data does not reach that time. Whether later data exists plays no part, so the label is the same on data cut at any time after `t + h` |
 | `ref.markout` | label | `side * (p(t + h) / p(t) - 1)` for candidates with a `side` column, as a fraction |
 | `ref.carry` | label | A long/short pair from `t` to `t + h`, per unit of one leg's notional: `price`, plus `flow` when a flow field is named |
 | `ref.mean` | target | The mean label per decision time, each cluster weighted equally, after each candidate's round trip (`net=True`) |

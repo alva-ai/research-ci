@@ -14,7 +14,8 @@ TIME = pl.Datetime("ns", "UTC")
 class HoldingReturn:
     """``p(t + h) / p(t) - 1`` of the candidate's own entity, each price as it was first known at that moment.
 
-    No row when the price at ``t + h`` is not known yet."""
+    A price is current until the next one is due: no row when the latest price at ``t`` or ``t + h`` is as old as the
+    entity's usual spacing between prices, because the series has stopped or the data does not reach that time."""
 
     def __init__(self, price: str = "close") -> None:
         self.price = price
@@ -105,7 +106,8 @@ class PairCarry:
 
 
 def _known(fields: pl.DataFrame, name: str) -> pl.DataFrame:
-    """Each entity's latest level by event time, as a step function of when it became known (first vintages)."""
+    """Each entity's latest level by event time, as a step function of when it became known (first vintages), with
+    the entity's usual spacing between levels."""
     rows = fields.filter(pl.col("field") == name).sort("vintage")
     rows = rows.unique(subset=["entity", "event_time"], keep="first", maintain_order=True).sort(
         "available_at", "event_time"
@@ -113,7 +115,8 @@ def _known(fields: pl.DataFrame, name: str) -> pl.DataFrame:
     rows = rows.filter(pl.col("event_time") == pl.col("event_time").cum_max().over("entity"))
     out = rows.select("entity", pl.col("available_at").alias("known_at"), "value")
     out = out.unique(subset=["entity", "known_at"], keep="last", maintain_order=True)
-    return out.with_columns(last=pl.col("known_at").max().over("entity")).sort("known_at")
+    spacing = pl.col("known_at").diff().median().over("entity")
+    return out.with_columns(seen=pl.col("known_at"), spacing=spacing).sort("known_at")
 
 
 def _cumulative(fields: pl.DataFrame, name: str) -> pl.DataFrame:
@@ -127,7 +130,9 @@ def _level(rows: pl.DataFrame, known: pl.DataFrame, by: str, at: str, name: str)
     indexed = rows.with_row_index("_row")
     query = indexed.select("_row", pl.col(by).alias("entity"), pl.col(at).alias("_at")).sort("_at")
     hit = query.join_asof(known, left_on="_at", right_on="known_at", by="entity", check_sortedness=False)
-    value = pl.when(pl.col("_at") <= pl.col("last")).then(pl.col("value")).otherwise(None)
+    age = pl.col("_at") - pl.col("seen")
+    current = (age < pl.col("spacing")) | (pl.col("spacing").is_null() & (age == pl.duration(nanoseconds=0)))
+    value = pl.when(current).then(pl.col("value")).otherwise(None)
     hit = hit.select("_row", value.alias(name))
     return indexed.join(hit, on="_row").drop("_row")
 
