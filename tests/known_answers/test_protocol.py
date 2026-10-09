@@ -4,7 +4,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from research_ci.kernel.judge import protocol as pr
+from research_ci.eval import protocol as pr
 from research_ci.kernel.time.clock import from_ns
 from research_ci.reference_plugins.costs import FlatCosts
 from research_ci.reference_plugins.labels import HoldingReturn, PairCarry

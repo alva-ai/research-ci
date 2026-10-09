@@ -70,6 +70,7 @@ layers = [
     "research_ci.stages",
     "research_ci.runner",
     "research_ci.store | research_ci.render",
+    "research_ci.eval",
     "research_ci.kernel",
     "research_ci.api",
 ]

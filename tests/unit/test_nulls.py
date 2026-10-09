@@ -3,8 +3,8 @@ from collections import Counter
 import numpy as np
 import polars as pl
 
-from research_ci.kernel.judge.nulls import Permutation
 from research_ci.kernel.time.clock import TIME
+from research_ci.kernel.verdict.permute import Permutation
 
 HOUR = 3_600 * 10**9
 

@@ -4,8 +4,6 @@ means."""
 
 import math
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -14,19 +12,12 @@ import polars as pl
 from research_ci.api.contract import span
 from research_ci.api.plugins import ConsumerResult, CostModel, LabelCase
 from research_ci.kernel.time.clock import lit_time
+from research_ci.kernel.verdict.check import Check, Status
 
-Status = Literal["pass", "fail", "warn", "skip"]
 Candidates = Callable[[pl.DataFrame, list[int]], pl.DataFrame]
 Values = Callable[[pl.DataFrame, pl.DataFrame, pd.Timedelta], pl.DataFrame]
 Run = Callable[[pl.DataFrame, pl.DataFrame | None], ConsumerResult]
 COMPONENTS = ("flow", "price", "fees")
-
-
-@dataclass(frozen=True)
-class Check:
-    name: str
-    status: Status
-    detail: str
 
 
 def truncated(fields: pl.DataFrame, t: int) -> pl.DataFrame:

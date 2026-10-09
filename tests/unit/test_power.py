@@ -5,8 +5,8 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from research_ci.kernel.judge import power as pw
 from research_ci.kernel.time.clock import TIME
+from research_ci.kernel.verdict import power as pw
 
 HOUR_NS = 3_600 * 10**9
 

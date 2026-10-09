@@ -3,8 +3,8 @@ to an independent source first, which says whether the data is faithful or wrong
 
 import polars as pl
 
-from research_ci.kernel.judge.protocol import Check
 from research_ci.kernel.time.clock import TIME
+from research_ci.kernel.verdict.check import Check
 
 ANOMALY_SCHEMA = {"kind": pl.String, "entity": pl.String, "field": pl.String, "start": TIME, "end": TIME}
 

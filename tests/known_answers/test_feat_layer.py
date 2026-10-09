@@ -17,7 +17,8 @@ QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor
 
 CRITERIA = """
 from research_ci.api import Criterion
-from research_ci.reference_plugins.stats import rank_ic, without_top
+from research_ci.eval.statistics import rank_ic
+from research_ci.eval.structure import without_top
 
 
 def rest(table):

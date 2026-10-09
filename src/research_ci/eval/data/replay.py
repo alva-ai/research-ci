@@ -9,9 +9,9 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.kernel.checks.baseline import events
-from research_ci.kernel.judge.protocol import Check
+from research_ci.eval.data.baseline import events
 from research_ci.kernel.time.clock import from_ns, lit_time
+from research_ci.kernel.verdict.check import Check
 
 Fetch = Callable[[int, list[str]], pl.DataFrame]
 KEY = ["entity", "field", "event_time", "vintage"]

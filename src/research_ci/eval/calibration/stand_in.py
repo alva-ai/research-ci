@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
-from research_ci.kernel.judge.verdict import Evaluate, blocks, per_t, with_scores
+from research_ci.kernel.verdict.judge import Evaluate, blocks, per_t, with_scores
 
 Z_BETA = 0.84
 

@@ -8,7 +8,7 @@ from typing import Literal
 
 import polars as pl
 
-from research_ci.kernel.checks.baseline import first_vintages
+from research_ci.eval.data.baseline import first_vintages
 from research_ci.kernel.time.clock import TIME
 
 

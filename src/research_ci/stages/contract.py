@@ -31,11 +31,11 @@ from research_ci.api.contract import (
     span,
 )
 from research_ci.api.plugins import ConsumerPlugin, ConsumerResult, CostModel, LabelPlugin, TargetPlugin, UniversePlugin
+from research_ci.eval import protocol as pr
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
-from research_ci.kernel.judge import power as pw
-from research_ci.kernel.judge import protocol as pr
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, time_series, to_ns
+from research_ci.kernel.verdict import power as pw
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.store import vault
 from research_ci.store.workspace import hash_file

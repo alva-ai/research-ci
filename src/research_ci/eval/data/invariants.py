@@ -5,8 +5,8 @@ the recent past, using only prices known by then."""
 
 import polars as pl
 
-from research_ci.kernel.judge.protocol import Check
 from research_ci.kernel.time.clock import TIME
+from research_ci.kernel.verdict.check import Check
 
 
 def hedged_legs(

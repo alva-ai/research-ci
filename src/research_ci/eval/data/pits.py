@@ -6,7 +6,7 @@ from collections.abc import Callable
 import numpy as np
 import polars as pl
 
-from research_ci.kernel.checks.baseline import events
+from research_ci.eval.data.baseline import events
 
 Plant = Callable[[pl.DataFrame, str, np.random.Generator], pl.DataFrame]
 NS = pl.Duration("ns")

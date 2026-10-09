@@ -8,8 +8,8 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.kernel.judge.power import block_means
 from research_ci.kernel.time.clock import TIME
+from research_ci.kernel.verdict.power import block_means
 
 Evaluate = Callable[[pl.DataFrame], pl.DataFrame]
 Index = Callable[[int], np.ndarray]

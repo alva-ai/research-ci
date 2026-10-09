@@ -2,8 +2,8 @@ import pandas as pd
 import polars as pl
 import pytest
 
+from research_ci.eval import protocol as pr
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
-from research_ci.kernel.judge import protocol as pr
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME, to_ns
 from research_ci.reference_plugins.costs import FlatCosts

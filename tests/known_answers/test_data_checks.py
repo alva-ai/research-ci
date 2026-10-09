@@ -6,9 +6,9 @@ import polars as pl
 import pytest
 
 from research_ci.api.contract import Use
-from research_ci.kernel.checks import invariants as inv
-from research_ci.kernel.checks.baseline import baseline
-from research_ci.kernel.checks.pits import BUILTIN
+from research_ci.eval.data import invariants as inv
+from research_ci.eval.data.baseline import baseline
+from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.tables import field_table
 from research_ci.stages.source import admit
 from toy import ToyCorrupt, ToyData, ToyHindsight, ToyNoAsOf, ToyPairs, ToySwapped, toy_fields

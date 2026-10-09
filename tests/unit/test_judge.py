@@ -1,11 +1,11 @@
 import numpy as np
 import polars as pl
 
-from research_ci.kernel.judge.calibrate import calibrate
-from research_ci.kernel.judge.nulls import Permutation
-from research_ci.kernel.judge.verdict import decide, judge
+from research_ci.eval.calibration import calibrate
+from research_ci.eval.statistics import quantile_spread, rank_ic
 from research_ci.kernel.time.clock import TIME
-from research_ci.reference_plugins.stats import quantile_spread, rank_ic
+from research_ci.kernel.verdict.judge import decide, judge
+from research_ci.kernel.verdict.permute import Permutation
 
 HOUR = 3_600 * 10**9
 
