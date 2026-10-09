@@ -125,14 +125,14 @@ def test_improving_an_existing_strategy_names_its_files_and_how_to_measure_chanc
 
 
 def test_criteria_and_nulls_are_validated() -> None:
-    Criterion("predictive", evaluate=lambda outputs, ctx: 0.0)
-    with pytest.raises(ValueError, match="limit"):
-        Criterion("drawdown", evaluate=lambda outputs, ctx: 0.0, kind="limit")
+    Criterion("predictive", evaluate=lambda table: table)
+    with pytest.raises(ValueError, match="combine"):
+        Criterion("predictive", evaluate=lambda table: table, combine="sum")
     with pytest.raises(ValueError, match="explanation"):
         Null(explains=" ", world=PermuteWithin(bucket_by="time"))
     with pytest.raises(ValueError, match="20"):
         Null(explains="chance", world=PermuteWithin(bucket_by="time"), reps=5)
-    ok = types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda o, c: 0.0)])
+    ok = types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda table: table)])
     assert [c.name for c in criteria_of(ok)] == ["a"]
     with pytest.raises(ValueError, match="unique"):
-        criteria_of(types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda o, c: 0.0)] * 2))
+        criteria_of(types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda table: table)] * 2))

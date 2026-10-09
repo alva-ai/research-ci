@@ -18,6 +18,7 @@ YEAR_DAYS = 365.0
 
 
 def z_need(n_trials: int, z_base: float = Z_BASE) -> float:
+    """The z a criterion needs on the ``n``-th submission of a layer; it grows like the best of ``n`` z scores."""
     return z_base * math.sqrt(1 + math.log(max(n_trials, 1)))
 
 
