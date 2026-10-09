@@ -27,7 +27,7 @@ from research_ci.api.nulls import PermuteWithin, nulls_of
 from research_ci.api.plugins import ConsumerPlugin, ConsumerResult, CostModel, LabelPlugin, TargetPlugin
 from research_ci.api.study import TABLE_KEYS, Criterion, criteria_of
 from research_ci.eval import protocol as pr
-from research_ci.eval.calibration import calibrate
+from research_ci.eval.calibration.stand_in import calibrate
 from research_ci.kernel.hashing import hash_frame
 from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw

@@ -1,8 +1,5 @@
 import json
 import os
-import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,29 +7,21 @@ from typing import Annotated, Any
 import typer
 
 from research_ci import __version__
-from research_ci.api.contract import ContractError
-from research_ci.render.card import card_id
-from research_ci.store.ledger import LedgerError
-from research_ci.workflow.commands import CONTRACT_FILE, DATA_TEXT, FEAT_TEXT, Approval, Idea, find_ideas
+from research_ci.cli import common
+from research_ci.cli.contract import contract_app
+from research_ci.cli.data import data_app, source_app
+from research_ci.cli.feat import feat_app
+from research_ci.render.common import card_id
+from research_ci.workflow.base import CONTRACT_FILE, Approval, find_ideas
+from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import WorkflowError
 from research_ci.workflow.templates import TEMPLATES
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
-contract_app = typer.Typer(no_args_is_help=True, help="Work on the contract.")
 app.add_typer(contract_app, name="contract")
-data_app = typer.Typer(no_args_is_help=True, help="Check the data against the contract.")
 app.add_typer(data_app, name="data")
-source_app = typer.Typer(no_args_is_help=True, help="Admit a data source, once for every idea that uses it.")
 app.add_typer(source_app, name="source")
-feat_app = typer.Typer(no_args_is_help=True, help="Judge features with criteria and null worlds fixed in advance.")
 app.add_typer(feat_app, name="feat")
-
-ERRORS = (WorkflowError, ContractError, LedgerError)
-IdeaDir = Annotated[Path, typer.Option("--idea", "-i", help="Idea directory.")]
-AsJson = Annotated[bool, typer.Option("--json", help="Machine-readable output.")]
-Card = Annotated[
-    str, typer.Option("--card", help="With --relayed: the id of the card the person was shown, from `card <id>`.")
-]
 
 
 @app.callback()
@@ -51,15 +40,15 @@ def init(
     template: Annotated[str, typer.Option("--template", "-t", help=f"One of: {', '.join(TEMPLATES)}.")],
 ) -> None:
     """Start an idea: write a contract skeleton and open its ledger."""
-    with _errors():
+    with common.errors():
         Idea.init(idea, template)
     typer.echo(f"created {idea} ({template}); edit {idea / CONTRACT_FILE}, then run `rci contract derive -i {idea}`")
 
 
 @app.command()
-def status(idea: IdeaDir = Path("."), as_json: AsJson = False) -> None:
+def status(idea: common.IdeaDir = Path("."), as_json: common.AsJson = False) -> None:
     """Where every stage of the idea stands."""
-    with _errors():
+    with common.errors():
         current = Idea(idea).status()
     if as_json:
         typer.echo(json.dumps(asdict(current), indent=2))
@@ -71,9 +60,9 @@ def status(idea: IdeaDir = Path("."), as_json: AsJson = False) -> None:
 
 
 @app.command("next")
-def next_(idea: IdeaDir = Path("."), as_json: AsJson = False) -> None:
+def next_(idea: common.IdeaDir = Path("."), as_json: common.AsJson = False) -> None:
     """What should happen next, and who should do it."""
-    with _errors():
+    with common.errors():
         actions = Idea(idea).next_actions()
     if as_json:
         typer.echo(json.dumps([asdict(a) for a in actions], indent=2))
@@ -87,7 +76,7 @@ def next_(idea: IdeaDir = Path("."), as_json: AsJson = False) -> None:
 @app.command()
 def inbox(
     root: Annotated[Path, typer.Argument(help="Directory holding ideas.")] = Path("."),
-    as_json: AsJson = False,
+    as_json: common.AsJson = False,
 ) -> None:
     """Everything waiting for a person, across ideas."""
     items: list[dict[str, Any]] = []
@@ -95,7 +84,7 @@ def inbox(
         where = os.path.relpath(path)
         try:
             items += [{"idea": where, **asdict(a)} for a in Idea(path).next_actions() if a.who == "human"]
-        except ERRORS as exc:
+        except common.ERRORS as exc:
             items.append(
                 {"idea": where, "who": "human", "stage": "", "kind": "error", "command": "", "reason": str(exc)}
             )
@@ -109,169 +98,17 @@ def inbox(
 
 
 @app.command()
-def verify(idea: IdeaDir = Path(".")) -> None:
+def verify(idea: common.IdeaDir = Path(".")) -> None:
     """Check the ledger's hash chain."""
-    with _errors():
+    with common.errors():
         count = Idea(idea).ledger.verify()
     typer.echo(f"ledger ok: {count} records")
-
-
-@contract_app.command("derive")
-def derive(idea: IdeaDir = Path(".")) -> None:
-    """Load contract.py, validate it, and register it for approval."""
-    with _errors():
-        _, card = Idea(idea).derive_contract()
-    typer.echo(card)
-    typer.echo(f"card {card_id(card)}")
-    typer.echo("registered; a person freezes it with `rci approve --stage contract`")
-
-
-@data_app.command("check")
-def data_check(
-    idea: IdeaDir = Path("."),
-    keep: Annotated[
-        list[str] | None, typer.Option("--keep", help="A treatment a person chose not to apply, by its name.")
-    ] = None,
-) -> None:
-    """Admit the data source if needed, check the data against the contract, and print the cards."""
-    with _errors():
-        target = Idea(idea)
-        spec, card = target.check_data(tuple(keep or ()))
-        if spec["source"]["status"] != "admitted":
-            source = target.source_card()
-            typer.echo(source)
-            typer.echo(f"card {card_id(source)}")
-    typer.echo(card)
-    typer.echo(f"card {card_id(card)}")
-    status = spec["verdict"]["status"]
-    if status == "blocked":
-        typer.echo("blocked; see the verdict above")
-    else:
-        typer.echo("checked; a person freezes it with `rci approve --stage data`")
-
-
-@data_app.command("show")
-def data_show(idea: IdeaDir = Path(".")) -> None:
-    """Print the last data card."""
-    with _errors():
-        target = Idea(idea)
-        path = target.workspace.path(DATA_TEXT)
-        if not path.exists():
-            raise WorkflowError("the data has not been checked; run `rci data check` first")
-    text = path.read_text().rstrip()
-    typer.echo(text)
-    typer.echo(f"card {card_id(text)}")
-
-
-@data_app.command("submit")
-def data_submit(idea: IdeaDir = Path(".")) -> None:
-    """Record the frozen data check as passed."""
-    with _errors():
-        state = Idea(idea).submit_data()
-    typer.echo(f"data {state}")
-
-
-@feat_app.command("register")
-def feat_register(idea: IdeaDir = Path(".")) -> None:
-    """Load feat.py and nulls/feat.py, calibrate every criterion in every world, and print the method card."""
-    with _errors():
-        spec, card = Idea(idea).register_feat()
-    typer.echo(card)
-    typer.echo(f"card {card_id(card)}")
-    if spec["verdict"]["status"] == "blocked":
-        typer.echo("blocked; see the verdict above")
-    else:
-        typer.echo("checked; a person freezes it with `rci approve --stage feat`")
-
-
-@feat_app.command("show")
-def feat_show(idea: IdeaDir = Path(".")) -> None:
-    """Print the method card and the result card of every submission."""
-    with _errors():
-        target = Idea(idea)
-        path = target.workspace.path(FEAT_TEXT)
-        if not path.exists():
-            raise WorkflowError("the feat method has not been registered; run `rci feat register` first")
-        results = target.results()
-    text = path.read_text().rstrip()
-    typer.echo(text)
-    typer.echo(f"card {card_id(text)}")
-    for result in results:
-        typer.echo(result)
-
-
-@feat_app.command("explore")
-def feat_explore(
-    path: Annotated[Path, typer.Argument(help="A file defining features(fields, candidates).")],
-    idea: IdeaDir = Path("."),
-) -> None:
-    """Run the checks a submission must pass on a file of features; nothing is judged or recorded."""
-    with _errors():
-        _, card = Idea(idea).explore_feat(path)
-    typer.echo(card)
-
-
-@feat_app.command("submit")
-def feat_submit(
-    path: Annotated[Path, typer.Argument(help="A file defining features(fields, candidates).")],
-    idea: IdeaDir = Path("."),
-) -> None:
-    """Judge a file of features with the approved method; this uses one submission of the budget."""
-    with _errors():
-        _, card, state = Idea(idea).submit_feat(path)
-    typer.echo(card)
-    typer.echo(f"feat {state}")
-
-
-@source_app.command("show")
-def source_show(idea: IdeaDir = Path(".")) -> None:
-    """Print the admission card of the idea's data source."""
-    with _errors():
-        text = Idea(idea).source_card()
-    typer.echo(text)
-    typer.echo(f"card {card_id(text)}")
-
-
-@source_app.command("approve")
-def source_approve(
-    idea: IdeaDir = Path("."),
-    relayed: Annotated[
-        str | None, typer.Option(help="An agent relays a person's approval; quote the person's words.")
-    ] = None,
-    auto: Annotated[bool, typer.Option(help="Fully automatic research: the agent admits the source.")] = False,
-    card: Card = "",
-) -> None:
-    """Admit the idea's data source, once for this plugin, options and code."""
-    who = _who(relayed, auto, card)
-    with _errors():
-        target = Idea(idea)
-        text = target.source_card()
-        typer.echo(text)
-        typer.echo(f"card {card_id(text)}")
-        if who.channel == "terminal":
-            typer.confirm("Admit this source?", abort=True)
-        record = target.approve_source(who)
-    typer.echo(f"admitted {record['stage']}: {record['payload']['approval']['note']}")
-
-
-def _who(relayed: str | None, auto: bool, card: str = "") -> Approval:
-    if relayed is not None and auto:
-        typer.echo("error: choose --relayed or --auto, not both", err=True)
-        raise typer.Exit(1)
-    if relayed is None and not auto and not _interactive():
-        typer.echo("error: approving needs a person at an interactive terminal (or --relayed / --auto)", err=True)
-        raise typer.Exit(1)
-    if relayed is not None:
-        return Approval(by="human", channel="relayed", words=relayed, card=card)
-    if auto:
-        return Approval(by="agent", channel="auto")
-    return Approval()
 
 
 @app.command()
 def approve(
     stage: Annotated[str, typer.Option("--stage", "-s", help="Stage to freeze.")],
-    idea: IdeaDir = Path("."),
+    idea: common.IdeaDir = Path("."),
     extend: Annotated[int | None, typer.Option(help="Add this many submissions to a paused layer instead.")] = None,
     relayed: Annotated[
         str | None, typer.Option(help="An agent relays a person's approval; quote the person's words.")
@@ -279,7 +116,7 @@ def approve(
     auto: Annotated[
         bool, typer.Option(help="Fully automatic research: the agent approves; results are capped.")
     ] = False,
-    card: Card = "",
+    card: common.Card = "",
 ) -> None:
     """Freeze a stage, or extend a paused layer's budget.
 
@@ -291,10 +128,10 @@ def approve(
         typer.echo("error: choose --relayed or --auto, not both", err=True)
         raise typer.Exit(1)
     by_person = relayed is None and not auto
-    if by_person and not _interactive():
+    if by_person and not common.interactive():
         typer.echo("error: approve needs a person at an interactive terminal (or --relayed / --auto)", err=True)
         raise typer.Exit(1)
-    with _errors():
+    with common.errors():
         target = Idea(idea)
         if extend is not None:
             if not by_person:
@@ -332,16 +169,3 @@ def _render_preview(target: Idea, preview: dict[str, Any]) -> str:
     lines.append("  frozen dependencies:")
     lines += [f"    {k:<20} {v[:12] if len(v) == 64 else v}" for k, v in sorted(preview["deps"].items())]
     return "\n".join(lines)
-
-
-def _interactive() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
-@contextmanager
-def _errors() -> Iterator[None]:
-    try:
-        yield
-    except ERRORS as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc

@@ -5,10 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from research_ci.render.card import card_id
+from research_ci.render.common import card_id
 from research_ci.stages.contract import Settings
 from research_ci.stages.feat import FeatError, FeatSettings
-from research_ci.workflow.commands import Approval, Idea
+from research_ci.workflow.base import Approval
+from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
 from toy import consumer_contract, label_contract
 
@@ -17,8 +18,8 @@ QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor
 
 CRITERIA = """
 from research_ci.api import Criterion
-from research_ci.eval.statistics import rank_ic
-from research_ci.eval.structure import without_top
+from research_ci.eval.statistics.ic import rank_ic
+from research_ci.eval.structure.filters import without_top
 
 
 def rest(table):

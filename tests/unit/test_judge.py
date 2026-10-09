@@ -1,8 +1,9 @@
 import numpy as np
 import polars as pl
 
-from research_ci.eval.calibration import calibrate
-from research_ci.eval.statistics import quantile_spread, rank_ic
+from research_ci.eval.calibration.stand_in import calibrate
+from research_ci.eval.statistics.ic import rank_ic
+from research_ci.eval.statistics.spread import quantile_spread
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.judge import decide, judge
 from research_ci.kernel.verdict.permute import Permutation

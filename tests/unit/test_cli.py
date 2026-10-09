@@ -5,10 +5,10 @@ import pytest
 from typer.testing import CliRunner
 
 from research_ci import __version__
-from research_ci.cli import main
+from research_ci.cli import common
 from research_ci.cli.main import app
-from research_ci.render.card import card_id
-from research_ci.workflow.commands import Idea
+from research_ci.render.common import card_id
+from research_ci.workflow.idea import Idea
 from toy import label_contract
 
 CONTRACT = label_contract(budget=20)
@@ -29,7 +29,7 @@ def _card(idea: Path, stage: str) -> str:
 
 @pytest.fixture
 def at_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(main, "_interactive", lambda: True)
+    monkeypatch.setattr(common, "interactive", lambda: True)
 
 
 def test_version() -> None:

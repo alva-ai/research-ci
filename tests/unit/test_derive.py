@@ -6,7 +6,7 @@ from research_ci.runner import plugins
 from research_ci.runner.plugins import PluginError
 from research_ci.stages import contract as stage
 from research_ci.stages.contract import Settings
-from research_ci.workflow.commands import Idea
+from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import WorkflowError
 from toy import REGISTRY, FlippedFlow, consumer_contract, label_contract
 

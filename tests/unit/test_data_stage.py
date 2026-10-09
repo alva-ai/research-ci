@@ -2,13 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from research_ci.render.card import card_id
+from research_ci.render.common import card_id
 from research_ci.runner import plugins
 from research_ci.stages import data as data_stage
 from research_ci.stages.contract import Settings
 from research_ci.stages.data import DataSettings
 from research_ci.store import vault
-from research_ci.workflow.commands import Approval, Idea
+from research_ci.workflow.base import Approval
+from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
 from toy import REGISTRY, ToyHindsight, ToySwapped, label_contract
 

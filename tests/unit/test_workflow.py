@@ -3,9 +3,10 @@ from pathlib import Path
 import pytest
 
 from research_ci.api.contract import ContractError
-from research_ci.render.card import card_id
+from research_ci.render.common import card_id
 from research_ci.store.ledger import LedgerError
-from research_ci.workflow.commands import Approval, Idea, find_ideas
+from research_ci.workflow.base import Approval, find_ideas
+from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
 from toy import label_contract
 
