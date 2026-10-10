@@ -98,23 +98,21 @@ def _layer(s: StageStatus) -> Action:
         return Action(
             "agent", name, "register", f"rci {name} register", f"{s.note}; register again to start v{s.version + 1}"
         )
-    if state is State.REGISTERED:
-        return Action("challenger", name, "challenge", f"rci {name} challenge", "write the nulls and pitfalls")
-    if state is State.CHALLENGED:
-        reason = s.note or "calibrate: stand-ins must fail, planted signals must pass, mutants must be caught"
-        return Action("agent", name, "check", f"rci {name} check", reason)
+    if state in (State.REGISTERED, State.CHALLENGED):
+        reason = s.note or "register again: it reads the nulls and calibrates every criterion"
+        return Action("agent", name, "register", f"rci {name} register", reason)
     if state is State.CHECKED:
         return Action("human", name, "approve", f"rci approve --stage {name}", "review the tests and freeze them")
     if state is State.PAUSED:
         reason = f"all {s.budget} submissions used; extend the budget or drop the idea"
         return Action("human", name, "extend", f"rci approve --stage {name} --extend N", reason)
     if state is State.FROZEN:
-        return Action("agent", name, "submit", f"rci {name} submit", f"submit the research code ({left})")
+        return Action("agent", name, "submit", f"rci {name} submit <file>", f"submit the research code ({left})")
     if state is State.INSUFFICIENT:
         reason = f"the data cannot decide yet: wait for new data, submit other research code ({left}), or drop it"
         return Action("human", name, "decide", f"rci {name} show", reason)
     reason = f"{state}: {s.note}; " if s.note else f"{state}; "
-    return Action("agent", name, "submit", f"rci {name} submit", f"{reason}change the research code ({left})")
+    return Action("agent", name, "submit", f"rci {name} submit <file>", f"{reason}change the research code ({left})")
 
 
 def _checkpoint(s: StageStatus) -> Action:

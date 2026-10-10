@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import pandas as pd
+
 from research_ci.render.common import adder, bp, check_line, num, pct
 
 
@@ -32,7 +34,7 @@ def method_card(spec: dict[str, Any], idea: str, version: int, budget: int | Non
     for d in spec["decisive"]:
         add("decisive", *_decisive_method_lines(d))
     tables = [
-        f"{label}: " + " · ".join(f"{h} {v['times']} times" for h, v in by_h.items())
+        f"{label}: " + " · ".join(f"{h} {v['times']} times" for h, v in sorted(by_h.items(), key=_duration))
         for label, by_h in spec["tables"].items()
     ]
     stride = f"every {spec['stride']} decision times" if spec["stride"] > 1 else "every decision time"
@@ -51,6 +53,10 @@ def method_card(spec: dict[str, Any], idea: str, version: int, budget: int | Non
     add("verdict", v["status"].upper(), *v["notes"])
     out.append("-" * 100)
     return "\n".join(out)
+
+
+def _duration(item: tuple[str, Any]) -> pd.Timedelta:
+    return pd.Timedelta(item[0])
 
 
 def _calibration_row(r: dict[str, Any]) -> str:

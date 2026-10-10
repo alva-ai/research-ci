@@ -172,6 +172,8 @@ def test_every_alternative_needs_a_world(tmp_path: Path) -> None:
 def test_the_method_is_pinned_once_approved(tmp_path: Path) -> None:
     idea = _idea(tmp_path)
     idea.register_feat()
+    pinned = [r for r in idea.ledger.records() if r["kind"] == "register" and r["stage"] == "feat"][-1]
+    assert {"plugin:ref.mean", "plugin:ref.flat_costs"} <= set(pinned["payload"]["deps"])
     idea.approve("feat", approval=_relayed(idea, "feat"))
     (idea.root / "feat.py").write_text(CRITERIA + "\n# changed\n")
     with pytest.raises(WorkflowError, match="feat_file"):

@@ -106,16 +106,17 @@ def test_next_actions_walk_the_inner_loop(tmp_path: Path) -> None:
     _pass_data(idea)
     assert _who(idea) == [("agent", "feat", "register")]
     idea.register("feat")
-    assert _who(idea) == [("challenger", "feat", "challenge")]
+    assert _who(idea) == [("agent", "feat", "register")]
     idea.challenge("feat")
-    assert _who(idea) == [("agent", "feat", "check")]
     idea.check("feat", passed=False, note="the stand-in survived")
-    assert _who(idea) == [("agent", "feat", "check")]
+    assert _who(idea) == [("agent", "feat", "register")]
     assert "stand-in survived" in idea.next_actions()[0].reason
+    assert idea.next_actions()[0].command == "rci feat register"
     idea.check("feat", passed=True)
     assert _who(idea) == [("human", "feat", "approve")]
     idea.approve("feat")
     assert _who(idea) == [("agent", "feat", "submit")]
+    assert idea.next_actions()[0].command == "rci feat submit <file>"
     idea.submit("feat", S.PASSED)
     assert _who(idea) == [("agent", "signal", "register")]
 
