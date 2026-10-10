@@ -65,11 +65,11 @@ name = "layers"
 type = "layers"
 layers = [
     "research_ci.cli",
-    "research_ci.llm",
     "research_ci.workflow",
     "research_ci.stages",
     "research_ci.runner",
     "research_ci.store | research_ci.render",
+    "research_ci.eval",
     "research_ci.kernel",
     "research_ci.api",
 ]
@@ -85,7 +85,6 @@ forbidden_modules = [
     "research_ci.store",
     "research_ci.runner",
     "research_ci.render",
-    "research_ci.llm",
     "research_ci.cli",
 ]
 

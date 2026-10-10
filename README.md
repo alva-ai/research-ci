@@ -269,18 +269,20 @@ All templates end with the same checkpoints: seal, forward, capital, monitor. Th
 +------------------------------------------------------------------+
 | cli        the rci command                                       |
 +------------------------------------------------------------------+
-| llm        challenger, narration, summary audit (optional)       |
+| llm        challenger, narration, summary audit (planned)        |
 +------------------------------------------------------------------+
 | workflow   state machine, lineage, templates, next_actions       |
 +------------------------------------------------------------------+
-| stages     per-stage policies: contract derivation today         |
+| stages     per-stage policies: contract, source, data, feat      |
 +------------------------------------------------------------------+
 | runner     plugin loading and code hashes; child process (M4)    |
 +--------------------------------+---------------------------------+
 | store                          | render                          |
 | .rci/, ledger, freeze, vault   | cards from engine files         |
 +--------------------------------+---------------------------------+
-| kernel     time, holdout, checks, judge (pure functions, no I/O) |
+| eval       methods the engine executes, each with obligations    |
++------------------------------------------------------------------+
+| kernel     time, holdout, verdict (pure functions, no I/O)       |
 +------------------------------------------------------------------+
 | api        contract, plugin protocols, criteria, null worlds     |
 +------------------------------------------------------------------+
@@ -293,13 +295,14 @@ A layer may import only the layers below it; `store` and `render` do not import 
 | Package | Role | Status |
 | --- | --- | --- |
 | `api` | Building blocks for research code and plugins: `Contract` and its parts, plugin protocols, `Criterion` and null-world declarations. | Done |
-| `kernel` | Mechanisms, pure functions, no I/O: `time` (asof, stepper), `holdout` (tiers), `hashing`, `checks`, `judge` (protocol tests, power, shuffles, calibration, verdicts). | Done for contract, data, and feat |
+| `kernel` | What a verdict rests on, pure functions, no I/O: `time` (asof, stepper), `holdout` (tiers), `hashing`, `verdict` (the floor shuffle, z, GridMax, power, the decisive rule). | Done |
+| `eval` | The methods the engine executes, each with worked examples and properties checked on synthetic markets and sources: plugin protocol checks, data checks, statistics, structure, calibration. Grows; imports only `api` and `kernel`. | Done for contract, data, and feat |
 | `stages` | Policies, one file per stage: contract derivation, source admission, the data check, and the feat method and submissions today; signal and algo later. | Contract, data, feat done |
-| `workflow` | Lifecycle: inner state machine, outer dependency graph with STALE invalidation, templates, `next_actions`, approval provenance. | Done |
+| `workflow` | Lifecycle: inner state machine, outer dependency graph with STALE invalidation, templates, `next_actions`, approval provenance; one module of commands per stage. | Done |
 | `runner` | Plugin loading by entry point and plugin code hashes; later process isolation for research code. | Loading done; child process M4 |
 | `store` | All I/O: workspace `.rci/`, ledger and head anchors, freeze records, environment records, the content-hashed data vault. | Done |
 | `render` | Deterministic cards from engine files: Contract, Source, Data, Method, and Result cards; citation checks for summaries later. | Done for contract, data, and feat |
-| `llm` | Optional: challenger, card narration, summary audit. Never imported by the kernel or workflow. | Planned |
+| `llm` | Optional: challenger, card narration, summary audit. Never imported by the kernel or workflow. | Planned; no package yet |
 | `cli` | The `rci` command. | Partly done |
 | `reference_plugins` | Labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`. | Done |
 
@@ -372,8 +375,8 @@ npx markdownlint-cli2
 
 ```text
 src/research_ci/
-  api/  kernel/{time,holdout,checks,judge}/  stages/  workflow/
-  runner/  store/  render/  llm/  cli/  reference_plugins/
-tests/unit/  tests/known_answers/  tests/toy.py (toy plugins and broken variants)
+  api/  kernel/{time,holdout,verdict}/  eval/{protocol,data,statistics,structure,calibration}/
+  stages/  workflow/  runner/  store/  render/  cli/  reference_plugins/
+tests/<package>/  tests/incidents/ (real incidents)  tests/toy.py (toy plugins and broken variants)
 docs/design.md  docs/walkthroughs.md
 ```

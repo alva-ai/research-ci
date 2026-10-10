@@ -22,15 +22,15 @@ import polars as pl
 from research_ci.api.contract import Contract, ContractError, Use, as_use, span
 from research_ci.api.data import DataTest, Hedge, pits_of, tests_of
 from research_ci.api.plugins import CostModel, LabelPlugin, TargetPlugin
-from research_ci.kernel.checks import invariants as inv
-from research_ci.kernel.checks import treatments as tr
-from research_ci.kernel.checks.baseline import baseline
-from research_ci.kernel.checks.pits import BUILTIN
+from research_ci.eval.data import invariants as inv
+from research_ci.eval.data import treatments as tr
+from research_ci.eval.data.baseline import baseline
+from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
-from research_ci.kernel.judge import power as pw
-from research_ci.kernel.judge.protocol import Check
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
+from research_ci.kernel.verdict import power as pw
+from research_ci.kernel.verdict.check import Check
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import DEFAULT_TARGET, _norm_candidates, _per_t, _use_named
 from research_ci.stages.source import SourceSettings, admit, declared_levels

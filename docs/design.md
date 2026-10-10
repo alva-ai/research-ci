@@ -106,31 +106,45 @@ An agent may do anything else. It may not do three things: see sealed or forward
 
 ## Architecture
 
-> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), `kernel/judge` (protocol tests and power), `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; `kernel/checks` and the data stages in M3b; the feat policy and the rest of `kernel/judge` in M3c; the other layer policies later, the child process in M4, `llm` from M5.
+> **Status:** partly implemented: `kernel` (tables, time, hashing, holdout tiers), `store`, `workflow`, and part of `cli` in M1 and M2; `api` (the contract and plugin protocols), the plugin protocol checks and power, `stages/contract.py`, `runner` (plugin loading), the data vault, `render` (the ContractCard), and `reference_plugins` in M3a; the data checks and the data stages in M3b; the feat policy, the verdict rules, and the eval library with its obligations in M3c; the other layer policies later, the child process in M4, `llm` from M5.
 
 ### Packages
 
-The engine separates mechanism, policy, and lifecycle. The kernel holds mechanisms as pure functions, `stages` holds the rules of each layer, and `workflow` holds the lifecycle. A new rule for one layer changes a policy file, not the kernel.
+The engine separates trust, method, policy, and lifecycle. The kernel is small and holds only what a verdict's correctness rests on. `eval` is the library of methods the engine executes, and it grows: each method carries its own worked examples and properties. `stages` holds the rules of each layer: which methods are its floor and how they are put together. `workflow` holds the lifecycle. A new method is a new file in `eval`; a new rule for one layer changes a policy file; neither changes the kernel.
 
 | Package | Owns | Status |
 | --- | --- | --- |
 | `api` | The only package research code and plugins import: `Contract` and its parts (`api/contract.py`), the plugin protocols (`api/plugins.py`), and what a layer file declares: `Criterion` (`api/study.py`) and null worlds (`api/nulls.py`). | Contract and protocols in M3a; criteria and nulls run by feat from M3c |
-| `kernel` | Pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), `checks`, and `judge`: `protocol` (protocol tests), `power`, `nulls` (shuffles on the evaluation table), `calibrate`, and `verdict`. | `tables` and `time` in M1; `hashing` and `holdout` in M2; `judge/protocol` and `judge/power` in M3a; `checks` in M3b; the rest of `judge` in M3c |
+| `kernel` | What a verdict's correctness rests on, as pure functions without I/O: `tables` (FieldTable), `time` (`asof`, `step`, `check_leaks`, clock helpers), `hashing`, `holdout` (tiers), and `verdict`: the check record, the floor shuffle, z scores, GridMax, power, and the decisive rule. | `tables` and `time` in M1; `hashing` and `holdout` in M2; power in M3a; the rest of `verdict` in M3c |
+| `eval` | The engine's library of executable methods, which grows: `protocol` (checks every plugin must pass), `data` (baseline, replay, reconciliation, declared invariants, treatments, pits), `statistics` (rank IC, quantile spread), `structure` (filters), `calibration` (stand-ins and planted signals); `synthetic` builds markets and sources with known information and faults, and `obligations` runs each method's worked examples and properties on them (see [The eval library](#the-eval-library)). It may import only `api` and `kernel`. | Protocol checks in M3a; data checks in M3b; the rest, and every method's obligations, in M3c |
 | `stages` | One policy file per stage. Today `contract.py`, which derives the Spec, `source.py` and `data.py`, which admit a data source and check an idea's data, and `feat.py`, which registers a method and judges features. Later `signal.py`, `algo.py`, and one per checkpoint, `seal.py`, `forward.py`, `capital.py`, `monitor.py`: floor checks, floor null worlds, the calibration recipe, caps. | `contract.py` in M3a; `source.py` and `data.py` in M3b; `feat.py` in M3c; the others planned |
-| `workflow` | The state machine, lineage, templates, `next_actions`, approval provenance, and the commands that apply transitions. | Implemented (M2); approval provenance in M3a |
+| `workflow` | The state machine, lineage, templates, `next_actions`, approval provenance, and the commands that apply transitions: `base.py` holds what every stage shares, each stage adds its commands in a module of its own, and `idea.py` puts them together. | Implemented (M2); approval provenance in M3a; one module per stage in M3c |
 | `runner` | Plugin loading: builds each plugin from its entry point with the contract's options and hashes its code. Later, research code in a child process, with data exchanged as Arrow. | Plugin loading in M3a; child process planned (M4) |
 | `store` | All I/O: the `.rci/` workspace with atomic writes and a lock, the ledger with head anchors, freeze records, environment records, and the data vault, content-hashed snapshots under `$RCI_HOME/data/`. | Implemented (M2); vault in M3a |
-| `render` | Cards rendered deterministically from engine files: the ContractCard, SourceCard, DataCard, MethodCard, and ResultCard; later the other cards and citation checks for summaries. | ContractCard in M3a; data cards in M3b; feat cards in M3c; the rest planned |
-| `llm` | Optional: the challenger, card narration, summary audit. | Planned (M5 and later) |
+| `render` | Cards rendered deterministically from engine files, one module per stage: the ContractCard, SourceCard, DataCard, MethodCard, and ResultCard; later the other cards and citation checks for summaries. | ContractCard in M3a; data cards in M3b; feat cards in M3c; the rest planned |
+| `llm` | Optional: the challenger, card narration, summary audit. | Planned (M5 and later); no package yet |
 | `cli` | The `rci` command, a thin layer over `workflow`. | Partly implemented (M2 to M3c) |
-| `reference_plugins` | Generic plugins with no privileges: labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`; criteria helpers in `stats` (rank IC, quantile spread, leaving out the largest entities). Toy plugins on synthetic data, with deliberately broken variants, live in `tests/toy.py`. | Implemented (M3a) |
+| `reference_plugins` | Generic plugins with no privileges: labels `ref.return`, `ref.markout`, `ref.carry`; target `ref.mean`; cost model `ref.flat_costs`. Toy plugins on synthetic data, with deliberately broken variants, live in `tests/toy.py`. | Implemented (M3a) |
+
+### The eval library
+
+> **Status:** implemented (M3c) for the methods that exist: plugin protocol checks, data checks, statistics, structure, calibration.
+
+Like a proof assistant's library, `eval` grows without bound and is trusted only because every entry is checked. A method's module holds its implementation and its obligations, declared with `research_ci.api.methods`:
+
+- `CASES`: answers worked by hand, `Case(name, run, expect)`. Some run on one small table; others run on several synthetic sources and count, such as "a planted gap is caught on every one of ten sources".
+- `PROPERTIES`, for statistics: `Size` (on markets without information, it beats the floor world no more often than chance allows), `Power` (with a known rank IC it beats the floor world often enough), `Recovers` (its mean comes back as planted). They are judged the way a submission is: block means against the floor world, as a z score.
+
+`eval/synthetic.py` builds the inputs: markets (`Market`: entities in clusters and groups, fat tails, a known rank IC) and field tables (`Source`: an hourly price, settled flows known after a lag, revisions as second vintages). `tests/eval/test_obligations.py` finds every method under `eval/data`, `eval/statistics`, `eval/structure` and `eval/calibration`, requires worked examples, runs all obligations, and shows that they fail for a wrong method. Writing them found three bugs the toy tests had missed: the quantile spread took three of five candidates for the top two fifths, the baseline called the value after a one-hour spike a lasting drop, and a lasting move was flagged once per hour until the median caught up.
+
+`tests/incidents/` holds real incidents as small slices of public market data, each with the check that must keep catching it: candles dropped with hindsight around a jump (reconciliation) and a ticker reused for a new contract (baseline gaps).
 
 ### Import layers
 
 ```text
 cli                                  the rci command
  |
-llm                                  optional LLM code: challenger, narration, audit
+llm                                  optional LLM code: challenger, narration, audit (planned)
  |
 workflow                             state machine, lineage, templates, next_actions
  |
@@ -140,7 +154,9 @@ runner                               plugin loading and code hashes; later the c
  |
 store    render                      independent: neither imports the other
  |
-kernel                               pure mechanisms: no I/O, no LLM, no plugins
+eval                                 the methods the engine executes, with their obligations
+ |
+kernel                               what a verdict rests on: no I/O, no LLM, no plugins
  |
 api                                  building blocks and plugin protocols
 
@@ -156,7 +172,7 @@ The engine repository is a library and a CLI. It holds no ideas, no strategies, 
 ```text
 research-ci/                     the engine: library and CLI only
   src/research_ci/               packages above
-  tests/unit/, tests/known_answers/, tests/toy.py, tests/conformance/ (planned)
+  tests/<package>/, tests/incidents/, tests/toy.py
 
 <lab>/                           a lab repository, or any Python 3.11+ project
   pyproject.toml, uv.lock        research-ci pinned to a git SHA, a person commits that line;
@@ -558,7 +574,7 @@ For a consumer effect, derive also runs the baseline once and puts its result on
 
 ### The ContractCard
 
-`render/card.py` renders the card from the Spec with a fixed template, without any model. `rci contract derive` prints it, `rci approve --stage contract` prints it again before asking, and `.rci/contract-card.txt` keeps a copy. An abridged card for a label effect, with illustrative numbers:
+`render/contract.py` renders the card from the Spec with a fixed template, without any model. `rci contract derive` prints it, `rci approve --stage contract` prints it again before asking, and `.rci/contract-card.txt` keeps a copy. An abridged card for a label effect, with illustrative numbers:
 
 ```text
 ContractCard · carry · v1 · factor
@@ -611,7 +627,7 @@ Once per plugin, options, and code; every idea that uses the source reuses the r
 
 | Step | What the engine does | When it fails |
 | --- | --- | --- |
-| Baseline | Finite values, rows known no earlier than their event, long gaps, near-duplicate events, and, in the fields the plugin declares as levels (`levels = Levels(fields, factor, window, mask)`), jumps of `factor` or more that last over the next `window` events | Never by itself: what it flags goes to reconciliation first |
+| Baseline | Finite values, rows known no earlier than their event, long gaps, near-duplicate events, and, in the fields the plugin declares as levels (`levels = Levels(fields, factor, window, mask)`), moves of `factor` or more from the median of the last `window` events that persist over the next `window`, flagged where they start | Never by itself: what it flags goes to reconciliation first |
 | Replay | `fetch(as_of=T, entities=...)` at cut points the engine picks: inside every hole of the full output, a day before each week's newly appearing entities, and at random; each must equal the full fetch cut at `T` | The plugin built, repaired, or filtered rows with later information: it is not admitted, and no person can override that |
 | Reconciliation | The plugin's independent source (`ReferenceSource.reference`) answers a random sample of every field and every flagged anomaly; a gap must be empty at the source too, other anomalies must be there | Any disagreement; an anomaly the source confirms is faithful data and is never flagged again |
 | Canaries | A deletion made with hindsight must be caught by the replay; values altered on our side must be caught by the reconciliation | The checks did not bite on this data |
@@ -1129,7 +1145,7 @@ A pitfall that passes calibration (it is harmful, and the right test catches it)
 | VerdictCard | After each submission | The verdict, every criterion with its z or limit, the level and caps, preconditions, lineage |
 | CapitalCard | Before real money | Live results against the simulated range, the denominator (ideas and trials tried), capacity, hard requirements, known risks |
 
-Cards are rendered from engine files without an LLM. Today only the ContractCard exists: `render/card.py` renders it from the Spec (see [The ContractCard](#the-contractcard)), and `.rci/contract-card.txt` keeps a copy.
+Cards are rendered from engine files without an LLM. The ContractCard, SourceCard, DataCard, MethodCard and ResultCard exist; `render/contract.py` renders the first from the Spec (see [The ContractCard](#the-contractcard)), and `.rci/contract-card.txt` keeps a copy.
 
 Summaries are never verdicts. An optional `post_verdict` hook (later) may narrate a card, under two audits. First, every number in the summary must cite a field of the verdict file, and code checks each citation. Second, the qualitative statements that remain are reviewed by an independent reasoning LLM from a different model family, given only the output files. Neither audit can change the verdict. At a VerdictCard a person can kill the idea or ask for more work, but cannot turn a FAIL into a PASS; that would make verdicts irreproducible.
 
@@ -1434,7 +1450,7 @@ A decision at `t` may use what is known at `t` and fills at the price known at `
 
 ### Protocol tests
 
-The engine runs protocol tests on universe, label, and consumer plugins before it uses their output (`kernel/judge/protocol.py`, run by derive). They call the plugin only through callables, on data the engine chooses, and know nothing about what a field means. Each gives pass, fail, warn, or skip, and the ContractCard lists them; any failure blocks approval. The other plugins are checked less: a data plugin's rows must normalize as a FieldTable, a target must return `t` and `value`, and a cost model is reconciled with what a consumer charged (`fees_match`).
+The engine runs protocol tests on universe, label, and consumer plugins before it uses their output (`eval/protocol.py`, run by derive). They call the plugin only through callables, on data the engine chooses, and know nothing about what a field means. Each gives pass, fail, warn, or skip, and the ContractCard lists them; any failure blocks approval. The other plugins are checked less: a data plugin's rows must normalize as a FieldTable, a target must return `t` and `value`, and a cost model is reconciled with what a consumer charged (`fees_match`).
 
 | Plugin | Test | What it requires |
 | --- | --- | --- |
@@ -1452,7 +1468,7 @@ The engine runs protocol tests on universe, label, and consumer plugins before i
 
 The consumer pilot uses two more pieces of the same module: `perturb` applies the uninformative change (drop or shuffle a share of the candidates, the same choice for a whole block), and `branch_diff` measures a branch's extra net over its window and how much of the baseline's positions it still holds.
 
-The protocol tests are tested too. `tests/known_answers/test_protocol.py` holds them to known answers: for each flaw a test claims to catch, a correct toy plugin from `tests/toy.py` must pass and a toy plugin broken that way must fail (`adds_up` and `passthrough` are checked on correct plugins only). The broken ones are a universe that peeks at the next funding rate, a label that reads one horizon too far, a label whose only example has flat prices and no flows, a consumer that trades on future flows, one credited a period early, one that pays a flow at a decision time to the positions that decision opens, one that books the right flows one period late, one with the sign of the flow flipped, one that charges no fees, and one with random noise. A universe that needs the next bar to finish one is correct and must pass.
+The protocol tests are tested too. `tests/eval/test_protocol.py` holds them to known answers: for each flaw a test claims to catch, a correct toy plugin from `tests/toy.py` must pass and a toy plugin broken that way must fail (`adds_up` and `passthrough` are checked on correct plugins only). The broken ones are a universe that peeks at the next funding rate, a label that reads one horizon too far, a label whose only example has flat prices and no flows, a consumer that trades on future flows, one credited a period early, one that pays a flow at a decision time to the positions that decision opens, one that books the right flows one period late, one with the sign of the flow flipped, one that charges no fees, and one with random noise. A universe that needs the next bar to finish one is correct and must pass.
 
 ### Conformance tests
 
@@ -1654,7 +1670,7 @@ A proof assistant with a small trusted kernel and a very large library. Tactics 
 | --- | --- |
 | the kernel | the engine kernel |
 | tactics | the research agent and the challenger |
-| Mathlib | the plugin library and its pitfalls |
+| Mathlib | the eval library, each method with its worked examples and properties, and the plugins' pitfalls |
 | `sorry` | explore-grade results |
 | `#print axioms` | lineage |
 | citing only proven lemmas | downstream stages consuming only passed outputs at a sufficient level |
@@ -1683,7 +1699,7 @@ A reinforcement learning view makes the same point. The engine is an environment
 | M2 | `kernel/hashing`, `kernel/holdout` (tiers, and label builders that M3a moved into reference plugins), `store` (workspace, ledger with head anchors, freeze, environment), `workflow` (machine, templates, lineage, next, commands), `api/contract`, CLI `init`, `status`, `next`, `inbox`, `verify`, `contract derive`, `approve` (with `--extend`) | The state machine rejects out-of-order calls; a one-byte edit breaks ledger verification | Done |
 | M3a | The contract: `api/contract` (every field), `api/plugins` (protocols), `api/study` and `api/nulls` (declarations), `runner/plugins` (entry-point loading, code hashes), `store/vault`, `kernel/judge/protocol` and `kernel/judge/power`, `stages/contract` (derive), `render/card` (ContractCard), `reference_plugins`, approval provenance (`--relayed`, `--auto`) | Each deliberately broken toy plugin is caught by the protocol test that claims to catch it; approval refuses failed tests and anything changed since derive | Done |
 | M3b | The data layer: `stages/source` (admission by replay and reconciliation), `stages/data` (declared checks, idea tests and their calibration, treatments weighed by influence), `kernel/checks`, the SourceCard and DataCard | A source that repairs with hindsight is refused; a treatment that moves the decisive number is shown to a person | Done |
-| M3c | `kernel/judge` (shuffles on the evaluation table, z thresholds, GridMax, calibration, verdicts), the `feat` policy, the MethodCard and ResultCard, `rci feat register/explore/submit/show`, the INSUFFICIENT state | The `feat` layer runs end to end on the first real case | Done; evidence levels and caps follow |
+| M3c | `kernel/verdict` and `eval` (shuffles on the evaluation table, z thresholds, GridMax, calibration, every method's obligations, real incidents), the `feat` policy, the MethodCard and ResultCard, `rci feat register/explore/submit/show`, the INSUFFICIENT state | The `feat` layer runs end to end on the first real case | Done; evidence levels and caps follow |
 | M4 | `runner`: research code in a child process, data exchanged as Arrow | Verdict cards stay byte-identical when research code reseeds or mutates data | Planned |
 | M5 | First data plugin, consumer, minimal challenger | The plugins pass conformance | Planned |
 | M6 | Algo: execution simulator, fill models, randomized decisions, constraint criteria; a maker-taker case end to end | The cross-venue maker-taker case runs end to end | Planned |

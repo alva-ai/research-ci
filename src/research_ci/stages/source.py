@@ -16,12 +16,12 @@ import polars as pl
 from research_ci.api.contract import Use, span
 from research_ci.api.data import Levels
 from research_ci.api.plugins import REQUEST_COLUMNS, Reference
-from research_ci.kernel.checks import reconcile as rc
-from research_ci.kernel.checks.baseline import baseline, events
-from research_ci.kernel.checks.replay import Cut, cut_points, replay
-from research_ci.kernel.judge.protocol import Check
+from research_ci.eval.data import reconcile as rc
+from research_ci.eval.data.baseline import baseline, events
+from research_ci.eval.data.replay import Cut, cut_points, replay
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, lit_time, span_ns
+from research_ci.kernel.verdict.check import Check
 from research_ci.runner.plugins import code_hash
 
 
