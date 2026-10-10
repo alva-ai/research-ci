@@ -30,12 +30,11 @@ def test_block_standard_error_matches_theory_for_independent_values() -> None:
     assert pw.block_se(_values(2_000, 1.0), 10 * HOUR_NS) == pytest.approx(math.sqrt(0.1 / 200), rel=0.2)
 
 
-def test_power_needs_more_new_data_for_smaller_effects() -> None:
-    span, h = 1_000 * HOUR_NS, HOUR_NS
-    p = pw.power(0.01, span, h, min_effect=0.05)
+def test_the_detectable_gain_comes_from_the_noise_alone() -> None:
+    p = pw.power(0.01, 1_000 * HOUR_NS, HOUR_NS)
     assert p.blocks == 1_000
     assert p.mde == pytest.approx((pw.Z_BASE + pw.Z_BETA) * 0.01, rel=0.01)
-    assert pw.power(0.01, span, h, min_effect=0.025).forward_days > 3.5 * p.forward_days
+    assert math.isnan(pw.power(math.nan, 1_000 * HOUR_NS, HOUR_NS).mde)
 
 
 def test_noise_scaling_tells_whether_waiting_helps() -> None:

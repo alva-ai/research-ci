@@ -9,18 +9,16 @@ import typer
 from research_ci import __version__
 from research_ci.cli import common
 from research_ci.cli.contract import contract_app
-from research_ci.cli.data import data_app, source_app
+from research_ci.cli.data import data_app
 from research_ci.cli.feat import feat_app
 from research_ci.render.common import card_id
 from research_ci.workflow.base import CONTRACT_FILE, Approval, find_ideas
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import WorkflowError
-from research_ci.workflow.templates import TEMPLATES
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(contract_app, name="contract")
 app.add_typer(data_app, name="data")
-app.add_typer(source_app, name="source")
 app.add_typer(feat_app, name="feat")
 
 
@@ -37,12 +35,11 @@ def version() -> None:
 @app.command()
 def init(
     idea: Annotated[Path, typer.Argument(help="Directory of the new idea.")],
-    template: Annotated[str, typer.Option("--template", "-t", help=f"One of: {', '.join(TEMPLATES)}.")],
 ) -> None:
     """Start an idea: write a contract skeleton and open its ledger."""
     with common.errors():
-        Idea.init(idea, template)
-    typer.echo(f"created {idea} ({template}); edit {idea / CONTRACT_FILE}, then run `rci contract derive -i {idea}`")
+        Idea.init(idea)
+    typer.echo(f"created {idea}; edit {idea / CONTRACT_FILE}, then run `rci contract derive -i {idea}`")
 
 
 @app.command()
@@ -53,10 +50,10 @@ def status(idea: common.IdeaDir = Path("."), as_json: common.AsJson = False) -> 
     if as_json:
         typer.echo(json.dumps(asdict(current), indent=2))
         return
-    typer.echo(f"{current.idea} ({current.template})")
+    typer.echo(current.idea)
     for s in current.stages:
         trials = "" if s.budget is None else f"{s.trials}/{s.budget}"
-        typer.echo(f"  {s.stage:<9} {s.state:<11} v{s.version:<3} {trials:<7} {s.note}".rstrip())
+        typer.echo(f"  {s.stage:<9} {s.state:<7} v{s.version:<3} {trials:<7} {s.note}".rstrip())
 
 
 @app.command("next")
@@ -78,7 +75,7 @@ def inbox(
     root: Annotated[Path, typer.Argument(help="Directory holding ideas.")] = Path("."),
     as_json: common.AsJson = False,
 ) -> None:
-    """Everything waiting for a person, across ideas."""
+    """Everything waiting for a person, across ideas: results up for review and paused layers."""
     items: list[dict[str, Any]] = []
     for path in find_ideas(root):
         where = os.path.relpath(path)
@@ -107,7 +104,7 @@ def verify(idea: common.IdeaDir = Path(".")) -> None:
 
 @app.command()
 def approve(
-    stage: Annotated[str, typer.Option("--stage", "-s", help="Stage to freeze.")],
+    stage: Annotated[str, typer.Option("--stage", "-s", help="Stage whose result to approve.")],
     idea: common.IdeaDir = Path("."),
     extend: Annotated[int | None, typer.Option(help="Add this many submissions to a paused layer instead.")] = None,
     relayed: Annotated[
@@ -116,7 +113,7 @@ def approve(
     auto: Annotated[bool, typer.Option(help="Fully automatic research: the agent approves.")] = False,
     card: common.Card = "",
 ) -> None:
-    """Freeze a stage, or extend a paused layer's budget.
+    """Approve the result a stage has up for review, which freezes it, or extend a paused layer's budget.
 
     A person at a terminal approves by default. In semi-automatic research an agent stops, asks the person, and
     relays the answer with --relayed; in fully automatic research the agent approves with --auto. The ledger records
@@ -144,11 +141,12 @@ def approve(
         preview = target.preview_approval(stage)
         typer.echo(_render_preview(target, preview))
         if by_person:
-            typer.confirm(f"Freeze {stage} v{preview['version']}?", abort=True)
+            typer.confirm(f"Approve {stage} v{preview['version']}?", abort=True)
         freeze = target.approve(stage, approval=who)
-    typer.echo(f"frozen {stage} v{preview['version']}: {freeze.hash[:12]} · {who.describe()}")
+        state = target.status().stage(stage).state
+    typer.echo(f"{stage} v{preview['version']} {state}: freeze {freeze.hash[:12]} · {who.describe()}")
     paths = f"{os.path.relpath(target.workspace.root)} {os.path.relpath(target.root / CONTRACT_FILE)}"
-    typer.echo(f"to keep it in git: git add {paths} && git commit -m 'rci: freeze {stage} of {target.root.name}'")
+    typer.echo(f"to keep it in git: git add {paths} && git commit -m 'rci: approve {stage} of {target.root.name}'")
 
 
 def _extend(target: Idea, stage: str, trials: int) -> None:
@@ -157,7 +155,7 @@ def _extend(target: Idea, stage: str, trials: int) -> None:
         raise WorkflowError(f"{stage!r} is not a stage of this idea")
     typer.echo(f"{stage} is {current.state}; {current.trials} of {current.budget} submissions used")
     typer.confirm(f"Add {trials} submissions to {stage}?", abort=True)
-    typer.echo(f"{stage} is {target.extend(stage, trials)} again")
+    typer.echo(f"{stage} is {target.extend(stage, trials)}")
 
 
 def _render_preview(target: Idea, preview: dict[str, Any]) -> str:
@@ -165,5 +163,6 @@ def _render_preview(target: Idea, preview: dict[str, Any]) -> str:
     if "card" in preview:
         lines += [preview["card"], f"card {card_id(preview['card'])}"]
     lines.append("  frozen dependencies:")
-    lines += [f"    {k:<20} {v[:12] if len(v) == 64 else v}" for k, v in sorted(preview["deps"].items())]
+    width = max(map(len, preview["deps"]), default=0)
+    lines += [f"    {k:<{width}} {v[:12] if len(v) == 64 else v}" for k, v in sorted(preview["deps"].items())]
     return "\n".join(lines)

@@ -1,17 +1,22 @@
 """Checking an idea's data against its approved contract.
 
-The source must be admitted first. Then the engine checks what the contract and its plugins declare (freshness, legs
-of one asset, the grade of every field), runs the idea's own tests if it has any, and turns every problem into a
-treatment that is applied by default. Each treatment's influence on the contract's decisive number, in units of the
-smallest effect the data can detect (MDE), decides whether a person must look: below the threshold it is applied and
-logged. Only differences are reported, never the level of the number.
+The source must pass admission (fidelity: the rows are what the venue reported), which runs once per source and is
+approved with the first idea's data, and the decisive number may read only fields an independent source verified, or
+the history is explore-grade. Then the engine runs its default checks
+(``defaults/data.py``; fitness: whether faithful rows can be used for research) and the idea's own tests, if it has
+any, and every problem they find becomes a treatment that is applied by default, or an item a person decides. Each
+treatment's influence on the contract's decisive number, in units of the smallest effect the data can detect (MDE),
+decides whether a person must look: below the threshold it is applied and logged. A treatment that changes identities
+(a split) is weighed against the untreated data, and every other one on top of the splits that are applied. Only
+differences are reported, never the level of the number; the power after is computed again on the treated data.
 """
 
 import importlib.util
 import math
 import time
-from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field, replace
+from functools import reduce
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +25,10 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import Contract, ContractError, Use, as_use, span
-from research_ci.api.data import DataTest, Hedge, pits_of, tests_of
+from research_ci.api.data import DataTest, pits_of, tests_of
 from research_ci.api.plugins import CostModel, LabelPlugin, TargetPlugin
-from research_ci.eval.data import invariants as inv
+from research_ci.eval.data import influence as inf
 from research_ci.eval.data import treatments as tr
-from research_ci.eval.data.baseline import baseline
 from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
 from research_ci.kernel.tables import field_table
@@ -33,11 +37,16 @@ from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import DEFAULT_TARGET, _norm_candidates, _per_t, _use_named
-from research_ci.stages.source import SourceSettings, admit, declared_levels
+from research_ci.stages.defaults import data as defaults
+from research_ci.stages.source import SourceSettings, admit
 from research_ci.store import vault
 from research_ci.store.sources import Sources, source_key
 
-Stat = Callable[[pl.DataFrame, list[tr.Treatment]], dict[str, pl.DataFrame]]
+LEGS = ("entity", "long", "short")
+ALL = "all applied"
+SPLITS = "splits applied"
+RAW = ""
+PER_T = {"t": pl.Datetime("ns", "UTC"), "value": pl.Float64}
 
 
 class DataError(ContractError):
@@ -48,7 +57,6 @@ class DataError(ContractError):
 class DataSettings:
     source: SourceSettings = field(default_factory=SourceSettings)
     materiality: float = 0.5
-    stale_after: str = "2 days"
     seeds: int = 2
 
 
@@ -85,6 +93,9 @@ class _DataCheck:
         self.warnings: list[str] = []
         self.deps: dict[str, str] = {}
         self.spec: dict[str, Any] = {}
+        self.universe: Any = None
+        self.decisive: defaults.Decisive | None = None
+        self.inspect: list[str] = []
 
     def run(self) -> Checked:
         started = time.monotonic()
@@ -98,18 +109,18 @@ class _DataCheck:
         fields = self._explore(everything, digest)
         grades = source["grades"]
         cands = self._candidates(fields)
-        stat = self._stat(fields, cands)
-        treatments = self._treatments(fields, cands, source)
+        numbers = self._stat(fields, cands)
+        treatments = self._defaults(fields, cands, source)
         self.spec["tests"] = self._tests(fields, treatments)
         unknown = sorted(set(self.keep) - {t.name for t in treatments})
         if unknown:
             raise DataError(f"no treatment named {', '.join(map(repr, unknown))}; see the DataCard for the names")
         applied = [t for t in treatments if t.name not in self.keep]
         self.spec["kept"] = sorted(self.keep)
-        self._grades(fields, grades, stat)
-        self.spec["treatments"] = self._influence(stat, fields, treatments, applied)
-        self.spec["power"] = self._power(stat, fields, applied)
+        self._grades(fields, grades, numbers)
         panel = tr.apply_all(applied, fields)
+        self.spec["treatments"] = self._influence(numbers, fields, treatments, applied, panel)
+        self.spec["power"] = self._power(numbers)
         panel_hash, _ = vault.put(f"{use.name}.panel", panel)
         excluded = self._exclusions(cands, applied)
         exclusions_hash, _ = vault.put(f"{use.name}.exclusions", excluded)
@@ -148,16 +159,23 @@ class _DataCheck:
             "status": status,
             "failed": [c["name"] for c in spec["checks"] if c["status"] == "fail"],
             "approval": None if approved is None else approved["payload"]["approval"],
+            "code": spec["code"],
+            "fields": spec["fields"],
+            "entities": spec["entities"],
+            "rows": spec["rows"],
+            "checks": spec["checks"],
+            "reference": spec.get("reference", {}).get("note", ""),
         }
         return {"spec": spec, "status": status, "grades": spec["grades"]}
 
     def _explore(self, everything: pl.DataFrame, digest: str) -> pl.DataFrame:
-        latest = int(everything.select(pl.col("available_at").max().dt.epoch("ns")).item())
+        self.now = time.time_ns()
+        self.latest = latest = int(everything.select(pl.col("available_at").max().dt.epoch("ns")).item())
         self.explore_end = latest if self.c.explore_end == "latest" else to_ns(pd.Timestamp(self.c.explore_end))
         seal_end = to_ns(pd.Timestamp(self.c.seal_end)) if self.c.seal_end else None
         fields = visible(everything, Tier.EXPLORE, Tiers(self.explore_end, seal_end))
         self.start = int(fields.select(pl.col("available_at").min().dt.epoch("ns")).item())
-        age = (time.time_ns() - latest) / pw.DAY_NS
+        age = (self.now - latest) / pw.DAY_NS
         self.spec["data"] = {
             "source": as_use(self.c.data).name,
             "hash": digest,
@@ -167,10 +185,6 @@ class _DataCheck:
             "explore_end": _iso(self.explore_end),
             "age_days": round(age, 1),
         }
-        stale = age > span(self.s.stale_after).total_seconds() / 86_400
-        self.checks.append(Check("data is current", "warn" if stale else "pass", f"latest data is {age:.1f} days old"))
-        if stale:
-            self.warnings.append(f"the data source has nothing newer than {_iso(latest)}; collect live data first")
         return fields
 
     def _candidates(self, fields: pl.DataFrame) -> pl.DataFrame | None:
@@ -190,65 +204,43 @@ class _DataCheck:
     def _universe(self, fields: pl.DataFrame) -> pl.DataFrame:
         return _norm_candidates(self.universe.candidates(fields, [from_ns(t) for t in self.times]))
 
-    def _stat(self, fields: pl.DataFrame, cands: pl.DataFrame | None) -> Stat | None:
-        """The decisive numbers per horizon, as a function of treated data: every label effect's target per decision
-        time. Consumer effects are not measured here yet."""
-        effects = [e for e in self.c.decisive if e.on != "consumer"]
-        if cands is None or not effects:
-            if any(e.on == "consumer" for e in self.c.decisive):
-                self.warnings.append("influence on a consumer effect is not measured yet; treatments apply as listed")
+    def _stat(self, fields: pl.DataFrame, cands: pl.DataFrame | None) -> "_Decisive | None":
+        """The decisive numbers per horizon: every decisive effect's label rows, and its target per decision time."""
+        if cands is None:
             return None
         costs: CostModel = self._plugin(as_use(self.c.costs))
         plans = []
-        for effect in effects:
+        for effect in self.c.decisive:
             label = next(lab for lab in self.c.labels if lab.name == effect.on)
             values: LabelPlugin = self._plugin(as_use(label.use))
             assert self.c.universe is not None
             use = as_use(effect.target) if effect.target else Use(DEFAULT_TARGET, {"cluster": self.c.universe.clusters})
             target: TargetPlugin = self._plugin(use)
-            plans.append((effect.on, values, target, label.horizons))
+            plans += [_Plan(f"{effect.on} {h}", values, target, span(h)) for h in label.horizons]
+        numbers = _Decisive(fields, cands, self._universe, plans, costs)
+        self.decisive = defaults.Decisive(numbers.rows)
+        return numbers
 
-        def stat(f: pl.DataFrame, ts: list[tr.Treatment]) -> dict[str, pl.DataFrame]:
-            c = tr.apply_candidates(ts, self._universe(f) if f is not fields else cands)
-            out = {}
-            for on, values, target, horizons in plans:
-                for h in horizons:
-                    horizon = span(h)
-                    v = values.values(f, c, horizon).join(c, on=["t", "entity"], how="inner", suffix="_candidate")
-                    out[f"{on} {h}"] = _per_t(target.reduce(v, horizon, costs))
-            return out
-
-        return stat
-
-    def _treatments(self, fields: pl.DataFrame, cands: pl.DataFrame | None, source: dict[str, Any]) -> list[Any]:
+    def _defaults(self, fields: pl.DataFrame, cands: pl.DataFrame | None, source: dict[str, Any]) -> list[Any]:
+        seen = defaults.Seen(
+            contract=self.c,
+            fields=fields,
+            candidates=cands,
+            source=self.source_plugin,
+            universe=self.universe,
+            admission=source["spec"],
+            latest=self.latest,
+            now=self.now,
+            decisive=self.decisive,
+        )
         out: list[tr.Treatment] = []
-        _, anomalies = baseline(fields, *declared_levels(self.source_plugin))
-        shifts = anomalies.filter(pl.col("kind") == "shift")
-        unconfirmed = shifts.join(_confirmed(source["spec"]), on=["entity", "field", "end"], how="anti")
-        if unconfirmed.height:
-            around = span_ns(span(self.source_plugin.levels.mask))
-            reason = f"{unconfirmed.height} level shifts the independent source did not confirm"
-            out.append(tr.mask_windows("mask unconfirmed level shifts", reason, unconfirmed, around, fields))
-        if shifts.height > unconfirmed.height:
-            self.checks.append(
-                Check("level shifts", "pass", f"{shifts.height - unconfirmed.height} confirmed by the source; kept")
-            )
-        hedge = getattr(self.universe, "hedge", None) if cands is not None else None
-        if hedge is not None and not isinstance(hedge, Hedge):
-            raise TypeError("a universe plugin's hedge must be an research_ci.api.Hedge")
-        if cands is not None and hedge is not None and {"long", "short"} <= set(cands.columns):
-            assert self.c.universe is not None
-            keep = (self.c.universe.clusters,) if self.c.universe.clusters in cands.columns else ()
-            h = hedge
-            legs = inv.hedged_legs(
-                cands, fields, h.price, h.max_ratio, h.min_corr, h.window, h.min_obs, h.min_move, keep
-            )
-            by = keep[0] if keep else "pair"
-            self.checks.append(inv.hedge_check(legs, h.price, h.max_ratio, h.min_corr, by))
-            bad = legs.filter(~pl.col("ok"))
-            if bad.height:
-                reason = f"{bad.height:,} candidate rows whose legs do not trade as one asset"
-                out.append(tr.drop_candidates("hedge guard at each decision time", reason, bad))
+        for check in defaults.CHECKS:
+            found = check(replace(seen, prior=tuple(t for t in out if t.name not in self.keep)))
+            self.checks += found.checks
+            self.warnings += found.warnings
+            self.inspect += found.decide
+            self.spec.update(found.shown)
+            out += found.treatments
         return out
 
     def _tests(self, fields: pl.DataFrame, treatments: list[tr.Treatment]) -> list[dict[str, Any]]:
@@ -272,15 +264,17 @@ class _DataCheck:
             out.append(row)
         return out
 
-    def _grades(self, fields: pl.DataFrame, grades: dict[str, str], stat: Stat | None) -> None:
+    def _grades(self, fields: pl.DataFrame, grades: dict[str, str], numbers: "_Decisive | None") -> None:
         present = sorted(fields["field"].unique().to_list())
         self.spec["grades"] = {f: grades.get(f, "unverified") for f in present}
         weak = [f for f in present if self.spec["grades"][f] != "verified"]
         if not weak:
             self.checks.append(Check("field grades", "pass", "every field agrees with an independent source"))
             return
-        base = stat(fields, []) if stat is not None else None
-        used = [f for f in weak if stat is None or _moves(stat, base, fields.filter(pl.col("field") != f))]
+        if numbers is None:
+            used = weak
+        else:
+            used = [f for f in weak if _moves(numbers.recompute, numbers.base(), fields.filter(pl.col("field") != f))]
         self.spec["capped_by"] = used
         if used:
             self.checks.append(
@@ -292,12 +286,20 @@ class _DataCheck:
             self.checks.append(Check("field grades", "pass", f"unverified fields are not read: {', '.join(weak)}"))
 
     def _influence(
-        self, stat: Stat | None, fields: pl.DataFrame, ts: list[tr.Treatment], applied: list[tr.Treatment]
+        self,
+        numbers: "_Decisive | None",
+        fields: pl.DataFrame,
+        ts: list[tr.Treatment],
+        applied: list[tr.Treatment],
+        panel: pl.DataFrame,
     ) -> list[dict[str, Any]]:
-        """Each treatment's influence, and that of the ones applied together; kept treatments are measured too."""
-        rows = []
+        """Each treatment's influence, and that of the ones applied together; kept treatments are measured too. A
+        split is weighed against the untreated data, and every other treatment on top of the splits that are applied:
+        a series the split renames is not the other treatment's doing. These numbers per decision time come from one
+        stacked frame, and every gap from one group_by. The ones applied together are computed again on the treated
+        data ``panel``, labels and all; that gives the power after."""
         kept = set(self.keep)
-        if stat is None:
+        if numbers is None:
             for t in self.spec["tests"]:
                 t["status"] = "not calibrated"
             return [
@@ -311,42 +313,56 @@ class _DataCheck:
                 }
                 for t in ts
             ]
-        self.base = stat(fields, [])
-        self.after = stat(tr.apply_all(applied, fields), applied) if applied else self.base
+        splits = [t for t in applied if _renames_rows(t)]
+        sets = {t.name: [t] if _renames_rows(t) else [*splits, t] for t in ts}
+        if len(splits) > 1:
+            sets[SPLITS] = splits
+        on_top = SPLITS if len(splits) > 1 else splits[0].name if splits else RAW
+        against = {t.name: RAW if _renames_rows(t) else on_top for t in ts}
+        frames = [numbers.base_frame().select(pl.lit(RAW).alias("set"), "key", "t", "value"), numbers.per_t(sets)]
+        numbers.tables.clear()
+        self.base = numbers.base()
+        self.after = numbers.recompute(panel, applied) if applied else self.base
+        together = len(applied) > 1 or bool(applied and kept)
+        if together:
+            frames.append(_stacked(ALL, self.after))
+            against[ALL] = RAW
         width = self.explore_end - self.start
         self.mde_before = {k: _mde(v, k, width) for k, v in self.base.items()}
         self.mde_after = {k: _mde(v, k, width) for k, v in self.after.items()}
         self.mde = {k: _smaller(self.mde_before[k], self.mde_after.get(k, math.nan)) for k in self.base}
+        gaps = _gaps(pl.concat(frames), against)
+        rows = []
         for t in ts:
             head = {"name": t.name, "on": t.on, "reason": t.reason, "rows": t.rows, "kept": t.name in kept}
-            rows.append(head | self._shift(stat, fields, [t]))
-        if len(applied) > 1 or (applied and kept):
-            together = self._shift(stat, fields, applied, self.after)
-            rows.append({"name": "all applied", "on": "both", "reason": "", "rows": 0, "kept": False} | together)
+            rows.append(head | self._shift(gaps, t.name))
+        if together:
+            rows.append({"name": ALL, "on": "both", "reason": "", "rows": 0, "kept": False} | self._shift(gaps, ALL))
         for t in self.tests:
-            self._calibrate(t, stat, fields)
+            self._calibrate(t, numbers, fields)
         return rows
 
-    def _shift(
-        self, stat: Stat, fields: pl.DataFrame, ts: list[tr.Treatment], after: dict[str, pl.DataFrame] | None = None
-    ) -> dict[str, Any]:
-        after = after if after is not None else stat(tr.apply_all(ts, fields), ts)
+    def _shift(self, gaps: pl.DataFrame, name: str) -> dict[str, Any]:
+        found = dict(gaps.filter(pl.col("set") == name).select("key", "gap").iter_rows())
         out = {}
-        for k, base in self.base.items():
-            d = _mean_gap(base, after.get(k))
+        for k in self.base:
+            d = found.get(k, math.nan)
             out[k] = {"bp": abs(d) * 1e4, "mde": abs(d) / self.mde[k] if self.mde[k] else math.nan}
-        largest = max((v["mde"] for v in out.values() if math.isfinite(v["mde"])), default=math.nan)
+            if math.isinf(d):
+                out[k]["unbounded"] = True
+        largest = max((v["mde"] for v in out.values() if not math.isnan(v["mde"])), default=math.nan)
         return {"influence": out, "largest": largest}
 
-    def _calibrate(self, test: DataTest, stat: Stat, fields: pl.DataFrame) -> None:
+    def _calibrate(self, test: DataTest, numbers: "_Decisive", fields: pl.DataFrame) -> None:
         """Every pit a test claims to cover, planted in clean copies: those that move the decisive number by the
-        threshold or more must be flagged."""
+        threshold or more must be flagged. Each pit changes the data in its own way, so the numbers are computed again
+        for each."""
         flagged = set(test.check(fields)["entity"].unique().to_list())
         clean = fields.filter(~pl.col("entity").is_in(sorted(flagged)))
-        base = stat(clean, [])
+        base = numbers.recompute(clean)
         results = []
         for category, name in test.covers:
-            plants = [(f"built-in {category}", BUILTIN[category])] if category in BUILTIN else []
+            plants = [(f"built-in {category}", BUILTIN[category])] if category in defaults.PITS else []
             plants += [
                 (f"pit {p.category}: {p.note}" if p.note else f"pit {p.category}", p.plant)
                 for p in self.pits
@@ -365,10 +381,8 @@ class _DataCheck:
                             {"covers": [category, name], "pit": label, "status": "no target", "note": str(exc)}
                         )
                         continue
-                    harm = max(
-                        (abs(_mean_gap(base[k], v)) / self.mde[k] for k, v in stat(mutated, []).items() if self.mde[k]),
-                        default=0.0,
-                    )
+                    moved = numbers.recompute(mutated).items()
+                    harm = max((abs(_mean_gap(base[k], v)) / self.mde[k] for k, v in moved if self.mde[k]), default=0.0)
                     caught = test.check(mutated).height > 0
                     status = "caught" if caught else ("missed" if harm >= self.s.materiality else "harmless")
                     results.append(
@@ -380,27 +394,24 @@ class _DataCheck:
                 bad = [x for x in results if x["status"] in ("missed", "no pit")]
                 r["status"] = "returned" if bad else "holds"
 
-    def _power(self, stat: Stat | None, fields: pl.DataFrame, ts: list[tr.Treatment]) -> list[dict[str, Any]]:
-        if stat is None:
+    def _power(self, numbers: "_Decisive | None") -> list[dict[str, Any]]:
+        if numbers is None:
             return []
         after = self.after
         width = self.explore_end - self.start
         rows = []
         for effect in self.c.decisive:
-            if effect.on == "consumer":
-                continue
             label = next(lab for lab in self.c.labels if lab.name == effect.on)
             for h in label.horizons:
                 k, hn = f"{effect.on} {h}", span_ns(span(h))
-                before = pw.power(pw.block_se(self.base[k], hn), width, hn, effect.at_least)
-                now = pw.power(pw.block_se(after[k], hn), width, hn, effect.at_least)
+                before = pw.power(_se(self.base[k], hn), width, hn)
+                now = pw.power(_se(after[k], hn), width, hn)
                 rows.append(
                     {
                         "on": effect.on,
                         "horizon": h,
                         "mde_before": before.mde,
                         "mde": now.mde,
-                        "forward_days": now.forward_days,
                         "decisions": after[k].height,
                     }
                 )
@@ -418,8 +429,6 @@ class _DataCheck:
         status = self.spec["source"]["status"]
         if status == "not admitted":
             notes.append(f"source {self.spec['source']['plugin']} not admitted: fix the plugin and check again")
-        elif status == "waiting":
-            notes.append(f"source {self.spec['source']['plugin']} waits for a person: rci source approve")
         returned = [t["name"] for t in self.spec["tests"] if t.get("status") == "returned"]
         if returned:
             notes.append(f"tests returned: {', '.join(returned)} miss pits they claim to cover")
@@ -433,12 +442,211 @@ class _DataCheck:
         for t in self.spec["tests"]:
             if t["on_fail"] == "ask" and t["flagged"]:
                 decide.append(f"test {t['name']} flagged {t['flagged']} rows")
+        decide += self.inspect
         self.spec["decide"] = decide
         if notes:
             return {"status": "blocked", "notes": notes}
+        admits = [f"approving also admits {self.spec['source']['plugin']} for every idea"]
+        admits = admits if status == "waiting" else []
         if decide:
-            return {"status": "decide", "notes": ["a person decides; approving applies every treatment listed"]}
-        return {"status": "ready", "notes": ["approving freezes the treated data; feat reads only that"]}
+            return {
+                "status": "decide",
+                "notes": ["a person decides; approving applies every treatment listed", *admits],
+            }
+        return {"status": "ready", "notes": ["approving freezes the treated data; feat reads only that", *admits]}
+
+
+@dataclass(frozen=True)
+class _Plan:
+    key: str
+    values: LabelPlugin
+    target: TargetPlugin
+    horizon: pd.Timedelta
+
+
+@dataclass
+class _Table:
+    """Every key's label rows on one version of the data, the field table ``renames`` leave: the candidates with their
+    row (``_c``), the label columns of all keys stacked with the candidate row and the key (``_k``) and their own row
+    (``_r``), each key's label columns, and the label rows each treatment touches."""
+
+    renames: tuple[tr.Treatment, ...]
+    fields: pl.DataFrame
+    cands: pl.DataFrame
+    labels: pl.DataFrame
+    columns: list[list[str]]
+    hits: dict[str, pl.Series] = field(default_factory=dict)
+
+
+class _Decisive:
+    """The decisive numbers. Their label rows are computed once on the explore data and, when treatments rename rows
+    (a split), once more on the data those leave. A treatment that drops field rows or candidates leaves out the label
+    rows that read what it drops (``eval/data/influence.py``), so weighing it runs only the target again. ``recompute``
+    computes everything again, labels and all: for the treated data, and for changes no treatment describes, such as
+    a field left out or a planted pit."""
+
+    def __init__(
+        self,
+        fields: pl.DataFrame,
+        cands: pl.DataFrame,
+        universe: Callable[[pl.DataFrame], pl.DataFrame],
+        plans: list[_Plan],
+        costs: CostModel,
+    ) -> None:
+        self.fields, self.cands, self.universe, self.plans, self.costs = fields, cands, universe, plans, costs
+        self.keys = [p.key for p in plans]
+        self.key_table = pl.DataFrame(
+            {
+                "_k": list(range(len(plans))),
+                "key": self.keys,
+                "h_ns": [int(p.horizon.value) for p in plans],
+            },
+            schema={"_k": pl.UInt32, "key": pl.Enum(self.keys), "h_ns": pl.Int64},
+        )
+        self.tables: dict[tuple[str, ...], _Table] = {}
+        self._base: pl.DataFrame | None = None
+
+    def rows(self, ts: Sequence[tr.Treatment], columns: Sequence[str]) -> pl.DataFrame:
+        """Every key's label rows after ``ts``, stacked: ``key``, ``h_ns`` (the horizon in ns), ``t`` and ``columns``,
+        from the label or the candidates; text columns of the candidates come as categoricals."""
+        table = self._table(ts)
+        dropped = self._dropped(table, ts)
+        own = [c for c in columns if c in table.labels.columns]
+        theirs = [c for c in columns if c not in own and c != "t"]
+        labels = table.labels.select("_r", "_c", "_k", *own)
+        labels = labels.filter(~pl.col("_r").is_in(dropped.implode())) if dropped.len() else labels
+        text = [c for c in theirs if table.cands.schema[c] == pl.String]
+        cand = table.cands.select("t", *theirs).with_columns(pl.col(text).cast(pl.Categorical))
+        cand = cand.select(pl.all().gather(labels["_c"]))
+        k = self.key_table
+        out = (
+            labels.select("_k", *own)
+            .hstack(cand)
+            .with_columns(
+                key=pl.col("_k").replace_strict(k["_k"], k["key"], return_dtype=k.schema["key"]),
+                h_ns=pl.col("_k").replace_strict(k["_k"], k["h_ns"], return_dtype=pl.Int64),
+            )
+        )
+        return out.select("key", "h_ns", "t", *columns)
+
+    def base(self) -> dict[str, pl.DataFrame]:
+        return _by_key(self.base_frame(), self.keys)
+
+    def base_frame(self) -> pl.DataFrame:
+        if self._base is None:
+            self._base = self.per_t({RAW: []}).drop("set")
+        return self._base
+
+    def per_t(self, sets: Mapping[str, Sequence[tr.Treatment]]) -> pl.DataFrame:
+        """The number per decision time of every key after each named set of treatments, stacked: ``set``, ``key``,
+        ``t``, ``value``. The target runs once per set and key; the label rows come from the tables."""
+        out = [pl.DataFrame(schema={"set": pl.String, "key": pl.String, **PER_T})]
+        by_table: dict[tuple[str, ...], list[str]] = {}
+        for name, ts in sets.items():
+            by_table.setdefault(_renames(ts), []).append(name)
+        for names in by_table.values():
+            table = self._table(sets[names[0]])
+            dropped = {name: self._dropped(table, sets[name]) for name in names}
+            for k, plan in enumerate(self.plans):
+                joined = self._joined(table, k)
+                for name in names:
+                    d = dropped[name]
+                    rows = joined.filter(~pl.col("_r").is_in(d.implode())) if d.len() else joined
+                    v = _per_t(plan.target.reduce(rows.drop("_r"), plan.horizon, self.costs))
+                    out.append(v.select(pl.lit(name).alias("set"), pl.lit(plan.key).alias("key"), "t", "value"))
+        return pl.concat(out)
+
+    def recompute(self, f: pl.DataFrame, ts: Sequence[tr.Treatment] = ()) -> dict[str, pl.DataFrame]:
+        """The numbers on the field table ``f``, with the candidate treatments in ``ts`` applied."""
+        c = tr.apply_candidates(ts, self.universe(f))
+        return {
+            p.key: _per_t(
+                p.target.reduce(
+                    p.values.values(f, c, p.horizon).join(c, on=["t", "entity"], how="inner", suffix="_candidate"),
+                    p.horizon,
+                    self.costs,
+                )
+            )
+            for p in self.plans
+        }
+
+    def _table(self, ts: Sequence[tr.Treatment]) -> _Table:
+        renames = tuple(t for t in ts if _renames_rows(t))
+        name = tuple(t.name for t in renames)
+        if name not in self.tables:
+            f = tr.apply_all(renames, self.fields) if renames else self.fields
+            self.tables[name] = self._build(f, self.universe(f) if renames else self.cands, renames)
+        return self.tables[name]
+
+    def _build(self, f: pl.DataFrame, c: pl.DataFrame, renames: tuple[tr.Treatment, ...]) -> _Table:
+        indexed = c.with_row_index("_c")
+        index = indexed.select("t", "entity", "_c")
+        frames, columns = [], []
+        for k, plan in enumerate(self.plans):
+            v = plan.values.values(f, c, plan.horizon)
+            columns.append(v.columns)
+            frames.append(v.join(index, on=["t", "entity"]).drop("t", "entity").with_columns(_k=pl.lit(k, pl.UInt32)))
+        labels = pl.concat(frames, how="diagonal_relaxed").with_row_index("_r")
+        return _Table(renames, f, indexed, labels, columns)
+
+    def _joined(self, table: _Table, k: int) -> pl.DataFrame:
+        """One key's label rows joined with their candidates, as a target reads them, with the label row ``_r``."""
+        labels = table.labels.filter(pl.col("_k") == k)
+        columns = table.columns[k]
+        own = [c for c in columns if c not in ("t", "entity")]
+        theirs = [c for c in table.cands.columns if c not in ("t", "entity", "_c")]
+        cand = table.cands.select(pl.col("t", "entity", *theirs).gather(labels["_c"]))
+        cand = cand.rename({c: f"{c}_candidate" for c in theirs if c in own})
+        out = labels.select("_r", *own).hstack(cand)
+        return out.select("_r", *columns, *(c for c in cand.columns if c not in ("t", "entity")))
+
+    def _dropped(self, table: _Table, ts: Sequence[tr.Treatment]) -> pl.Series:
+        """The label rows of ``table`` that the treatments in ``ts`` that drop rows touch."""
+        drops = [t for t in ts if t.removed is not None]
+        self._touch(table, [t for t in drops if t.name not in table.hits])
+        parts = [table.hits[t.name] for t in drops]
+        return pl.concat(parts).unique() if parts else pl.Series("_r", [], dtype=pl.UInt32)
+
+    def _touch(self, table: _Table, ts: Sequence[tr.Treatment]) -> None:
+        if not ts:
+            return
+        found = [pl.DataFrame(schema={"treatment": pl.String, "_r": pl.UInt32})]
+        on_fields = [t for t in ts if t.on == "fields"]
+        if on_fields:
+            gone = pl.concat(
+                [
+                    _removed(t, self.fields).select(
+                        "entity", "field", "event_time", "available_at", treatment=pl.lit(t.name)
+                    )
+                    for t in on_fields
+                ]
+            )
+            spans = inf.spans(table.fields, reduce(lambda g, r: r.apply(g), table.renames, gone), by=["treatment"])
+            legs = [c for c in LEGS if c in table.cands.columns]
+            near = pl.any_horizontal(pl.col(c).is_in(spans["entity"].unique().implode()) for c in legs)
+            rows = table.cands.filter(near).select("_c", "t", *legs)
+            rows = table.labels.select("_r", "_c", "_k").join(rows, on="_c").join(self.key_table, on="_k")
+            found.append(inf.touched(rows, spans, legs, by=["treatment"]))
+        on_cands = [t for t in ts if t.on == "candidates"]
+        if on_cands:
+            gone = pl.concat([_removed(t, table.cands).select("_c", treatment=pl.lit(t.name)) for t in on_cands])
+            found.append(table.labels.select("_r", "_c").join(gone, on="_c").select("treatment", "_r"))
+        hits = pl.concat(found).partition_by("treatment", as_dict=True, include_key=False)
+        table.hits.update({t.name: hits[(t.name,)]["_r"] if (t.name,) in hits else found[0]["_r"] for t in ts})
+
+
+def _removed(t: tr.Treatment, table: pl.DataFrame) -> pl.DataFrame:
+    assert t.removed is not None
+    return t.removed(table)
+
+
+def _renames_rows(t: tr.Treatment) -> bool:
+    """A treatment that changes identities instead of dropping rows, such as a split."""
+    return t.on == "fields" and t.removed is None
+
+
+def _renames(ts: Sequence[tr.Treatment]) -> tuple[str, ...]:
+    return tuple(t.name for t in ts if _renames_rows(t))
 
 
 def current_data_deps(
@@ -460,13 +668,6 @@ def current_data_deps(
     return now
 
 
-def _confirmed(spec: dict[str, Any]) -> pl.DataFrame:
-    """Level shifts the independent source confirmed at admission: ``entity``, ``field``, ``end``."""
-    rows = spec.get("confirmed_shifts", [])
-    frame = pl.DataFrame(rows, schema={"entity": pl.String, "field": pl.String, "end": pl.String}, orient="row")
-    return frame.with_columns(pl.col("end").str.to_datetime(time_zone="UTC").cast(pl.Datetime("ns", "UTC")))
-
-
 def _layer_file(path: Path, read: Callable[[Any], list[Any]]) -> list[Any]:
     if not path.is_file():
         return []
@@ -481,12 +682,12 @@ def _layer_file(path: Path, read: Callable[[Any], list[Any]]) -> list[Any]:
         raise DataError(f"{path}: {exc}") from exc
 
 
-def _moves(stat: Stat, base: dict[str, pl.DataFrame] | None, without: pl.DataFrame) -> bool:
+def _moves(
+    numbers: Callable[[pl.DataFrame], dict[str, pl.DataFrame]], base: dict[str, pl.DataFrame], without: pl.DataFrame
+) -> bool:
     try:
-        other = stat(without, [])
+        other = numbers(without)
     except Exception:  # noqa: BLE001
-        return True
-    if base is None:
         return True
     for k, v in base.items():
         o = other.get(k)
@@ -506,10 +707,37 @@ def _mean_gap(base: pl.DataFrame, other: pl.DataFrame | None) -> float:
     return float((j["value_x"] - j["value"]).mean()) if j.height else math.nan  # type: ignore[arg-type]
 
 
+def _gaps(per_t: pl.DataFrame, against: Mapping[str, str]) -> pl.DataFrame:
+    """The mean gap per decision time between each set's number and that of the set it is measured ``against``, per
+    key, from the stacked numbers of all of them: ``set``, ``key``, ``gap``."""
+    pairs = pl.DataFrame(
+        {"set": list(against), "ref": list(against.values())}, schema={"set": pl.String, "ref": pl.String}
+    )
+    ref = per_t.rename({"set": "ref", "value": "value_ref"})
+    joined = per_t.join(pairs, on="set").join(ref, on=["ref", "key", "t"], how="inner")
+    return joined.group_by("set", "key").agg((pl.col("value") - pl.col("value_ref")).mean().alias("gap"))
+
+
+def _stacked(name: str, by_key: Mapping[str, pl.DataFrame]) -> pl.DataFrame:
+    return pl.concat(
+        [v.select(pl.lit(name).alias("set"), pl.lit(k).alias("key"), "t", "value") for k, v in by_key.items()]
+    )
+
+
+def _by_key(per_t: pl.DataFrame, keys: Sequence[str]) -> dict[str, pl.DataFrame]:
+    parts = per_t.partition_by("key", as_dict=True, include_key=False)
+    return {k: parts[(k,)].select("t", "value") if (k,) in parts else pl.DataFrame(schema=PER_T) for k in keys}
+
+
 def _mde(per_t: pl.DataFrame, key: str, width: int) -> float:
     """The smallest effect this horizon can detect; it does not depend on the effect asked for."""
     h = span_ns(span(key.rsplit(" ", 1)[1]))
-    return pw.power(pw.block_se(per_t, h), width, h, 1.0).mde
+    return pw.power(_se(per_t, h), width, h).mde
+
+
+def _se(per_t: pl.DataFrame, h: int) -> float:
+    """No noise can be measured on a number that is not finite somewhere."""
+    return pw.block_se(per_t, h) if per_t["value"].is_finite().all() else math.nan
 
 
 def _smaller(a: float, b: float) -> float:

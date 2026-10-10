@@ -71,20 +71,20 @@ def _chance(reps: int) -> float:
     return float(stats.t.sf(Z_BASE / math.sqrt(1 + 1 / reps), reps - 1))
 
 
+def _same(a: pl.Series, b: pl.Series, tol: float) -> bool:
+    if a.dtype.is_numeric() and b.dtype.is_numeric():
+        return bool(np.allclose(a.to_numpy(), b.to_numpy(), atol=tol, rtol=0, equal_nan=True))
+    return a.to_list() == b.to_list()
+
+
 def _differs(got: Any, expect: Any, tol: float) -> str:
     if isinstance(expect, pl.DataFrame):
         if not isinstance(got, pl.DataFrame):
             return f"expected a frame, got {type(got).__name__}"
         if got.columns != expect.columns or got.height != expect.height:
             return f"expected columns {expect.columns} and {expect.height} rows, got {got.columns} and {got.height}"
-        for column in expect.columns:
-            a, b = got[column], expect[column]
-            if a.dtype.is_numeric() and b.dtype.is_numeric():
-                if not np.allclose(a.to_numpy(), b.to_numpy(), atol=tol, rtol=0, equal_nan=True):
-                    return f"{column}: got {a.to_list()}, expected {b.to_list()}"
-            elif a.to_list() != b.to_list():
-                return f"{column}: got {a.to_list()}, expected {b.to_list()}"
-        return ""
+        wrong = [c for c in expect.columns if not _same(got[c], expect[c], tol)]
+        return f"{wrong[0]}: got {got[wrong[0]].to_list()}, expected {expect[wrong[0]].to_list()}" if wrong else ""
     if isinstance(expect, float) and isinstance(got, int | float):
         return "" if abs(got - expect) <= tol else f"got {got}, expected {expect}"
     return "" if got == expect else f"got {got!r}, expected {expect!r}"

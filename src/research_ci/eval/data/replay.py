@@ -46,18 +46,26 @@ def cut_points(
     found = found.select(
         "entity", "field", (pl.col("prev").dt.epoch("ns") + pl.col("spacing").cast(pl.Int64)).alias("at")
     ).unique(["entity", "at"])
-    cuts = [Cut(int(at), f"hole in {f}", (ent,)) for ent, f, at in _sample(found, holes, rng).iter_rows()]
+    holed = _sample(found, holes, rng).select(
+        "at", pl.format("hole in {}", "field").alias("why"), pl.concat_list("entity").alias("entity")
+    )
     starts = full.group_by("entity").agg(pl.col("event_time").min().dt.epoch("ns").alias("t"))
     starts = starts.filter(pl.col("t") > first + DAY_NS).with_columns(week=(pl.col("t") - first) // (7 * DAY_NS))
     weeks = starts.group_by("week").agg(pl.col("entity").sort(), pl.col("t").min()).sort("week")
-    for ents, t in _sample(weeks, late, rng).select("entity", "t").iter_rows():
-        cuts.append(Cut(max(first, int(t) - DAY_NS), f"before {len(ents)} entities start", tuple(ents)))
-    names = full["entity"].unique().sort().to_list()
-    for _ in range(randoms):
-        at = int(rng.integers(first + (last - first) // 10, last - (last - first) // 10))
-        picked = rng.choice(names, size=min(random_entities, len(names)), replace=False)
-        cuts.append(Cut(at, "random", tuple(sorted(str(x) for x in picked))))
-    return sorted(cuts, key=lambda c: (c.at, c.why))
+    before = _sample(weeks, late, rng).select(
+        pl.max_horizontal(pl.lit(first), pl.col("t") - DAY_NS).alias("at"),
+        pl.format("before {} entities start", pl.col("entity").list.len()).alias("why"),
+        "entity",
+    )
+    names = full["entity"].unique().sort()
+    k = min(random_entities, names.len())
+    ats = rng.integers(first + (last - first) // 10, last - (last - first) // 10, size=randoms)
+    picked = np.sort(rng.permuted(np.tile(np.arange(names.len()), (randoms, 1)), axis=1)[:, :k], axis=1)
+    drawn = pl.DataFrame({"_c": np.repeat(np.arange(randoms), k), "_i": picked.ravel()})
+    drawn = drawn.with_columns(entity=pl.lit(names).gather("_i")).group_by("_c", maintain_order=True).agg("entity")
+    random = drawn.select(pl.Series("at", ats), pl.lit("random").alias("why"), "entity")
+    found_cuts = pl.concat([f.cast({"at": pl.Int64}) for f in (holed, before, random)]).sort("at", "why")
+    return [Cut(int(at), why, tuple(ents)) for at, why, ents in found_cuts.iter_rows()]
 
 
 def replay(fetch: Fetch, full: pl.DataFrame, cuts: Sequence[Cut]) -> tuple[Check, list[dict[str, Any]]]:

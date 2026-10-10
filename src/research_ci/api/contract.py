@@ -10,8 +10,8 @@ class ContractError(ValueError):
     pass
 
 
-FLOOR_ALTERNATIVES = ("chance", "timing", "fewer")
-USAGE_TARGETS = ("claim", "baseline", "universe", "costs", "labels")
+FLOOR_ALTERNATIVES = ("chance", "timing")
+USAGE_TARGETS = ("claim", "costs", "labels")
 LAYER_NAMES = ("data", "feat", "signal", "algo")
 
 
@@ -69,71 +69,6 @@ class Universe:
 
 
 @dataclass(frozen=True)
-class Baseline:
-    """What the idea must beat: a score column of the universe table, and for an existing strategy the files that
-    define it (hashed into the contract). ``live_config`` is the configuration the live strategy runs; the engine
-    compares the keys both files share."""
-
-    score: str
-    config: str | None = None
-    code: tuple[str, ...] = ()
-    live_config: str | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "code", tuple(self.code))
-        if not self.score.strip():
-            raise ContractError("name the baseline score column")
-
-
-@dataclass(frozen=True)
-class Perturb:
-    """An uninformative change of the same kind as the idea, applied to the baseline's scores for the consumer pilot.
-
-    ``kind``: ``"drop"`` removes ``share`` of the candidates at random; ``"shuffle"`` permutes ``share`` of the
-    scores among candidates at the same time. The same random choice holds for a whole ``block``.
-    """
-
-    kind: Literal["drop", "shuffle"]
-    share: float
-    block: str = "168h"
-
-    def __post_init__(self) -> None:
-        if not 0 < self.share <= 1:
-            raise ContractError("share must be in (0, 1]")
-        if _span("block", self.block) <= pd.Timedelta(0):
-            raise ContractError("block must be positive")
-
-
-@dataclass(frozen=True)
-class FullPath:
-    """Measure a change through the consumer by running both versions over the whole span and comparing their
-    results. Unbiased, but for strategies with state the two paths drift apart and the noise grows with time."""
-
-
-@dataclass(frozen=True)
-class Branch:
-    """Measure a change through the consumer by branching: at a branch point every ``every``, start from the
-    baseline's own state, apply the change for ``horizon``, and count the difference until ``tail`` after it.
-
-    Each branch starts from the same state as the baseline, so differences cannot compound, and the branches average
-    out. It measures the change on the states the baseline visits; the engine reports how far the changed version's
-    positions drift from the baseline's, which is how large that bias can get."""
-
-    every: str
-    horizon: str
-    tail: str = "0h"
-
-    def __post_init__(self) -> None:
-        if _span("every", self.every) <= pd.Timedelta(0) or _span("horizon", self.horizon) <= pd.Timedelta(0):
-            raise ContractError("every and horizon must be positive")
-        if _span("tail", self.tail) < pd.Timedelta(0):
-            raise ContractError("tail must not be negative")
-
-
-Design = FullPath | Branch
-
-
-@dataclass(frozen=True)
 class Label:
     """An outcome after each decision, computed by a label plugin for every horizon. The engine controls which data
     the plugin sees and who gets the values; the plugin defines what is measured."""
@@ -152,27 +87,16 @@ class Label:
 
 @dataclass(frozen=True)
 class Effect:
-    """The smallest effect worth having, not the effect expected.
-
-    ``on`` is a label name or ``"consumer"``; ``at_least`` is in the target's own units (a fraction of notional per
-    entry for a label target, net return per year through the consumer). For a label, ``target`` is the plugin that
-    turns each decision's label values into the one number the claim is about (default: the mean per cluster).
-    Through the consumer, ``pilot`` is the uninformative change used to measure how much results move by chance, and
-    ``design`` is how a change is measured: ``Branch`` (compare from the baseline's own states) or ``FullPath``.
+    """The effect the claim is about, on one of the contract's labels. ``target`` is the plugin that turns each
+    decision's label values and scores into the one number the claim is about; it must read the scores, such as
+    ``Use("ref.mean", {"cluster": ..., "top": 0.2})``. Feat passes the effect when, with the submitted scores, it beats
+    random scores significantly. A backtest is not an effect here: the consumer judges the algo layer.
     """
 
     on: str
-    at_least: float
-    unit: str
     target: Use | str | None = None
-    pilot: Perturb | None = None
-    design: Design | None = None
 
     def __post_init__(self) -> None:
-        if self.at_least <= 0:
-            raise ContractError("at_least must be positive: the smallest effect worth having")
-        if not self.unit.strip():
-            raise ContractError("say what at_least measures")
         if self.target is not None:
             object.__setattr__(self, "target", as_use(self.target))
 
@@ -222,13 +146,12 @@ class Contract:
     """The claim an idea makes and the rules its verdicts are held to. Written by the agent, frozen by a person.
 
     Everything here is a declaration; the engine derives the numbers. ``used`` must be stated even when empty.
-    Decisions come from ``execution``, or from the consumer when there is one. Explore data ends at ``explore_end``
-    (``"latest"`` is filled from the data at derive time); the sealed segment runs to ``seal_end``, or there is none
-    and only ``forward`` data confirms. ``budget`` is the number of submissions each layer may use across all its
-    versions, one number or one per layer. ``deadline`` is how long after the freeze a verdict may take.
+    Decisions come from ``execution``, or from the timing of the consumer the algo layer will run. Explore data ends
+    at ``explore_end`` (``"latest"`` is filled from the data at derive time); the sealed segment runs to ``seal_end``,
+    or there is none and only ``forward`` data confirms. ``budget`` is the number of submissions each layer may use
+    across all its versions, one number or one per layer.
     """
 
-    template: str
     claim: str
     decisive: tuple[Effect, ...]
     alternatives: tuple[Alternative, ...]
@@ -241,14 +164,11 @@ class Contract:
     consumer: Use | str | None = None
     universe: Universe | None = None
     labels: tuple[Label, ...] = ()
-    baseline: Baseline | None = None
     forward: Forward | None = None
-    deadline: str = "365 days"
     budget: int | Mapping[str, int] = 20
-    skip: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("decisive", "alternatives", "labels", "skip"):
+        for name in ("decisive", "alternatives", "labels"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
         if self.used is not None:
             object.__setattr__(self, "used", tuple(self.used))
@@ -268,7 +188,7 @@ class Contract:
         if not self.claim.strip() or self.claim.startswith("TODO"):
             raise ContractError("state the claim in one sentence")
         if not self.decisive:
-            raise ContractError("state the decisive effect: what result, and how large, would be worth having")
+            raise ContractError("state the decisive effect: the label, and a target that reads the scores")
         if not self.alternatives:
             raise ContractError("list at least one alternative explanation specific to this idea")
         ids = [a.id for a in self.alternatives]
@@ -294,20 +214,12 @@ class Contract:
                     raise ContractError(f"the sealed segment overlaps data already used: {u.what}")
         elif self.forward is None:
             raise ContractError("with no sealed segment only forward data can confirm; name the forward source")
-        if _span("deadline", self.deadline) <= pd.Timedelta(0):
-            raise ContractError("deadline must be positive")
 
     def _check_trade(self) -> None:
         if (self.execution is None) == (self.consumer is None):
             raise ContractError("declare decision times with execution, or name the consumer that has them; not both")
-        if (self.baseline is not None or self.labels) and self.universe is None:
-            raise ContractError("labels and baselines are per candidate; name the universe")
-        skipped = {"signal", "algo"} & set(self.skip) if self.template == "factor" else set()
-        if skipped and (self.baseline is None or self.baseline.config is None or not self.baseline.code):
-            raise ContractError(
-                f"skipping {', '.join(sorted(skipped))} only makes sense when improving an existing strategy; "
-                "give the baseline's config and code"
-            )
+        if self.labels and self.universe is None:
+            raise ContractError("labels are per candidate; name the universe")
 
     def _check_targets(self) -> None:
         names = [label.name for label in self.labels]
@@ -315,18 +227,13 @@ class Contract:
             raise ContractError(f"label names must be unique: {names}")
         for effect in self.decisive:
             if effect.on == "consumer":
-                if self.consumer is None:
-                    raise ContractError("a decisive effect on the consumer needs a consumer")
-                if effect.target is not None:
-                    raise ContractError("target applies to label effects; the consumer's result is the target")
-                if effect.pilot is None:
-                    raise ContractError("declare the pilot: an uninformative change of the same kind as the idea")
-                if effect.design is None:
-                    raise ContractError("declare the design: Branch (from the baseline's states) or FullPath")
-            elif effect.on not in names:
-                raise ContractError(f"decisive effect on {effect.on!r}: not a label of this contract, nor 'consumer'")
-            elif effect.pilot is not None or effect.design is not None:
-                raise ContractError("pilot and design apply to consumer effects only")
+                raise ContractError(
+                    "a backtest is judged at the algo layer, not in the contract: make the decisive effect a label "
+                    'effect, with a target that reads the scores, such as Use("ref.mean", {"cluster": ..., "top": 0.2})'
+                )
+            if effect.on not in names:
+                known = ", ".join(names) or "none"
+                raise ContractError(f"decisive effect on {effect.on!r}: not a label of this contract (labels: {known})")
 
     def _check_budget(self) -> None:
         budget = self.budget

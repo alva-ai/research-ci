@@ -1,7 +1,10 @@
+import shutil
 from pathlib import Path
 
 import pytest
 
+import research_ci
+from research_ci.store.environment import judging_deps
 from research_ci.store.freeze import changed, make_freeze, read_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError
 from research_ci.store.workspace import Workspace, hash_file, hash_tree
@@ -94,6 +97,25 @@ def test_tree_hash_sees_content_and_names_but_not_listing_order(tmp_path: Path) 
     (root / "sub" / "b.py").rename(root / "sub" / "c.py")
     assert hash_tree(root) != first
     assert hash_file(root / "a.py") == hash_file(root / "a.py")
+
+
+@pytest.mark.parametrize(
+    "left_out", ["render/contract.py", "cli/main.py", "stages/defaults/feat.py", "stages/defaults/data.py"]
+)
+def test_rewording_a_card_or_a_command_or_changing_a_default_list_keeps_the_engine_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, left_out: str
+) -> None:
+    package = tmp_path / "research_ci"
+    shutil.copytree(Path(research_ci.__file__).parent, package, ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setattr(research_ci, "__file__", str(package / "__init__.py"))
+    first = judging_deps()["engine"]
+    with (package / left_out).open("a") as handle:
+        handle.write("\n# reworded\n")
+    assert judging_deps()["engine"] == first
+    for judged in ("stages/data.py", "stages/feat.py"):
+        with (package / judged).open("a") as handle:
+            handle.write("\n# changed\n")
+        assert judging_deps()["engine"] != first
 
 
 def _anchored(tmp_path: Path) -> Ledger:

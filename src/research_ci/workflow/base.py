@@ -17,37 +17,30 @@ from research_ci.store.environment import environment_record, judging_deps
 from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError
 from research_ci.store.workspace import Workspace, hash_file, rci_home
-from research_ci.workflow.lineage import blockers, invalidated, upstream
-from research_ci.workflow.machine import Command, Kind, State, WorkflowError, starts_new_version, transition
+from research_ci.workflow.lineage import CONTRACT, STAGES, blockers, invalidated, kind_of, upstream
+from research_ci.workflow.machine import Command, Kind, State, Verdict, WorkflowError, starts_new_version, transition
 from research_ci.workflow.next import Action, IdeaStatus, StageStatus, next_actions
-from research_ci.workflow.templates import CONTRACT, get_template, kind_of
 
 CONTRACT_FILE = "contract.py"
 LEDGER_FILE = "ledger.jsonl"
+FORMAT = 2
 DATA = "data"
 FEAT = "feat"
 SKELETON = """from research_ci.api import Alternative, Contract, Effect, Execution, Forward, Label, Universe, Use
 
 CONTRACT = Contract(
-    template="{template}",
     claim="TODO: state the claim in one sentence",
-    decisive=(Effect(on="return", at_least=0.001, unit="TODO: what the number measures"),),
+    decisive=(Effect(on="return", target=Use("ref.mean", {"cluster": "entity", "top": 0.2})),),
     alternatives=(Alternative("TODO", "TODO: another reason the same result could appear"),),
     used=None,  # which data was already used to choose anything here; () if none
     data="TODO-data-plugin",
-    costs=Use("ref.flat_costs", {{"commission_bps": 0.0, "slippage_bps": 0.0}}),
+    costs=Use("ref.flat_costs", {"commission_bps": 0.0, "slippage_bps": 0.0}),
     execution=Execution(every="24h"),
     universe=Universe("TODO-universe-plugin", clusters="entity"),
-    labels=(Label("return", Use("ref.return", {{"price": "close"}}), horizons=("24h",)),),
+    labels=(Label("return", Use("ref.return", {"price": "close"}), horizons=("24h",)),),
     forward=Forward("TODO-data-plugin"),
 )
 """
-REGISTERED_BY = {
-    CONTRACT: "the contract is registered by `rci contract derive`",
-    DATA: "the data layer is registered by `rci data check`",
-}
-
-Record = tuple[str, str, dict[str, Any]]
 DEFAULT_BUDGET = 20
 
 
@@ -81,15 +74,15 @@ APPROVAL_KINDS = {("human", "terminal"), ("human", "relayed"), ("agent", "auto")
 @dataclass(frozen=True)
 class StageFreeze:
     """What approving a stage shows and pins beyond the usual: the card a person approves, extra frozen
-    dependencies, extra ledger payload and preview fields, the stages the contract skips, and, when only a person
-    may approve, why."""
+    dependencies, extra ledger payload and preview fields, when only a person may approve, why, and what else
+    approving records (``also``, given who approved; its result joins the ledger payload)."""
 
     card: str
     deps: Mapping[str, str] = field(default_factory=dict)
     payload: Mapping[str, Any] = field(default_factory=dict)
     preview: Mapping[str, Any] = field(default_factory=dict)
-    skip: tuple[str, ...] = ()
     person_only: str = ""
+    also: Callable[["Approval"], Mapping[str, Any]] | None = None
 
 
 class IdeaBase:
@@ -111,18 +104,22 @@ class IdeaBase:
         if not self.ledger.path.exists():
             raise WorkflowError(f"{self.root} is not a Research CI idea; run `rci init` first")
         self.ledger.verify()
+        first = next(self.ledger.records(), None)
+        if first is not None and first["kind"] == "init" and first["payload"].get("format") != FORMAT:
+            raise LedgerError(
+                f"line 1: {self.root.name} was started by an older Research CI, whose lifecycle this one does not "
+                "replay; start the idea again in a fresh directory with `rci init`"
+            )
 
     @classmethod
     def init(
         cls,
         root: Path,
-        template: str,
         registry: Registry | None = None,
         settings: Settings | None = None,
         data_settings: DataSettings | None = None,
         feat_settings: FeatSettings | None = None,
     ) -> Self:
-        get_template(template)
         workspace = Workspace(Path(root))
         with workspace.lock():
             ledger = _ledger(workspace)
@@ -130,8 +127,8 @@ class IdeaBase:
                 raise WorkflowError(f"{root} is already a Research CI idea")
             contract = Path(root) / CONTRACT_FILE
             if not contract.exists():
-                contract.write_text(SKELETON.format(template=template))
-            ledger.append("init", "idea", {"template": template})
+                contract.write_text(SKELETON)
+            ledger.append("init", "idea", {"format": FORMAT})
             (workspace.root / ".gitignore").write_text("lock\n")
         return cls(root, registry, settings, data_settings, feat_settings)
 
@@ -139,13 +136,13 @@ class IdeaBase:
         records = list(self.ledger.records())
         if not records or records[0]["kind"] != "init":
             raise LedgerError("line 1: the ledger must start with init")
-        template = get_template(records[0]["payload"]["template"])
-        replay = {name: _Replay() for name in template.stages}
+        replay = {name: _Replay() for name in STAGES}
         budget = None
         for record in records[1:]:
             kind, payload, r = record["kind"], record["payload"], replay[record["stage"]]
+            r.approved = r.approved and payload["version"] == r.version or kind == Command.APPROVE
             r.state, r.version, r.note = State(payload["to"]), payload["version"], payload.get("note", "")
-            r.trials += kind == Command.SUBMIT and record["stage"] != DATA
+            r.trials += kind == Command.SUBMIT
             r.extra += payload["trials"] if kind == Command.EXTEND else 0
             if kind == Command.APPROVE and record["stage"] == CONTRACT:
                 budget = payload["budget"]
@@ -154,8 +151,10 @@ class IdeaBase:
             layer_budget = None
             if budget is not None and kind_of(name) is Kind.LAYER and name != DATA:
                 layer_budget = (budget.get(name, DEFAULT_BUDGET) if isinstance(budget, dict) else budget) + r.extra
-            stages.append(StageStatus(name, kind_of(name), r.state, r.version, r.trials, layer_budget, r.note))
-        return IdeaStatus(idea=self.root.name, template=template.name, stages=tuple(stages))
+            stages.append(
+                StageStatus(name, kind_of(name), r.state, r.version, r.trials, layer_budget, r.note, r.approved)
+            )
+        return IdeaStatus(idea=self.root.name, stages=tuple(stages))
 
     def next_actions(self) -> list[Action]:
         return next_actions(self.status())
@@ -163,26 +162,19 @@ class IdeaBase:
     def card(self, stage: str) -> str:
         """The card a person approves for ``stage``, as it is now."""
         status = self.status()
-        found = self._stage_freeze(stage, status.stage(stage)) if stage in status.names else None
+        found = self._stage_freeze(stage, status.stage(stage)) if stage in STAGES else None
         if found is None:
             raise WorkflowError(f"{stage} has no card")
         return found.card
 
     def register(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
-        if stage in REGISTERED_BY:
-            raise WorkflowError(REGISTERED_BY[stage])
-        return self._apply(stage, Command.REGISTER, payload=payload)
-
-    def challenge(self, stage: str, payload: Mapping[str, Any] | None = None) -> State:
-        return self._apply(stage, Command.CHALLENGE, payload=payload)
-
-    def check(self, stage: str, passed: bool, note: str = "", payload: Mapping[str, Any] | None = None) -> State:
-        result = State.PASSED if passed else State.FAILED
-        return self._apply(stage, Command.CHECK, result, {**(payload or {}), "passed": passed, "note": note})
+        """Register a checkpoint's plan for a person to review."""
+        return self._apply(stage, Command.REGISTER, True, payload)
 
     def preview_approval(self, stage: str, extra: Mapping[str, str] | None = None) -> dict[str, Any]:
         """What ``approve`` would freeze. Raises if approving is not allowed right now."""
         current = self._allowed(stage, Command.APPROVE)
+        self._passed_last(stage)
         found = self._stage_freeze(stage, current)
         preview: dict[str, Any] = {"stage": stage, "version": current.version, "deps": self.deps(stage, extra)}
         if found is not None:
@@ -192,8 +184,10 @@ class IdeaBase:
         return preview
 
     def approve(self, stage: str, extra: Mapping[str, str] | None = None, approval: Approval | None = None) -> Freeze:
-        """Freeze a stage. ``approval`` says who approved and through which channel; the ledger keeps it."""
+        """A person accepts the result under review, or a checkpoint's plan, and the stage is frozen. ``approval``
+        says who approved and through which channel; the ledger keeps it."""
         current = self._allowed(stage, Command.APPROVE)
+        self._passed_last(stage)
         who = approval or Approval()
         found = self._stage_freeze(stage, current)
         if found is not None:
@@ -202,49 +196,54 @@ class IdeaBase:
             self._shown(who, found.card)
             extra = {**(extra or {}), **found.deps}
         freeze = make_freeze(stage, self.deps(stage, extra))
-        payload = dict(found.payload) if found is not None else {}
 
         def write() -> dict[str, Any]:
             write_freeze(self.workspace, freeze)
             out: dict[str, Any] = {"freeze": freeze.hash, "deps": freeze.deps, "approval": asdict(who)}
             out["note"] = who.describe()
-            return out | payload
+            if found is not None:
+                out |= dict(found.payload) | dict(found.also(who) if found.also else {})
+            return out
 
-        self._apply(stage, Command.APPROVE, effect=write, skip=found.skip if found is not None else ())
+        self._apply(stage, Command.APPROVE, effect=write)
         return freeze
 
-    def submit(
-        self,
-        stage: str,
-        verdict: State,
-        extra: Mapping[str, str] | None = None,
-        payload: Mapping[str, Any] | None = None,
-    ) -> State:
-        """Record a verdict. It becomes TAINTED if anything frozen at approval has changed since."""
+    def submit(self, stage: str, verdict: Verdict, payload: Mapping[str, Any] | None = None, note: str = "") -> State:
+        """Record a layer submission and its verdict, one trial: PASSED puts the layer up for review; FAILED and
+        TAINTED leave it OPEN, or PAUSED when that was the last trial."""
+        n = self._allowed(stage, Command.SUBMIT, verdict is Verdict.PASSED).trials + 1
+        head = f"submission {n} {verdict}"
+        record = {
+            **(payload or {}),
+            "verdict": verdict,
+            "note": f"{head}: {note}" if note else head,
+            "environment": environment_record(self.root),
+        }
+        return self._apply(stage, Command.SUBMIT, verdict is Verdict.PASSED, record)
+
+    def run(self, stage: str, verdict: Verdict, extra: Mapping[str, str] | None = None) -> State:
+        """Record a checkpoint's one run. It is TAINTED if anything frozen when its plan was approved has changed."""
         approval = self._last(Command.APPROVE, stage)
-        note = ""
+        note = f"ran once: {verdict}"
         if approval is not None:
             moved = drift(approval["payload"]["deps"], self.deps(stage, extra))
             if moved:
-                verdict, note = State.TAINTED, f"frozen dependencies changed: {', '.join(moved)}"
-        record = {**(payload or {}), "verdict": verdict, "note": note, "environment": environment_record(self.root)}
-        return self._apply(stage, Command.SUBMIT, verdict, record)
+                verdict, note = Verdict.TAINTED, f"ran once: TAINTED; frozen dependencies changed: {', '.join(moved)}"
+        record = {"verdict": verdict, "note": note, "environment": environment_record(self.root)}
+        return self._apply(stage, Command.RUN, verdict is Verdict.PASSED, record)
 
     def extend(self, stage: str, trials: int) -> State:
         if trials < 1:
             raise WorkflowError("extend by at least one submission")
-        last = self._last(Command.SUBMIT, stage)
-        verdict = State(last["payload"]["verdict"]) if last else None
-        return self._apply(stage, Command.EXTEND, verdict, {"trials": trials, "note": f"budget extended by {trials}"})
+        return self._apply(stage, Command.EXTEND, payload={"trials": trials, "note": f"budget extended by {trials}"})
 
     def deps(self, stage: str, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         contract = self.root / CONTRACT_FILE
         deps = {"contract": hash_file(contract) if contract.exists() else "missing"}
         if stage != CONTRACT:
             deps |= judging_deps()
-            status = self.status()
-            for up in upstream(status.names, stage):
-                if up != CONTRACT and status.stage(up).state is not State.SKIPPED:
+            for up in upstream(stage):
+                if up != CONTRACT:
                     approval = self._last(Command.APPROVE, up)
                     deps[f"upstream:{up}"] = approval["payload"]["freeze"] if approval else "none"
         return deps | dict(extra or {})
@@ -253,52 +252,64 @@ class IdeaBase:
         """A stage's own card and pins, from the module of the stage that has them."""
         return None
 
-    def _allowed(self, stage: str, command: Command, result: State | None = None) -> StageStatus:
-        status = self.status()
-        waiting = blockers(status.names, status.states(), stage)
+    def _allowed(self, stage: str, command: Command, ready: bool = False) -> StageStatus:
+        return self._check(self.status(), stage, command, ready)
+
+    def _check(self, status: IdeaStatus, stage: str, command: Command, ready: bool = False) -> StageStatus:
+        waiting = blockers(status.states(), stage)
         if waiting:
             raise WorkflowError(f"{stage} is waiting for {', '.join(waiting)} to pass")
         current = status.stage(stage)
-        transition(current.kind, current.state, command, result)
+        transition(current.kind, current.state, command, ready, current.approved)
+        if command is Command.SUBMIT and current.budget is not None and current.trials >= current.budget:
+            raise WorkflowError(f"all {current.budget} submissions of {stage} are used; a person reviews the last one")
         return current
 
     def _apply(
         self,
         stage: str,
         command: Command,
-        result: State | None = None,
+        ready: bool = False,
         payload: Mapping[str, Any] | None = None,
         effect: Callable[[], dict[str, Any]] | None = None,
-        skip: tuple[str, ...] | list[str] = (),
     ) -> State:
         with self.workspace.lock():
-            current = self._allowed(stage, command, result)
-            after = transition(current.kind, current.state, command, result)
-            if command is Command.SUBMIT and current.kind is Kind.LAYER and current.budget is not None:
-                if after is not State.PASSED and current.trials + 1 >= current.budget:
-                    after = State.PAUSED
-            version = current.version + starts_new_version(current.state, command)
+            status = self.status()
+            current = self._check(status, stage, command, ready)
+            after = transition(current.kind, current.state, command, ready, current.approved)
+            if command is Command.SUBMIT and not ready and current.budget is not None:
+                after = State.PAUSED if current.trials + 1 >= current.budget else after
+            reopens = starts_new_version(current.state, command)
             body = {**(payload or {}), **(effect() if effect else {})}
+            version = current.version + reopens
             self.ledger.append(command, stage, {**body, "from": current.state, "to": after, "version": version})
-            for kind, name, extra in self._followups(stage, command, current.state, tuple(skip)):
-                self.ledger.append(kind, name, extra)
+            if reopens and current.state is State.PASSED:
+                for name in invalidated(status.states(), self._started(status), stage):
+                    self.ledger.append("stale", name, _move(status.stage(name), State.STALE, f"{stage} was reopened"))
             return after
 
-    def _followups(self, stage: str, command: Command, before: State, skip: tuple[str, ...]) -> list[Record]:
-        status = self.status()
-        out: list[Record] = []
-        if command is Command.REGISTER and before is State.PASSED:
-            for name in invalidated(status.names, status.states(), stage):
-                s = status.stage(name)
-                out.append(("stale", name, _move(s, State.STALE, f"{stage} was reopened")))
-        if command is Command.APPROVE and stage == CONTRACT:
-            for name in sorted(get_template(status.template).optional):
-                s = status.stage(name)
-                if name in skip and s.state is not State.SKIPPED:
-                    out.append(("skip", name, _move(s, State.SKIPPED, "skipped by the contract")))
-                elif name not in skip and s.state is State.SKIPPED:
-                    out.append(("skip", name, _move(s, State.OPEN, "no longer skipped by the contract")))
-        return out
+    def _record(self, stage: str, kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """A record that changes no state: it keeps the stage's note unless it brings one."""
+        with self.workspace.lock():
+            s = self.status().stage(stage)
+            body = {"note": s.note, **payload, "from": s.state, "to": s.state, "version": s.version}
+            return self.ledger.append(kind, stage, body)
+
+    def _started(self, status: IdeaStatus) -> set[str]:
+        """Stages with a record in their current version."""
+        return {
+            r["stage"]
+            for r in self.ledger.records()
+            if r["stage"] in STAGES and r["payload"].get("version") == status.stage(r["stage"]).version
+        }
+
+    def _passed_last(self, stage: str) -> None:
+        """A person accepts a layer only when its latest submission PASSED; verdicts come from code."""
+        if kind_of(stage) is not Kind.LAYER or stage == DATA:
+            return
+        last = self._last(Command.SUBMIT, stage)
+        if last is None or last["payload"]["verdict"] != Verdict.PASSED:
+            raise WorkflowError(f"the latest submission of {stage} did not pass; only a PASSED one can be accepted")
 
     def _last(self, kind: str, stage: str) -> dict[str, Any] | None:
         last = None
@@ -355,6 +366,7 @@ class _Replay:
     trials: int = 0
     extra: int = 0
     note: str = ""
+    approved: bool = False
 
 
 def _ledger(workspace: Workspace) -> Ledger:

@@ -136,6 +136,18 @@ def causal(run: Run, fields: pl.DataFrame, base: ConsumerResult, at: int, period
     return Check("consumer causal", "pass", f"data after {_iso(at)} first moves the period ending {diff['t'][0]}")
 
 
+def busiest(fields: pl.DataFrame, times: list[int], period: int) -> int:
+    """A decision time in the middle third whose next period brings the most kinds of field, so a causality test
+    there touches every input, including sparse ones such as settlements."""
+    middle = times[len(times) // 3 : 2 * len(times) // 3] or times
+    t0 = times[0]
+    at = fields.select(pl.col("available_at").dt.epoch("ns").alias("a"), "field")
+    slot = t0 + (pl.col("a") - 1 - t0) // period * period
+    counts = at.with_columns(slot=slot).group_by("slot").agg(pl.col("field").n_unique().alias("kinds"))
+    ranked = pl.DataFrame({"slot": middle}, schema={"slot": pl.Int64}).join(counts, on="slot", how="left")
+    return int(ranked.fill_null(0).sort(["kinds", "slot"], descending=[True, False])["slot"][0])
+
+
 def deterministic(a: ConsumerResult, b: ConsumerResult) -> Check:
     mismatch = _frame_mismatch(a.net, b.net, ["t"], ["net"])
     if mismatch:
@@ -183,18 +195,20 @@ def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int)
     expected = held.group_by("t").agg(*(pl.col(c).fill_null(0.0).mul(pl.col("weight")).sum() for c in shared))
     expected = expected.with_columns(pl.col("t") + pl.duration(nanoseconds=period_ns))
     joined = result.net.join(expected, on="t", how="left", suffix="_label").fill_null(0.0)
-    notes, status = [], "pass"
-    for c in shared:
-        a, b = joined[c].to_numpy(), joined[f"{c}_label"].to_numpy()
-        scale = max(float(np.abs(a).sum()), 1e-12)
-        total = (float(a.sum()) - float(b.sum())) / scale
-        per_period = float(np.abs(a - b).sum()) / scale
-        if abs(total) > 0.02 or per_period > 0.02:
-            status = "fail"
-        notes.append(
-            f"{c}: consumer books {float(a.sum()) - float(b.sum()):+.4%} of capital more than its labels "
-            f"({total:+.2%} of |{c}|); period by period the gap is {per_period:.0%}"
-        )
+    sums = joined.select(
+        pl.concat_list(pl.lit(c) for c in shared).alias("c"),
+        pl.concat_list((pl.col(c).sum() - pl.col(f"{c}_label").sum()) for c in shared).alias("more"),
+        pl.concat_list(pl.max_horizontal(pl.col(c).abs().sum(), pl.lit(1e-12)) for c in shared).alias("scale"),
+        pl.concat_list((pl.col(c) - pl.col(f"{c}_label")).abs().sum() for c in shared).alias("apart"),
+    ).explode("c", "more", "scale", "apart", empty_as_null=False)
+    sums = sums.with_columns(total=pl.col("more") / pl.col("scale"), per_period=pl.col("apart") / pl.col("scale"))
+    bad = (pl.col("total").abs() > 0.02) | (pl.col("per_period") > 0.02)
+    status = "fail" if sums.select(bad.any()).item() else "pass"
+    notes = [
+        f"{c}: consumer books {more:+.4%} of capital more than its labels ({total:+.2%} of |{c}|); period by period "
+        f"the gap is {per_period:.0%}"
+        for c, more, total, per_period in sums.select("c", "more", "total", "per_period").iter_rows()
+    ]
     if missing:
         notes.append(f"{missing} held rows without a label")
     return Check("consumer matches labels", status, "; ".join(notes))  # type: ignore[arg-type]
@@ -206,6 +220,19 @@ def passthrough(run: Run, fields: pl.DataFrame, base: ConsumerResult, scores: pl
     if mismatch:
         return Check("scores pass through", "fail", f"own scores change the result: {mismatch}")
     return Check("scores pass through", "pass", "the baseline's own scores reproduce the baseline")
+
+
+def target_reads_score(name: str, reduce: Callable[[pl.DataFrame], pl.DataFrame], rows: pl.DataFrame) -> Check:
+    """A target must move with the scores: the same label rows with two draws of random scores give other values."""
+    rng = np.random.default_rng(0)
+    a, b = (_by_t(reduce(rows.with_columns(score=rng.standard_normal(rows.height)))) for _ in range(2))
+    if a.height == b.height and np.allclose(a["value"].to_numpy(), b["value"].to_numpy(), equal_nan=True):
+        detail = (
+            f"{name} gives the same number for any scores; name a target that reads them, "
+            'such as Use("ref.mean", {"cluster": ..., "top": 0.2})'
+        )
+        return Check("target reads the score", "fail", detail)
+    return Check("target reads the score", "pass", f"{name} moves with the scores")
 
 
 def branch_diff(base: ConsumerResult, branch: ConsumerResult, start: int, end: int) -> tuple[float, float]:
@@ -243,6 +270,11 @@ def max_drawdown(result: ConsumerResult) -> float:
     return float((equity / np.maximum.accumulate(equity) - 1).min()) if equity.size else 0.0
 
 
+def _by_t(frame: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
+    out = pl.from_pandas(frame) if isinstance(frame, pd.DataFrame) else frame
+    return out.select("t", pl.col("value").cast(pl.Float64)).sort("t")
+
+
 def _mutations(case: LabelCase, h: pd.Timedelta) -> list[tuple[str, pl.DataFrame, bool]]:
     f = case.fields
     ts = case.candidates.select(pl.col("t").dt.epoch("ns"))["t"]
@@ -256,14 +288,16 @@ def _mutations(case: LabelCase, h: pd.Timedelta) -> list[tuple[str, pl.DataFrame
     shifted = f.with_columns(pl.col("event_time") + shift, pl.col("available_at") + shift)
     nudged = f.with_columns(pl.when(inside).then(pl.col("value") * 1.01 + 1e-6).otherwise("value"))
     later = f.with_columns(pl.when(after).then(pl.col("value") * 1.5 + 1).otherwise("value"))
-    out = [
+    removed = [
+        (f"removing {name} inside the window", f.filter(~(inside & (pl.col("field") == name))), True)
+        for name in f["field"].unique().sort().to_list()
+    ]
+    return [
         ("shifting the data one step later", shifted, True),
         ("changing values inside the window", nudged, True),
         ("changing values after the window", later, False),
+        *removed,
     ]
-    for name in f["field"].unique().sort().to_list():
-        out.append((f"removing {name} inside the window", f.filter(~(inside & (pl.col("field") == name))), True))
-    return out
 
 
 def _diff(a: pl.DataFrame, b: pl.DataFrame) -> pl.DataFrame:
@@ -279,12 +313,15 @@ def _frame_mismatch(a: pl.DataFrame, b: pl.DataFrame, keys: list[str], values: l
     joined = a.select(*keys, *values).join(b.select(*keys, *values), on=keys, how="full", suffix="_b", coalesce=True)
     if joined.height != a.height:
         return "different keys"
-    for v in values:
-        x, y = joined[v].to_numpy().astype("float64"), joined[f"{v}_b"].to_numpy().astype("float64")
-        same = (np.isnan(x) & np.isnan(y)) | np.isclose(x, y, rtol=1e-9, atol=1e-12)
-        if not same.all():
-            return f"{int((~same).sum())} values of {v} differ"
-    return ""
+    differ = joined.select(_differ(v) for v in values).row(0)
+    return next((f"{n} values of {v} differ" for v, n in zip(values, differ, strict=True) if n), "")
+
+
+def _differ(v: str) -> pl.Expr:
+    """How many values of ``v`` differ between the two sides: both NaN agree, otherwise within ``np.isclose``."""
+    x, y = (pl.col(c).cast(pl.Float64).fill_null(float("nan")) for c in (v, f"{v}_b"))
+    close = (x == y) | ((x - y).abs() <= 1e-12 + 1e-9 * y.abs()) | (x.is_nan() & y.is_nan())
+    return (~close).sum().alias(v)
 
 
 def _span_text(span: pd.Timedelta) -> str:

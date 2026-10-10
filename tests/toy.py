@@ -14,6 +14,7 @@ from research_ci.api import ConsumerResult, Hedge, LabelCase, Levels, Reference,
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME
 from research_ci.reference_plugins.labels import PairCarry
+from research_ci.reference_plugins.targets import ClusterMean
 
 START = pd.Timestamp("2026-01-01", tz="UTC")
 HOUR = pd.Timedelta(hours=1)
@@ -62,11 +63,16 @@ class ToyData:
         return toy_fields(self.hours, self.seed)
 
     def reference(self, requests: pl.DataFrame) -> Reference:
-        venue = toy_fields(self.hours, self.seed).filter(pl.col("field") != "funding_interval_hours")
-        answered = requests.filter(pl.col("field") != "funding_interval_hours")
-        rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
-        rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
-        return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
+        return venue_reference(toy_fields(self.hours, self.seed), requests)
+
+
+def venue_reference(venue: pl.DataFrame, requests: pl.DataFrame) -> Reference:
+    """What the toy venue answers from ``venue``; it keeps no history of funding intervals."""
+    venue = venue.filter(pl.col("field") != "funding_interval_hours")
+    answered = requests.filter(pl.col("field") != "funding_interval_hours")
+    rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
+    rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
+    return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
 
 
 class ToyHindsight(ToyData):
@@ -107,11 +113,56 @@ class ToySwapped(ToyData):
         return pl.concat([rows.filter(~hit), other.with_columns(value=pl.Series(path))]).sort("available_at")
 
     def reference(self, requests: pl.DataFrame) -> Reference:
-        venue = self.build()
-        answered = requests.filter(pl.col("field") != "funding_interval_hours")
-        rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
-        rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
-        return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
+        return venue_reference(self.build(), requests)
+
+
+class ToyRelaunched(ToyData):
+    """Venue c delists Z after hour 150 and, twelve hours later, lists another asset under the same ticker at a
+    thousand times the level. The venue reports both, so the source is faithful."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        z, t = pl.col("entity") == "c:Z", pl.col("event_time")
+        gone = z & t.is_between(START + 151 * HOUR, START + 161 * HOUR)
+        later = z & (pl.col("field") == "close") & (t >= START + 162 * HOUR)
+        return rows.filter(~gone).with_columns(value=pl.when(later).then(pl.col("value") * 1000).otherwise("value"))
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        return venue_reference(self.build(), requests)
+
+
+class ToyRenamed(ToyRelaunched):
+    """The relaunch of ``ToyRelaunched`` under a name of its own, ``c:Z#2``, as splitting it leaves it."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        later = (pl.col("entity") == "c:Z") & (pl.col("event_time") >= START + 162 * HOUR)
+        return rows.with_columns(entity=pl.when(later).then(pl.lit("c:Z#2")).otherwise("entity"))
+
+
+class ToyZeros(ToyData):
+    """Venue b reports a close of zero for X three hours running, and so does the venue's API."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        hours = pl.col("event_time").is_between(START + 100 * HOUR, START + 102 * HOUR)
+        hit = (pl.col("entity") == "b:X") & (pl.col("field") == "close") & hours
+        return rows.with_columns(value=pl.when(hit).then(0.0).otherwise("value"))
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        return venue_reference(self.build(), requests)
+
+
+class ToyShort(ToyData):
+    """Venue c lists Y for twenty hours only, shorter than the longest horizon."""
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        rows = super().build()
+        brief = pl.col("event_time").is_between(START + 300 * HOUR, START + 319 * HOUR)
+        return rows.filter((pl.col("entity") != "c:Y") | brief)
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        return venue_reference(self.build(), requests)
 
 
 class ToyPairs:
@@ -305,6 +356,13 @@ class LaggedScores(ToyCarry):
         return super().run(fields, scores)
 
 
+class NeverRun(ToyCarry):
+    """Gives the toy's decision times but refuses to run: nothing before the algo layer may backtest."""
+
+    def run(self, fields: pl.DataFrame, scores: pl.DataFrame | None = None, fresh: bool = False) -> ConsumerResult:
+        raise AssertionError("a layer before algo ran the backtest")
+
+
 class PeekingLabel(PairCarry):
     """Reads one horizon further than it may."""
 
@@ -326,37 +384,44 @@ class LazyLabel(PairCarry):
         return [LabelCase(fields, cands.with_columns(cast), "2h", expected.with_columns(cast))]
 
 
+class Backwards(ClusterMean):
+    """Reads the scores, but takes the lowest: a planted signal only makes it worse."""
+
+    def reduce(self, labels: pl.DataFrame, horizon: pd.Timedelta, costs: Any) -> pl.DataFrame:
+        flipped = labels.with_columns(-pl.col("score")) if "score" in labels.columns else labels
+        return super().reduce(flipped, horizon, costs)
+
+
 REGISTRY = {"toy.data": ToyData, "toy.pairs": ToyPairs, "toy.carry": ToyCarry}
 CARRY = "Label('carry', Use('ref.carry', {'flow': 'funding_rate'}), horizons=('8h', '24h'))"
 COSTS = "Use('ref.flat_costs', {'commission_bps': 1, 'slippage_bps': 1, 'legs': 2})"
+EFFECT = "Effect(on='carry', target=Use('ref.mean', {'cluster': 'symbol', 'top': 0.34}))"
 
 
-def label_contract(template: str = "factor", budget: int | dict[str, int] = 3, skip: tuple[str, ...] = ()) -> str:
+def label_contract(budget: int | dict[str, int] = 3) -> str:
     return (
         "from research_ci.api import *\n\n"
-        f"CONTRACT = Contract(template={template!r}, claim='cross-venue funding spreads persist',\n"
-        "    decisive=(Effect(on='carry', at_least=0.001, unit='per entry after the round trip'),),\n"
+        "CONTRACT = Contract(claim='cross-venue funding spreads persist',\n"
+        f"    decisive=({EFFECT},),\n"
         "    alternatives=(Alternative('tail', 'a few symbols carry the result'),),\n"
         f"    used=(), data='toy.data', costs={COSTS}, execution=Execution(every='1h'),\n"
         "    universe=Universe('toy.pairs', clusters='symbol', groups=('venue_pair',)),\n"
         f"    labels=({CARRY},),\n"
         "    explore_end='2026-01-15T00:00:00Z', seal_end='2026-01-20T00:00:00Z',\n"
-        f"    budget={budget!r}, skip={skip!r})\n"
+        f"    budget={budget!r})\n"
     )
 
 
-def consumer_contract(consumer: str = "toy.carry") -> str:
+def strategy_contract() -> str:
+    """Improving the toy strategy: its backtester is named only for the decision times it keeps."""
     return (
         "from research_ci.api import *\n\n"
-        "CONTRACT = Contract(template='factor', skip=('signal', 'algo'),\n"
-        "    claim='a new score improves the toy strategy',\n"
-        "    decisive=(Effect(on='consumer', at_least=0.05, unit='per year over the baseline',\n"
-        "        pilot=Perturb('drop', 0.2, block='24h'), design=Branch(every='24h', horizon='24h', tail='24h')),),\n"
+        "CONTRACT = Contract(claim='a new score picks pairs that carry more for the toy strategy',\n"
+        f"    decisive=({EFFECT},),\n"
         "    alternatives=(Alternative('level', 'only the spread level'),),\n"
-        "    used=(Usage('2026-01-01T00:00:00Z', '2026-01-10T00:00:00Z', 'toy parameters tuned', ('baseline',)),),\n"
-        f"    data='toy.data', costs={COSTS}, consumer={consumer!r},\n"
+        "    used=(Usage('2026-01-01T00:00:00Z', '2026-01-10T00:00:00Z', 'the toy strategy tuned', ('claim',)),),\n"
+        f"    data='toy.data', costs={COSTS}, consumer='toy.carry',\n"
         "    universe=Universe('toy.pairs', clusters='symbol'),\n"
         f"    labels=({CARRY},),\n"
-        "    baseline=Baseline('score', config='strategy.toml', code=('strategy.py',), live_config='live.toml'),\n"
-        "    forward=Forward('toy.live'), deadline='180 days')\n"
+        "    forward=Forward('toy.live'))\n"
     )

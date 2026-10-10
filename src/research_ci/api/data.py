@@ -1,11 +1,12 @@
-"""What an idea may add to its data checks, for risks the engine cannot derive from the contract or the plugins, such
-as a holiday that merges two weekly releases. The engine reads ``TESTS`` from ``ideas/<idea>/data.py`` and ``PITS``
-from ``ideas/<idea>/nulls/data.py``; both are optional.
+"""What an idea may add to its data checks, for risks the engine's default checks do not cover, such as a holiday that
+merges two weekly releases. The engine reads ``TESTS`` from ``ideas/<idea>/data.py`` and ``PITS`` from
+``ideas/<idea>/nulls/data.py``; both are optional.
 
 A test returns the rows it flags (``entity`` and ``event_time``, optionally ``field``); no rows means it passed. It
 names the (category, field) pairs it claims to catch in ``covers``. Before the test counts, the engine plants pits of
-those categories in clean copies of the data, built in or from ``PITS``, and the test must flag every pit that moves
-the contract's decisive number by more than the materiality threshold. Tests only add checks; they cannot waive one.
+those categories in clean copies of the data, built in (the categories ``PITS`` lists in
+``research_ci/stages/defaults/data.py``) or from the idea's ``PITS``, and the test must flag every pit that moves the
+contract's decisive number by more than the materiality threshold. Tests only add checks; they cannot waive one.
 """
 
 from collections.abc import Callable, Sequence
@@ -16,7 +17,6 @@ import numpy as np
 import polars as pl
 
 OnFail = Literal["mask", "drop_entities", "ask"]
-BUILTIN_PITS = ("unit", "level_break", "gap", "duplicate", "shift", "leak", "spike", "swap")
 
 
 @dataclass(frozen=True)

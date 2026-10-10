@@ -37,10 +37,10 @@ def hedged_legs(
         .sort("t")
     )
     rows = cands.select("t", "entity", "long", "short", *keep).with_columns(pl.col("t").cast(TIME))
-    for leg in ("long", "short"):
-        q = rows.select("t", pl.col(leg).alias("leg")).unique().sort("t")
-        known = q.join_asof(px, on="t", by="leg", strategy="backward", check_sortedness=False)
-        rows = rows.join(known.rename({"leg": leg, "px": f"px_{leg}", "r": f"r_{leg}"}), on=["t", leg], how="left")
+    q = rows.unpivot(index="t", on=["long", "short"], value_name="leg").select("t", "leg").unique().sort("t")
+    known = q.join_asof(px, on="t", by="leg", strategy="backward", check_sortedness=False)
+    rows = rows.join(known.rename({"leg": "long", "px": "px_long", "r": "r_long"}), on=["t", "long"], how="left")
+    rows = rows.join(known.rename({"leg": "short", "px": "px_short", "r": "r_short"}), on=["t", "short"], how="left")
     a, b = pl.min_horizontal("long", "short"), pl.max_horizontal("long", "short")
     rows = rows.with_columns(pair=a + "|" + b).sort("t")
     corr = pl.rolling_corr(pl.col("r_long"), pl.col("r_short"), window_size=window, min_samples=min_obs)
@@ -71,12 +71,9 @@ def _bad_share() -> dict[str, float]:
     e0 = f.filter(pl.col("entity") == "e0")
     twin = e0.with_columns(entity=pl.lit("e1"), value=pl.col("value") * 1.002)
     f = pl.concat([e0, twin, f.filter(pl.col("entity") == "e2")])
-    hours = range(80, 300)
-    rows = [
-        (START_NS + h * HOUR_NS, pair, "e0", other) for h in hours for pair, other in (("e0>e1", "e1"), ("e0>e2", "e2"))
-    ]
-    cands = pl.DataFrame(rows, schema=["t", "entity", "long", "short"], orient="row")
-    cands = cands.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"))
+    hours = pl.DataFrame({"t": pl.int_range(80, 300, eager=True) * HOUR_NS + START_NS})
+    pairs = pl.DataFrame({"entity": ["e0>e1", "e0>e2"], "long": ["e0", "e0"], "short": ["e1", "e2"]})
+    cands = hours.join(pairs, how="cross").with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"))
     legs = hedged_legs(cands, f, "price", 1.2, 0.3, 72, 48, 1e-3)
     bad = legs.group_by("entity").agg((~pl.col("ok")).mean().alias("bad"))
     return {str(e): float(v) for e, v in bad.iter_rows()}

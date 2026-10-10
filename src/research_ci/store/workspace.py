@@ -74,12 +74,14 @@ def hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def hash_tree(root: Path, ignored: frozenset[str] = IGNORED) -> str:
-    """Hash of every file's relative path and content under ``root``, skipping caches and engine state."""
+def hash_tree(root: Path, ignored: frozenset[str] = IGNORED, leave_out: frozenset[str] = frozenset()) -> str:
+    """Hash of every file's relative path and content under ``root``, skipping caches, engine state, and the files
+    and directories named in ``leave_out`` by their path relative to ``root``."""
     root = Path(root)
     entries = []
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root)
-        if path.is_file() and not ignored.intersection(rel.parts):
+        left_out = any(rel.as_posix() == x or rel.as_posix().startswith(f"{x}/") for x in leave_out)
+        if path.is_file() and not ignored.intersection(rel.parts) and not left_out:
             entries.append([rel.as_posix(), hash_file(path)])
     return hashlib.sha256(canonical_json(entries)).hexdigest()

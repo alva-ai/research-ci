@@ -1,5 +1,6 @@
-"""Plugin protocols. Plugins live in a lab, import only ``research_ci.api``, and are found through the entry-point group
-``research_ci.plugins``; each entry is a factory the engine calls with the options from the contract's ``Use``.
+"""Plugin protocols. Plugins live in a lab, import ``research_ci.api`` and, for its methods, ``research_ci.eval``, and
+are found through the entry-point group ``research_ci.plugins``; each entry is a factory the engine calls with the
+options from the contract's ``Use``.
 
 Plugins supply raw material only. The engine hands them the data, perturbs their inputs, and judges their outputs;
 before it uses a plugin it runs protocol tests on it (point-in-time truncation, determinism, reconciliation, known
@@ -8,7 +9,6 @@ events). Everything a plugin reads must come from the fields it is given.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
@@ -61,14 +61,6 @@ class ReferenceSource(Protocol):
     reference_note: str
 
     def reference(self, requests: pl.DataFrame) -> Reference: ...
-
-
-@runtime_checkable
-class NativeWriter(Protocol):
-    """A data plugin whose data a consumer reads as files: writes fields back in the consumer's own layout, so the
-    engine controls what the consumer sees (truncated, perturbed, or sliced)."""
-
-    def write_native(self, fields: pl.DataFrame, root: Path) -> None: ...
 
 
 @runtime_checkable
@@ -173,6 +165,12 @@ class CostModel(Protocol):
 @runtime_checkable
 class TargetPlugin(Protocol):
     """Turns one horizon's label rows (joined with the candidate columns) into the number the claim is about at each
-    decision time (``t``, ``value``). The engine only ever reports how much that number varies, never its level."""
+    decision time (``t``, ``value``). Before any submission the engine reports only how much that number varies, never
+    its level.
+
+    Two optional class attributes tell the cards how to show the number. ``per`` is a short word for what one value
+    is, such as ``"entry"``: values are then fractions shown in basis points per that unit. ``rolls = True`` says a
+    value is a return over the horizon that can be repeated back to back, so a card may add what it comes to over a
+    year, ``value × 365 days / h``. Without them, cards show the raw number."""
 
     def reduce(self, labels: pl.DataFrame, horizon: pd.Timedelta, costs: CostModel) -> pl.DataFrame: ...

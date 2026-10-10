@@ -1,5 +1,6 @@
 """Admitting a data source: does the plugin give, for any past time, what was known then, and does an independent
-source agree with what it gives? Run once per plugin, options and code; every idea using the source reuses it.
+source agree with what it gives? Run once per plugin, options and code; every idea using the source reuses it, and
+the first approval of an idea's data that uses it admits it.
 
 Two canaries check the checks on this very data: a deletion made with hindsight must be caught by the replay, and
 values altered on our side must be caught by the reconciliation."""
@@ -105,7 +106,7 @@ def admit(use: Use, plugin: Any, fields: pl.DataFrame, settings: SourceSettings 
     spec["checks"] = [asdict(c) for c in checks]
     failed = [c.name for c in checks if c.status == "fail"]
     status = "not admitted" if failed else "admissible"
-    notes = [f"failed: {', '.join(failed)}"] if failed else ["a person admits it once: rci source approve"]
+    notes = [f"failed: {', '.join(failed)}"] if failed else ["admitted once, by approving the data of an idea"]
     spec["verdict"] = {"status": status, "notes": notes}
     spec["seconds"] = round(time.monotonic() - started, 1)
     return spec

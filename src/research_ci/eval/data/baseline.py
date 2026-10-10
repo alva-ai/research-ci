@@ -56,21 +56,37 @@ def baseline(
     )
     found = [_anomalies(gaps, "gap"), _anomalies(near, "near")]
     if levels:
-        level = pl.col("value")
-        e = e.filter(pl.col("field").is_in(list(levels))).with_columns(
-            before=level.rolling_median(window, min_samples=1).shift(1).over("entity", "field"),
-            after=level.rolling_median(window).shift(-(window - 1)).over("entity", "field"),
-        )
-        big = (pl.col("before") > 0) & (pl.col("value") > 0) & _ratio("value", "before", shift_ratio)
-        big = (big & _ratio("after", "before", shift_ratio)).fill_null(False)
-        e = e.with_columns(big=big).with_columns(prior=pl.col("big").shift(1).over("entity", "field").fill_null(False))
-        shifts = e.filter(pl.col("big") & ~pl.col("prior"))
+        shifts = _shifts(e.filter(pl.col("field").is_in(list(levels))), shift_ratio, window)
         what = f"lasting moves of {shift_ratio:g}× or more"
         checks.append(_count("no level shifts", shifts.height, what, shifts))
         found.append(_anomalies(shifts, "shift"))
     else:
         checks.append(Check("no level shifts", "skip", "the source declares no level fields"))
     return checks, pl.concat(found)
+
+
+def level_shift_anomalies(
+    fields: pl.DataFrame, levels: tuple[str, ...] = (), shift_ratio: float = 0.0, window: int = 0
+) -> pl.DataFrame:
+    """The baseline's level shifts alone, read from the declared levels only."""
+    if not levels:
+        return pl.DataFrame(schema=ANOMALY_SCHEMA)
+    e = events(fields.filter(pl.col("field").is_in(list(levels))))
+    return _anomalies(_shifts(e, shift_ratio, window), "shift")
+
+
+def _shifts(e: pl.DataFrame, shift_ratio: float, window: int) -> pl.DataFrame:
+    """Events of declared levels ``shift_ratio`` or more from the median of the last ``window`` events whose next
+    ``window`` stay there, flagged where they start."""
+    level, by = pl.col("value"), ["entity", "field"]
+    e = e.with_columns(
+        before=level.rolling_median(window, min_samples=1).shift(1).over(by),
+        after=level.rolling_median(window).shift(-(window - 1)).over(by),
+    )
+    big = (pl.col("before") > 0) & (pl.col("value") > 0) & _ratio("value", "before", shift_ratio)
+    big = (big & _ratio("after", "before", shift_ratio)).fill_null(False)
+    e = e.with_columns(big=big).with_columns(prior=pl.col("big").shift(1).over(by).fill_null(False))
+    return e.filter(pl.col("big") & ~pl.col("prior"))
 
 
 def _ratio(a: str, b: str, k: float) -> pl.Expr:

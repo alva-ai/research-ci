@@ -75,11 +75,11 @@ layers = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "reference plugins only use api"
+name = "reference plugins use only api and eval"
 type = "forbidden"
+allow_indirect_imports = true
 source_modules = ["research_ci.reference_plugins"]
 forbidden_modules = [
-    "research_ci.eval",
     "research_ci.kernel",
     "research_ci.stages",
     "research_ci.workflow",

@@ -1,32 +1,9 @@
-"""The SourceCard and the DataCard."""
+"""The DataCard."""
 
 import math
 from typing import Any
 
-from research_ci.render.common import adder, bp, check_line, days
-
-
-def source_card(spec: dict[str, Any]) -> str:
-    out = [f"SourceCard · {spec['plugin']} · code {spec['code'][:12]}"]
-    add = adder(out)
-    add("fields", f"{' '.join(spec['fields'])} · {spec['entities']} entities · {spec['rows']:,} rows")
-    checks = {c["name"]: c for c in spec["checks"]}
-    first = [c for c in spec["checks"] if not c["name"].startswith(("replay", "independent", "canary"))]
-    add("baseline", *[check_line(c) for c in first])
-    if "replay as of past times" in checks:
-        bad = [r for r in spec.get("replay", []) if r["status"] == "fail"]
-        add("replay", check_line(checks["replay as of past times"]), *[f"     {_cut(r)}" for r in bad[:8]])
-    if "independent source agrees" in checks:
-        ref = spec.get("reference", {})
-        counts = [f"{k}: {_counts(v)}" for k, v in ref.get("counts", {}).items()]
-        note = f"     source: {ref['note']}" if ref.get("note") else None
-        add("reference", check_line(checks["independent source agrees"]), note, *[f"     {c}" for c in counts])
-    add("canaries", *[check_line(c) for c in spec["checks"] if c["name"].startswith("canary")])
-    add("grades", _grades(spec["grades"]))
-    v = spec["verdict"]
-    add("verdict", v["status"].upper(), *v["notes"])
-    out.append("-" * 100)
-    return "\n".join(out)
+from research_ci.render.common import adder, bp, check_line
 
 
 def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
@@ -38,15 +15,11 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['entities']} entities · "
         f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
     )
-    src = spec["source"]
-    status = {"admitted": "admitted", "waiting": "WAITING for a person [!]", "not admitted": "NOT ADMITTED [!]"}
-    detail = f"{src['plugin']} {status[src['status']]} · admission {src['admission'][:12]}"
-    failed = f"failed: {', '.join(src['failed'])}" if src["failed"] else None
-    add("source", detail, failed)
+    add("source", *_source(spec["source"]))
     add("checks", *[check_line(c) for c in spec["checks"]])
     rows = spec["treatments"]
     if rows:
-        add("treatments", f"{'':<40}{'rows':>10}{'|Δ| bp':>9}{'MDE':>7}  at", *[_treatment(t) for t in rows])
+        add("treatments", f"{'':<40}{'rows':>10}{'|Δ| bp':>10}{'MDE':>9}  at", *[_treatment(t) for t in rows])
         add("", f"below {spec.get('materiality', 0.5):g} MDE: applied and logged · sizes only, never direction")
         if spec.get("kept"):
             add("", f"kept by a person: {', '.join(spec['kept'])}")
@@ -56,9 +29,11 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         mark = {"holds": "ok  ", "returned": "FAIL", "not calibrated": "[!] "}.get(t.get("status", ""), "--  ")
         add("tests", f"{mark} {t['name']}: flagged {t['flagged']} rows · on fail {t['on_fail']}")
     if spec["power"]:
-        add(
-            "power", f"{'H':<12}{'MDE before':>11}{'after':>8}{'new data':>11}", *[_power_row(p) for p in spec["power"]]
-        )
+        add("power", f"{'H':<12}{'MDE before':>11}{'after':>8}", *[_power_row(p) for p in spec["power"]])
+    conc = spec.get("concentration")
+    if conc and any(v for _, v in conc["shares"]):
+        head = f"share of the noise that goes away without each {conc['clusters']}, largest first"
+        add("clusters", head, *[_shares(k, v) for k, v in conc["shares"] if v])
     add("grades", _grades(spec["grades"]))
     add("decide", *(spec["decide"] or ["nothing"]))
     v = spec["verdict"]
@@ -69,15 +44,20 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     return "\n".join(out)
 
 
-def _cut(r: dict[str, Any]) -> str:
-    what = r["error"] or (
-        f"{r['only_replay']} rows only as of then, {r['only_full']} only in the full fetch, {r['changed']} changed"
-    )
-    return f"{r['at']}  {r['why']}: {what} · {', '.join(r['differ'][:3])}"
-
-
-def _counts(c: dict[str, int]) -> str:
-    return " · ".join(f"{k} {v}" for k, v in sorted(c.items()))
+def _source(src: dict[str, Any]) -> list[str]:
+    """One line for a source someone admitted; its admission checks while no one has, since approving this card
+    admits it for every idea."""
+    head = f"{src['plugin']} · admission {src['admission'][:12]}"
+    if src["status"] == "admitted":
+        return [f"{head} · admitted"]
+    status = "not yet admitted: approving this card admits it for every idea [!]"
+    status = status if src["status"] == "waiting" else "NOT ADMITTED: it failed its admission checks [!]"
+    lines = [f"{head} · {status}", f"code {src['code'][:12]} · {src['entities']} entities · {src['rows']:,} rows"]
+    for c in src["checks"]:
+        lines.append(check_line(c))
+        if c["name"] == "independent source agrees" and src["reference"]:
+            lines.append(f"     reference: {src['reference']}")
+    return lines
 
 
 def _grades(grades: dict[str, str]) -> str:
@@ -93,14 +73,30 @@ def _treatment(t: dict[str, Any]) -> str:
     if t.get("kept"):
         return _treatment({**t, "kept": False}) + "  kept, not applied"
     if not t.get("influence"):
-        return f"{t['name'][:39]:<40}{rows:>10}{'n/a':>9}{'n/a':>7}"
-    key, top = max(
-        t["influence"].items(), key=lambda kv: kv[1]["mde"] if math.isfinite(kv[1]["mde"] or math.nan) else -1
-    )
-    mde = top["mde"] if top["mde"] is not None else math.nan
-    bp = top["bp"] if top["bp"] is not None else math.nan
-    return f"{t['name'][:39]:<40}{rows:>10}{bp:>9.2f}{mde:>7.2f}  {key}"
+        return f"{t['name'][:39]:<40}{rows:>10}{'n/a':>10}{'n/a':>9}"
+    key, top = max(t["influence"].items(), key=lambda kv: _rank(kv[1]))
+    if top.get("unbounded"):
+        return f"{t['name'][:39]:<40}{rows:>10}{'inf':>10}{'inf':>9}  {key}"
+    return f"{t['name'][:39]:<40}{rows:>10}{_size(top['bp']):>10}{_size(top['mde']):>9}  {key}"
+
+
+def _rank(influence: dict[str, Any]) -> float:
+    """An unbounded influence (a value that is not finite before the treatment) ranks first; one not measured last."""
+    if influence.get("unbounded"):
+        return math.inf
+    x = influence["mde"]
+    return x if x is not None and math.isfinite(x) else -1.0
+
+
+def _size(x: float | None) -> str:
+    if x is None or not math.isfinite(x):
+        return "n/a"
+    return f"{x:.2f}" if abs(x) < 1e4 else f"{x:.3g}"
+
+
+def _shares(key: str, shares: list[list[Any]]) -> str:
+    return f"{key:<12}" + " · ".join(f"{c} {x:.0%}" for c, x in shares)
 
 
 def _power_row(p: dict[str, Any]) -> str:
-    return f"{p['on'] + ' ' + p['horizon']:<12}{bp(p['mde_before']):>11}{bp(p['mde']):>8}{days(p['forward_days']):>11}"
+    return f"{p['on'] + ' ' + p['horizon']:<12}{bp(p['mde_before']):>11}{bp(p['mde']):>8}"

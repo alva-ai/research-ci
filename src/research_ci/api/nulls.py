@@ -8,13 +8,6 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class BlockPermute:
-    """Permute labels across time blocks of ``block`` (for example a horizon), keeping autocorrelation."""
-
-    block: str
-
-
-@dataclass(frozen=True)
 class PermuteWithin:
     """Shuffle scores across entities inside each bucket of ``bucket_by`` at each decision time (``"time"``: one
     bucket per decision time); the labels stay.
@@ -30,50 +23,17 @@ class PermuteWithin:
 
 
 @dataclass(frozen=True)
-class ShiftTime:
-    """Shift outputs against labels by a random offset between ``min_shift`` and ``max_shift``, or by whole years."""
-
-    min_shift: str
-    max_shift: str | None = None
-    whole_years: bool = False
-
-
-@dataclass(frozen=True)
-class ReplaceField:
-    """Scramble the named input fields and recompute the output: the claimed mechanism is removed."""
-
-    fields: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class RandomEvents:
-    """Replace selected events with unselected ones from the same pool, same entity and density."""
-
-    pool: str
-
-
-@dataclass(frozen=True)
-class RandomizeTiming:
-    """Random decisions at the same rate as the real ones (algo layer)."""
-
-    keep: str = "rate"
-
-
-World = BlockPermute | PermuteWithin | ShiftTime | ReplaceField | RandomEvents | RandomizeTiming
-
-
-@dataclass(frozen=True)
 class Null:
     """One alternative explanation ("it is only X") and the world that keeps X.
 
     ``explains`` is the id of an alternative in the contract. ``keeps`` names the column X lives in (``"time"``: only
-    when a decision happens); a ``PermuteWithin`` world keeps its own bucket unless told otherwise. The engine checks
-    the claim: an output that carries only X must not beat this world. ``criteria`` limits it to some criteria by
-    name; empty means every criterion of the layer.
+    when a decision happens), the world's own bucket unless told otherwise. In feat a world judges the layer's
+    criteria, which are shown next to the decisive effect and do not decide; ``criteria`` limits it to some of them by
+    name, and empty means every criterion of the layer.
     """
 
     explains: str
-    world: World
+    world: PermuteWithin
     keeps: str | None = None
     criteria: tuple[str, ...] = ()
     reps: int = 200
@@ -82,10 +42,12 @@ class Null:
     def __post_init__(self) -> None:
         if not self.explains.strip():
             raise ValueError("say which alternative explanation this null world keeps")
+        if not isinstance(self.world, PermuteWithin):
+            raise ValueError("a null world is a PermuteWithin")
         if self.reps < 20:
             raise ValueError("a null world needs at least 20 repetitions")
         object.__setattr__(self, "criteria", tuple(self.criteria))
-        if self.keeps is None and isinstance(self.world, PermuteWithin):
+        if self.keeps is None:
             object.__setattr__(self, "keeps", self.world.bucket_by)
 
 

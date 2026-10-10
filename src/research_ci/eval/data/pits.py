@@ -17,11 +17,11 @@ NS = pl.Duration("ns")
 def target(fields: pl.DataFrame, field: str, rng: np.random.Generator, exclude: str | None = None) -> str:
     """An entity with at least 20 rows of ``field`` and more than two distinct values."""
     stats = fields.filter(pl.col("field") == field).group_by("entity").agg(pl.len(), pl.col("value").n_unique())
-    names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2))["entity"].sort().to_list()
-    names = [n for n in names if n != exclude]
-    if not names:
+    other = pl.col("entity").ne_missing(pl.lit(exclude, dtype=pl.String))
+    names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2) & other)["entity"].sort()
+    if names.is_empty():
         raise ValueError(f"no entity where {field} varies enough to plant a pit")
-    return str(names[int(rng.integers(len(names)))])
+    return str(names[int(rng.integers(names.len()))])
 
 
 def _rows(fields: pl.DataFrame, entity: str, field: str) -> pl.Expr:
