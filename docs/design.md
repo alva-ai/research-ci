@@ -1426,6 +1426,7 @@ class DataPlugin(Protocol):  # class attribute `levels` (optional): fields whose
 
 class ReferenceSource(Protocol):  # a data plugin that can ask an independent source
     reference_note: str  # where the rows come from, for the person admitting the plugin
+
     def reference(self, requests: pl.DataFrame) -> Reference: ...  # rows found, and the requests it could check
 
 
