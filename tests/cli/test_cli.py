@@ -53,6 +53,14 @@ def test_unknown_template_is_an_error(tmp_path: Path) -> None:
     assert "unknown template" in result.output
 
 
+def test_the_card_id_derive_prints_is_the_one_approval_checks(tmp_path: Path) -> None:
+    idea = tmp_path / "tox"
+    assert runner.invoke(app, ["init", str(idea), "-t", "factor"]).exit_code == 0
+    (idea / "contract.py").write_text(CONTRACT)
+    printed = runner.invoke(app, ["contract", "derive", "-i", str(idea)]).stdout
+    assert f"card {_card(idea, 'contract')}" in printed
+
+
 def test_approve_refuses_without_a_terminal(tmp_path: Path) -> None:
     idea = _derived(tmp_path)
     result = runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea)], input="y\n")

@@ -192,8 +192,7 @@ class IdeaBase:
         return preview
 
     def approve(self, stage: str, extra: Mapping[str, str] | None = None, approval: Approval | None = None) -> Freeze:
-        """Freeze a stage. ``approval`` says who approved and through which channel; the ledger keeps it, and the
-        verdict machinery caps what agent-approved or relayed stages can reach."""
+        """Freeze a stage. ``approval`` says who approved and through which channel; the ledger keeps it."""
         current = self._allowed(stage, Command.APPROVE)
         who = approval or Approval()
         found = self._stage_freeze(stage, current)

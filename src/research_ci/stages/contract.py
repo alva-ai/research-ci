@@ -609,9 +609,10 @@ def _use_named(contract: Contract, name: str) -> Use:
 
 
 def jsonable(obj: Any) -> Any:
-    """Plain JSON values: tuples become lists, and numbers that are not finite become null."""
+    """Plain JSON values as the ledger keeps them: keys sorted, tuples become lists, and numbers that are not finite
+    become null. A card rendered from this reads the same as one rendered from the ledger."""
     if isinstance(obj, dict):
-        return {str(k): jsonable(v) for k, v in obj.items()}
+        return {k: jsonable(v) for k, v in sorted(((str(k), v) for k, v in obj.items()), key=lambda kv: kv[0])}
     if isinstance(obj, list | tuple):
         return [jsonable(v) for v in obj]
     if isinstance(obj, float):

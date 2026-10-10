@@ -113,9 +113,7 @@ def approve(
     relayed: Annotated[
         str | None, typer.Option(help="An agent relays a person's approval; quote the person's words.")
     ] = None,
-    auto: Annotated[
-        bool, typer.Option(help="Fully automatic research: the agent approves; results are capped.")
-    ] = False,
+    auto: Annotated[bool, typer.Option(help="Fully automatic research: the agent approves.")] = False,
     card: common.Card = "",
 ) -> None:
     """Freeze a stage, or extend a paused layer's budget.

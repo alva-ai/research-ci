@@ -140,6 +140,10 @@ def frozen(
         every, offset = contract.execution.every, contract.execution.offset
     times = pw.decision_grid(span_ns(span(every)), span_ns(span(offset)), start, end)
     universe = plugin(as_use(contract.universe.use))
+    for effect in contract.decisive:
+        if effect.on != "consumer":
+            plugin(_target_use(effect, contract))
+            plugin(as_use(contract.costs))
     cands = _norm_candidates(universe.candidates(fields, [from_ns(t) for t in times]))
     cands = cands.join(excluded.select("t", "entity"), on=["t", "entity"], how="anti").sort("t", "entity")
     present = sorted(int(t) for t in cands.select(pl.col("t").dt.epoch("ns").unique())["t"])
@@ -450,10 +454,14 @@ def _decisive_method(effect: Effect, frozen: Frozen, checks: list[pr.Check]) -> 
     return out
 
 
+def _target_use(effect: Effect, c: Contract) -> Use:
+    assert c.universe is not None
+    return as_use(effect.target) if effect.target else Use(DEFAULT_TARGET, {"cluster": c.universe.clusters})
+
+
 def _target(effect: Effect, frozen: Frozen) -> tuple[dict[str, Evaluate], Use]:
     c = frozen.contract
-    assert c.universe is not None
-    use = as_use(effect.target) if effect.target else Use(DEFAULT_TARGET, {"cluster": c.universe.clusters})
+    use = _target_use(effect, c)
     target: TargetPlugin = load(use, frozen.registry)
     costs: CostModel = load(as_use(c.costs), frozen.registry)
     parts = frozen.components.get(effect.on, [])
