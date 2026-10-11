@@ -46,6 +46,7 @@ class ToyData:
     """Replays as of any time, and answers reconciliation from the venue, here the same generator run apart; the
     venue keeps no history of funding intervals."""
 
+    fields = ("close", "funding_rate", "funding_interval_hours")
     levels = Levels(fields=("close",), factor=5.0, window=24, mask="24h")
 
     reference_note = "the toy venue"

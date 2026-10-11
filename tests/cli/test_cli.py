@@ -42,7 +42,7 @@ def test_version() -> None:
 def test_init_then_status_and_next(tmp_path: Path) -> None:
     idea = tmp_path / "tox"
     created = runner.invoke(app, ["init", str(idea)])
-    assert created.exit_code == 0 and created.stdout.startswith(f"created {idea}; edit")
+    assert created.exit_code == 0 and created.stdout.startswith(f"created {idea}; read {idea / 'START.md'} first")
     actions = json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)
     assert [(a["who"], a["command"]) for a in actions] == [("agent", "rci contract derive")]
     status = runner.invoke(app, ["status", "-i", str(idea)]).stdout
@@ -185,3 +185,184 @@ def test_feat_show_says_when_nothing_was_submitted(tmp_path: Path) -> None:
     idea = _derived(tmp_path)
     result = runner.invoke(app, ["feat", "show", "-i", str(idea)])
     assert result.exit_code == 1 and "rci feat submit" in result.output
+
+
+def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_path: Path) -> None:
+    idea = tmp_path / "tox"
+    printed = runner.invoke(app, ["init", str(idea)]).stdout
+    assert f"read {idea / 'START.md'} first" in printed and f"{idea / 'research' / 'example.py'}" in printed
+    start = (idea / "START.md").read_text()
+    for needed in (
+        f"rci next -i {idea}",
+        "rci plugins",
+        "rci methods",
+        "research/example.py",
+        "rci feat explore <file>",
+        "gets polars DataFrames",
+        "fields.lazy() ... .collect()",
+        "pandas is fine for dates",
+        "time and peak memory",
+        '--relayed "<their words>" --card <id>',
+    ):
+        assert needed in start, needed
+    assert len(start.splitlines()) <= 30
+    example = (idea / "research" / "example.py").read_text()
+    assert example.startswith("# rci:example") and "TODO" in example and "join_asof" in example
+    assert "fields: pl.DataFrame" in example and "fields.lazy()" in example and ".collect()" in example
+
+
+def test_plugins_lists_every_installed_plugin_with_options_and_declarations() -> None:
+    text = runner.invoke(app, ["plugins"]).stdout
+    for needed in (
+        "data: Contract(data=Use(name, {options}))",
+        "  toy.data(hours: int = 600, seed: int = 0)",
+        "    fields: close, funding_rate, funding_interval_hours",
+        "    levels: close · factor 5 · window 24 · mask 24h",
+        "universe: Universe(name, clusters=<column>, groups=(<column>, ...))",
+        "  ref.carry(price: str = 'close', flow: str | None = None)",
+        "    per: entry · rolls: yes",
+        "    from an entry point of research-ci",
+    ):
+        assert needed in text, needed
+    listed = json.loads(runner.invoke(app, ["plugins", "--json"]).stdout)
+    assert {p["name"]: p["kind"] for p in listed}["toy.carry"] == "consumer"
+
+
+def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
+    text = runner.invoke(app, ["methods"]).stdout
+    assert text.startswith("criterion: feat.py: CRITERIA = [Criterion(name, evaluate)]")
+    assert (
+        "  from research_ci.eval.statistics.ic import rank_ic\n    rank_ic(table: pl.DataFrame, label: str = 'y')"
+        in text
+    )
+    assert "backed by 3 worked examples · 3 properties" in text and "backed by 1 worked example · 0 properties" in text
+    assert (
+        "data test: data.py: TESTS = [DataTest(name, check, covers, on_fail)]" in text and "pit: nulls/data.py" in text
+    )
+    for needed in (
+        "null world: nulls/feat.py: NULLS = [Null(explains, world)]; give each alternative of the contract one",
+        "  from research_ci.api import Null, PermuteWithin\n    Null(explains: str, world: PermuteWithin, keeps: ",
+        "      explains  the id of the contract's alternative this world answers",
+        "    PermuteWithin(bucket_by: str, clusters: str | None = None, block: str | None = None)",
+        '  for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"))]',
+    ):
+        assert needed in text, needed
+    listed = json.loads(runner.invoke(app, ["methods", "--json"]).stdout)
+    assert {"use", "import", "signature", "doc", "examples", "properties"} <= set(listed[0])
+    assert [m["name"] for m in listed if m["use"] == "null world"] == ["Null", "PermuteWithin"]
+
+
+def test_an_idea_named_from_inside_itself_says_to_drop_the_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    idea = tmp_path / "tox"
+    runner.invoke(app, ["init", str(idea)])
+    monkeypatch.chdir(idea)
+    inside = runner.invoke(app, ["next", "-i", "tox"])
+    assert inside.exit_code == 1 and "you are already in the idea tox; drop -i, or run from its parent" in inside.output
+    monkeypatch.chdir(tmp_path)
+    below = runner.invoke(app, ["status", "-i", "tox/research"])
+    assert below.exit_code == 1 and "tox is the idea; pass -i tox" in below.output
+    elsewhere = runner.invoke(app, ["status", "-i", "nothing"])
+    assert "is not a Research CI idea; run `rci init` first" in elsewhere.output
+
+
+@pytest.mark.parametrize(
+    ("change", "said"),
+    [
+        (
+            ("data='toy.data'", "data='toy.dta'"),
+            ["no plugin named 'toy.dta'", "did you mean 'toy.data'?", "rci plugins"],
+        ),
+        (
+            ("{'flow': 'funding_rate'}", "{'flw': 'funding_rate'}"),
+            [
+                "plugin 'ref.carry' rejects its options",
+                "it takes ref.carry(price: str = 'close', flow: str | None = None)",
+            ],
+        ),
+        (
+            ("'top': 0.34", "'top': 3.4"),
+            ["plugin 'ref.mean' rejects its options", "top is a share", "it takes ref.mean(cluster: str = 'entity'"],
+        ),
+    ],
+)
+def test_a_wrong_plugin_name_or_option_says_how_to_fix_it(
+    tmp_path: Path, change: tuple[str, str], said: list[str]
+) -> None:
+    idea = tmp_path / "tox"
+    runner.invoke(app, ["init", str(idea)])
+    (idea / "contract.py").write_text(CONTRACT.replace(*change))
+    result = runner.invoke(app, ["contract", "derive", "-i", str(idea)])
+    assert result.exit_code == 1 and "Traceback" not in result.output
+    for needed in said:
+        assert needed in result.output, (needed, result.output)
+
+
+def test_next_names_the_file_to_write_and_the_helpers_at_every_step(tmp_path: Path) -> None:
+    idea = tmp_path / "tox"
+    runner.invoke(app, ["init", str(idea)])
+
+    def reason() -> str:
+        return json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)[0]["reason"]
+
+    assert all(x in reason() for x in ("contract.py", "START.md", "`rci plugins`"))
+    (idea / "contract.py").write_text(CONTRACT)
+    assert runner.invoke(app, ["contract", "derive", "-i", str(idea)]).exit_code == 0
+    assert "`rci contract show` prints it with the card id that a relayed approval quotes" in reason()
+    shown = runner.invoke(app, ["contract", "show", "-i", str(idea)]).stdout
+    assert shown.startswith("ContractCard") and shown.rstrip().endswith(f"card {_card(idea, 'contract')}")
+    assert runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--auto"]).exit_code == 0
+    assert all(x in reason() for x in ("data.py", "`rci methods`"))
+
+
+SPREAD = """
+import polars as pl
+
+
+def features(fields, candidates):
+    return candidates.select("t", "entity", pl.col("spread_h").alias("score"))
+"""
+
+ROWS = """
+import polars as pl
+
+
+def features(fields, candidates):
+    rows = [(t, e, s) for t, e, s in candidates.select("t", "entity", "spread_h").iter_rows()]
+    return pl.DataFrame(rows, schema=["t", "entity", "score"], orient="row")
+"""
+
+
+def test_feat_from_the_command_line_prints_the_card_id_approval_checks(tmp_path: Path) -> None:
+    idea = _derived(tmp_path)
+    for stage in ("contract", "data"):
+        if stage == "data":
+            assert runner.invoke(app, ["data", "check", "-i", str(idea)]).exit_code == 0
+        relay = ["--relayed", "ok", "--card", _card(idea, stage)]
+        assert runner.invoke(app, ["approve", "--stage", stage, "-i", str(idea), *relay]).exit_code == 0
+    reason = json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)[0]["reason"]
+    assert all(
+        x in reason for x in ("research/example.py", "`rci feat explore <file>`", "row loops run with a warning")
+    )
+
+    example = runner.invoke(app, ["feat", "submit", str(idea / "research" / "example.py"), "-i", str(idea)])
+    assert example.exit_code == 1 and "is still the example; write your own" in example.output
+    (idea / "research" / "rows.py").write_text(ROWS)
+    rows = runner.invoke(app, ["feat", "explore", str(idea / "research" / "rows.py"), "-i", str(idea)])
+    warned = "warnings   [!] row-wise code: research/rows.py:6 iter_rows — polars expressions are usually much faster"
+    assert rows.exit_code == 0 and rows.output.startswith("ExploreCard") and warned in rows.output, rows.output
+    assert "\ncost       full call " in rows.output and ", peak memory " in rows.output
+    assert Idea(idea).status().stage("feat").trials == 0
+
+    (idea / "research" / "spread.py").write_text(SPREAD)
+    submitted = runner.invoke(app, ["feat", "submit", str(idea / "research" / "spread.py"), "-i", str(idea)])
+    assert submitted.exit_code == 0, submitted.output
+    card = _card(idea, "feat")
+    assert "verdict    PASSED" in submitted.output and f"\ncard {card}\nup for review" in submitted.output
+    shown = runner.invoke(app, ["feat", "show", "-i", str(idea)]).stdout
+    assert shown.rstrip().endswith(f"card {card}\nup for review; a person approves it with `rci approve --stage feat`")
+    reason = json.loads(runner.invoke(app, ["next", "-i", str(idea), "--json"]).stdout)[0]["reason"]
+    assert "`rci feat show` prints it with the card id that a relayed approval quotes" in reason
+    relay = ["--relayed", "ok", "--card", card]
+    assert runner.invoke(app, ["approve", "--stage", "feat", "-i", str(idea), *relay]).exit_code == 0

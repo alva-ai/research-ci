@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from research_ci.render.common import adder, bp, check_line
+from research_ci.render.feat import calibration_lines
 
 
 def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
@@ -30,6 +31,9 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         add("tests", f"{mark} {t['name']}: flagged {t['flagged']} rows · on fail {t['on_fail']}")
     if spec["power"]:
         add("power", f"{'H':<12}{'MDE before':>11}{'after':>8}", *[_power_row(p) for p in spec["power"]])
+    cal = spec.get("calibration")
+    if cal is not None:
+        add("calibrate", *(calibration_lines(cal) or [f"FAIL {n}" for n in cal["notes"]]))
     conc = spec.get("concentration")
     if conc and any(v for _, v in conc["shares"]):
         head = f"share of the noise that goes away without each {conc['clusters']}, largest first"

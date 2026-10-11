@@ -11,11 +11,37 @@ CHECKPOINT_RUN: dict[str, tuple[Who, str]] = {
     "monitor": ("scheduler", "rci monitor --all"),
 }
 AGENT: dict[str, tuple[str, str, str]] = {
-    "contract": ("derive", "rci contract derive", "write contract.py, then derive the contract"),
-    "data": ("check", "rci data check", "check the data against the contract"),
-    "feat": ("submit", "rci feat submit <file>", "submit a features file"),
+    "contract": (
+        "derive",
+        "rci contract derive",
+        "fill in contract.py (START.md says how; `rci plugins` lists the plugins, their options and fields), then "
+        "derive the contract",
+    ),
+    "data": (
+        "check",
+        "rci data check",
+        "check the data against the contract; tests for risks the default checks miss go in data.py "
+        "(`rci methods` lists what they can call)",
+    ),
+    "feat": (
+        "submit",
+        "rci feat submit <file>",
+        "write research/<name>.py from research/example.py (polars expressions; row loops run with a warning), try "
+        "it with `rci feat explore <file>`, then submit it; give each alternative of contract.py a world in "
+        'nulls/feat.py, such as NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", '
+        'block="horizon"))], or the ResultCard marks it uncovered; diagnostics in feat.py are optional; '
+        "`rci methods` lists what diagnostics can call and the fields of a null world",
+    ),
 }
+BUILT = frozenset({"contract", "data", "feat"})
+AGAIN: dict[str, str] = {
+    "contract": "fix contract.py and derive it again",
+    "data": "fix what it names and check again",
+    "feat": "write a new features file in research/ and submit it",
+}
+CALIBRATION = "derive the changed contract with `rci contract derive`, then check the data again"
 CARD = {"contract": "ContractCard", "data": "DataCard"}
+SHOW = {"contract": "rci contract show", "data": "rci data show", "feat": "rci feat show"}
 
 
 @dataclass(frozen=True)
@@ -72,12 +98,23 @@ def _stage(s: StageStatus) -> Action:
     if s.state is State.REVIEW:
         what = f"{s.note}; review" if s.note and name not in CARD else "review"
         reason = f"{what} the {CARD.get(name, 'ResultCard')} and approve it"
+        if name in SHOW:
+            reason += f"; `{SHOW[name]}` prints it with the card id that a relayed approval quotes"
         return Action("human", name, "approve", f"rci approve --stage {name}", reason)
     if s.state is State.PAUSED:
         reason = f"all {s.budget} submissions used; extend the budget or drop the idea"
         return Action("human", name, "extend", f"rci approve --stage {name} --extend N", reason)
+    if s.kind is Kind.LAYER and name not in BUILT and s.state is State.OPEN:
+        reason = (
+            f"the {name} layer is not built yet, so this idea is done for now: every stage before {name} passed; "
+            "nothing to run until Research CI adds it"
+        )
+        return Action("agent", name, "wait", "", reason)
     kind, command, default = AGENT.get(name, ("submit", f"rci {name} submit <file>", "submit the research code"))
-    reason = s.note or default
+    reason = default
+    if s.note:
+        again = CALIBRATION if "calibrat" in s.note else AGAIN.get(name, "")
+        reason = f"{s.note}; {again}" if again else s.note
     if s.state is State.STALE:
         reason = f"{s.note}; {kind} again to start v{s.version + 1}"
     if s.budget is not None:

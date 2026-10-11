@@ -144,7 +144,10 @@ def test_a_failed_submission_keeps_the_layer_open_and_a_passed_one_goes_up_for_r
     assert idea.submit("feat", V.FAILED, note="carry: does not beat random") is S.OPEN
     action = idea.next_actions()[0]
     assert (action.who, action.command) == ("agent", "rci feat submit <file>")
-    assert action.reason == "submission 1 FAILED: carry: does not beat random (4 of 5 submissions left)"
+    assert action.reason == (
+        "submission 1 FAILED: carry: does not beat random; write a new features file in research/ and submit it "
+        "(4 of 5 submissions left)"
+    )
     assert idea.submit("feat", V.TAINTED) is S.OPEN
     assert idea.submit("feat", V.PASSED) is S.REVIEW
     assert _who(idea) == [("human", "feat", "approve")]
@@ -153,7 +156,7 @@ def test_a_failed_submission_keeps_the_layer_open_and_a_passed_one_goes_up_for_r
         idea.approve("feat")
     assert idea.submit("feat", V.PASSED) is S.REVIEW
     idea.approve("feat", approval=Approval(by="agent", channel="auto"))
-    assert _state(idea, "feat") is S.PASSED and _who(idea) == [("agent", "signal", "submit")]
+    assert _state(idea, "feat") is S.PASSED and _who(idea) == [("agent", "signal", "wait")]
 
 
 def test_a_person_accepts_only_a_passed_latest_submission(tmp_path: Path) -> None:

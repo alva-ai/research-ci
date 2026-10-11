@@ -58,7 +58,8 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
 
 
 def _decisive_line(d: dict[str, Any]) -> str:
-    return f"{d['on']}: beats random significantly · target {d['target']}"
+    options = ", ".join(f"{k}={v}" for k, v in d.get("options", {}).items())
+    return f"{d['on']}: beats random significantly · target {d['target']}({options})"
 
 
 def _label_table(d: dict[str, Any]) -> list[str]:

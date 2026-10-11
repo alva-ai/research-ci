@@ -19,10 +19,13 @@ CALIBRATE = "calibrate"
 
 class FeatCommands(IdeaBase):
     def submit_feat(self, path: Path) -> tuple[dict[str, Any], str, State]:
-        """Judge one file of features against the floor world and record the verdict, one trial. The first submission
-        on what the contract and the data froze calibrates the decisive effect, and later ones reuse it; a failed
-        calibration refuses the submission without spending a trial, and so do repeated scores."""
+        """Judge one file of features against the floor world and record the verdict, one trial. The data check
+        calibrated the decisive effect, and submissions reuse it; when anything it rests on changed since, the first
+        submission calibrates it again, and a failed calibration refuses the submission without spending a trial. So do
+        repeated scores, and a features file that is still the example, before anything runs; row-by-row code is a
+        warning on the card."""
         current = self._allowed(FEAT, Command.SUBMIT)
+        fs.screen(self.root, Path(path), self.registry)
         contract = self._approved_contract()
         frozen = self._frozen_feat(contract)
         calibration = self._calibration(frozen)
@@ -30,9 +33,12 @@ class FeatCommands(IdeaBase):
         n = current.trials + 1
         scores = {e["scores"]["hash"]: e["n"] for e in earlier}
         result = fs.submit(self.root, frozen, Path(path), n, scores, self.feat_settings)
-        first = all(e["calibration"]["record"] != calibration["hash"] for e in earlier)
+        first = (
+            all(e["calibration"]["record"] != calibration["hash"] for e in earlier) and calibration["kind"] == CALIBRATE
+        )
         cal = calibration["payload"]
-        result["calibration"] = {"record": calibration["hash"], "ran": first} | {k: cal[k] for k in ("rows", "checks")}
+        result["calibration"] = {"record": calibration["hash"], "ran": first, "by": calibration["kind"]}
+        result["calibration"] |= {k: cal[k] for k in ("rows", "checks")}
         result["budget"] = current.budget
         result = jsonable(result)
         deps = self.deps(FEAT, frozen.deps | fs.files(self.root))
@@ -50,7 +56,9 @@ class FeatCommands(IdeaBase):
         status = self.status()
         if status.stage(DATA).state is not State.PASSED:
             raise WorkflowError("feat reads the frozen data; the data layer has not passed")
-        spec = jsonable(fs.explore(self._frozen_feat(self._approved_contract()), Path(path), self.feat_settings))
+        fs.screen(self.root, Path(path), self.registry, fs.EXPLORED)
+        frozen = self._frozen_feat(self._approved_contract())
+        spec = jsonable(fs.explore(self.root, frozen, Path(path), self.feat_settings))
         return spec, explore_card(spec, self.root.name)
 
     def results(self) -> list[str]:
@@ -75,10 +83,15 @@ class FeatCommands(IdeaBase):
         ]
 
     def _calibration(self, frozen: fs.Frozen) -> dict[str, Any]:
-        """The calibration record for what this submission rests on: the first submission on it runs and records it,
-        and later ones reuse it while the contract, the frozen data, the engine, the plugins feat runs, and the
-        settings are unchanged. A failed one refuses the submission until one of them changes."""
-        key = self.deps(FEAT, fs.calibration_key(frozen, self.feat_settings))
+        """The calibration for what this submission rests on: the one the frozen data check ran, while the contract,
+        the frozen data, the engine, the plugins feat runs, and the settings are unchanged; otherwise the first
+        submission runs and records one, and later ones reuse it. A failed one refuses the submission until one of them
+        changes."""
+        key = self._gate_key(frozen)
+        checked = self._frozen_check()
+        cal = checked["payload"]["spec"].get("calibration") if checked else None
+        if checked is not None and cal is not None and cal["key"] == key and cal["ok"]:
+            return {"kind": "check", "hash": checked["hash"], "payload": cal}
         found = None
         for r in self.ledger.records():
             if r["kind"] == CALIBRATE and r["stage"] == FEAT and r["payload"]["key"] == key:
@@ -93,6 +106,12 @@ class FeatCommands(IdeaBase):
                 "; fix the target or the contract; no submission was spent"
             )
         return found
+
+    def _frozen_check(self) -> dict[str, Any] | None:
+        """The record of the data check the data freeze pinned."""
+        approval = self._last(Command.APPROVE, DATA)
+        pinned = approval["payload"]["deps"].get("data_check") if approval else None
+        return next((r for r in self.ledger.records() if r["hash"] == pinned), None) if pinned else None
 
     def _stage_freeze(self, stage: str, current: StageStatus) -> StageFreeze | None:
         if stage != FEAT:

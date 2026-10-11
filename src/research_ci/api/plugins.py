@@ -31,6 +31,9 @@ class DataPlugin(Protocol):
 
     A class attribute ``levels`` (``research_ci.api.Levels``) names the fields whose values are levels and how large and
     lasting a jump in them must be to count; without it, nothing is checked for level shifts.
+
+    An optional class attribute ``fields`` lists the names of the fields the plugin gives, for whoever writes a
+    contract or features against it (``rci plugins`` shows it); it is documentation only, and nothing checks it.
     """
 
     def fetch(

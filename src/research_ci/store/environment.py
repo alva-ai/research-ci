@@ -8,14 +8,14 @@ from research_ci.kernel.hashing import hash_obj
 from research_ci.store.workspace import hash_file, hash_tree
 
 ENGINE = "research-ci"
-LEFT_OUT = frozenset({"render", "cli", "stages/defaults"})
+LEFT_OUT = frozenset({"render", "cli", "stages/defaults", "workflow/templates.py"})
 
 
 def judging_deps() -> dict[str, str]:
     """What the verdict machinery depends on: engine source, interpreter, and the engine's own dependencies. The
-    engine source leaves out ``render`` and ``cli``, which shape what is shown, not what is judged, and the default
-    lists in ``stages/defaults``: feat's diagnostics, which never decide, and the data layer's checks, whose result the
-    data freeze pins by content."""
+    engine source leaves out ``render`` and ``cli``, which shape what is shown, not what is judged, the files
+    ``rci init`` writes (``workflow/templates.py``), and the default lists in ``stages/defaults``: feat's diagnostics,
+    which never decide, and the data layer's checks, whose result the data freeze pins by content."""
     return {
         "engine": hash_tree(Path(research_ci.__file__).parent, leave_out=LEFT_OUT),
         "python": f"{platform.python_implementation()} {platform.python_version()}",

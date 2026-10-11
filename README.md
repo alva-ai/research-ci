@@ -2,7 +2,7 @@
 
 A backtest framework for research: an alpha claim counts only after it passes CI, the same way code does.
 
-> **Status:** early. The time kernel, the holdout, ledger, and workflow layer, the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance), the data layer (fidelity: source admission by replay and reconciliation; fitness: a mandatory default list of checks, and the idea's own tests; treatments weighed by their influence, the DataCard), and the feat layer (the decisive effect judged against random scores, its calibration, a lookahead check on cut data, diagnostics judged against the null worlds of the contract's alternatives, the ResultCard), and one lifecycle for every stage are implemented. The signal and algo layers come next. See the [roadmap](docs/design.md#roadmap).
+> **Status:** early. The time kernel, the holdout, ledger, and workflow layer, the contract stage (plugin protocols, protocol tests, power, the ContractCard, approval provenance), the data layer (fidelity: source admission by replay and reconciliation; fitness: a mandatory default list of checks, and the idea's own tests; treatments weighed by their influence; the calibration of the gate; the DataCard), and the feat layer (the decisive effect judged against random scores, a lookahead check on cut data, diagnostics judged against the null worlds of the contract's alternatives, the ResultCard), one lifecycle for every stage, and what lets an agent with no context follow it (`START.md`, `rci plugins`, `rci methods`, research code checked for row loops before it runs, errors that say how to fix them) are implemented. The signal and algo layers come next. See the [roadmap](docs/design.md#roadmap).
 
 | Area | Works today | Planned |
 | --- | --- | --- |
@@ -10,11 +10,11 @@ A backtest framework for research: an alpha claim counts only after it passes CI
 | Holdout | Explore, seal, and forward tiers declared in the contract; every stage reads only the explore tier; labels reach criteria only through the evaluation table | The seal and forward checkpoints, sealed data kept out of the agent's reach, labels through `fit` on training folds, vintage-aware labels |
 | Contract | Every field validated; `derive` loads plugins, snapshots the data, runs protocol tests, checks that the decisive target reads the scores, computes power, and prints the ContractCard | Oracle bounds for maker strategies |
 | Data | Fidelity, once per source: admission (replay as of past times, an independent source on engine-picked rows, canaries, field grades). Fitness, for every idea: a mandatory default list (freshness, level shifts, level sanity, identity breaks, coverage, the hedge guard, influence concentration) and the idea's own tests; treatments applied by default and weighed by their influence in MDE units; the DataCard | Seal-tier checks, listings from the source to catch hindsight universes |
-| Workflow | One pipeline for every idea and one lifecycle for every stage (OPEN, REVIEW, PASSED, PAUSED, STALE), budgets, lineage, `next_actions`, approval provenance | Caps by approval provenance, hooks after verdicts |
+| Workflow | One pipeline for every idea and one lifecycle for every stage (OPEN, REVIEW, PASSED, PAUSED, STALE), budgets, lineage, `next_actions` that name the file to write and the helper commands, approval provenance; `rci init` writes `START.md` and an example features file | Caps by approval provenance, hooks after verdicts |
 | Trust | Hash-chained ledger, head anchors, freeze records, data vault; plugin code and the data snapshot checked again at approval; the data freeze pins its check and the treated data; each feat submission records its features file, criteria, null worlds, plugin code, and calibration, and approval checks them again | DEV marking for an editable engine |
-| Feat | The minimal bar: the contract's decisive effect on a label must beat the engine's floor world (random scores) with a z that rises with the trial count; its calibration by stand-ins and planted signals before the first submission is judged; a lookahead check on cut data; the engine's default diagnostics and the idea's criteria, judged against the floor and the null worlds of the contract's alternatives and shown, never deciding; the ResultCard | Learning from labels with walk-forward, dedup by correlation |
+| Feat | The minimal bar: the contract's decisive effect on a label must beat the engine's floor world (random scores) with a z that rises with the trial count; its calibration by stand-ins and planted signals at the data check, before any features exist; features on polars DataFrames, with row-by-row code shown as a warning and their time and peak memory shown, never judged; a lookahead check on cut data; the engine's default diagnostics and the idea's criteria, judged against the floor and the null worlds of the contract's alternatives and shown, never deciding; the ResultCard | Learning from labels with walk-forward, dedup by correlation |
 | Judge | Protocol tests, power, minimum detectable effects; `PermuteWithin` shuffles, GridMax over horizons, z thresholds that rise with the trial count; the data checks, statistics, structure, and calibration in `eval` carry worked examples and properties on synthetic markets and sources; the protocol tests are held to broken toy plugins; real incidents are kept as regression tests | Evidence levels and caps, stress worlds and limit criteria |
-| Runner | Plugin loading by entry point, plugin code hashes | Research code in a child process with Arrow exchange |
+| Runner | Plugin loading by entry point, plugin code hashes, errors that name close plugins and a plugin's signature; the catalogs behind `rci plugins` and `rci methods`; the static check that finds row-by-row research code for the cards' warning | Research code in a child process with Arrow exchange |
 | Algo | Consumer protocol tests (point-in-time, causality, determinism, fees, labels, score pass-through) and the power of a backtest comparison, in `eval` and `kernel`; a consumer named in a contract declares the decision times | The algo layer: backtests through the consumer, from the baseline's own states or over the full path |
 | Plugins | Protocols for data, reference sources, universes, labels, targets, cost models, consumers; reference labels, target, and cost model; real plugins live in a lab | Instruments, fill models, an LLM challenger |
 
@@ -38,13 +38,15 @@ Research CI moves the judgment **before** the results and makes it executable:
 - **Executable**: that standard is code. The engine reruns the submission and decides; it never trusts numbers an agent reports.
 - **Reproducible**: the standard is frozen in the contract before any result is seen. Every shuffle and random draw uses a fixed seed, so the same inputs give the same verdict.
 
-Research code stays free (pandas or polars, rolling windows, sklearn, SHAP, anything): a features file is one function of the frozen data and the candidates, for every decision time at once, and the engine computes it again on the data cut at a few decision times to make sure nothing was read ahead. Everything specific to a case is a plugin: data sources, candidates, labels, targets, cost models, backtesters. The engine is thin: it runs on polars, holds plugins and agent-written code to executable checks, keeps the methods it executes in `eval` (each with its own worked examples and properties), and owns exactly three things:
+Research code is free: a features file is one function of the frozen data and the candidates, handed over as polars DataFrames, for every decision time at once, and the engine computes it again on the data cut at a few decision times to make sure nothing was read ahead. polars is the main path, with `.lazy()` … `.collect()` for a pipeline polars should plan as a whole, pandas is fine for dates, and loops and libraries such as sklearn run too; code that goes row by row gets a warning on the card that names each line, since polars expressions are usually much faster, and is never refused, and the card shows the time and peak memory the features took. Everything specific to a case is a plugin: data sources, candidates, labels, targets, cost models, backtesters. The engine is thin: it runs on polars, holds plugins and agent-written code to executable checks, keeps the methods it executes in `eval` (each with its own worked examples and properties), and owns exactly three things:
 
 | Kernel duty | What it guarantees |
 | --- | --- |
 | **Time** | A score at a decision time may depend only on data known by then: the engine computes the features again on the data cut at a few decision times, and any change TAINTS the submission. Universes and labels pass the same kind of check. |
 | **Holdout and labels** | Label definitions are plugins named in the contract; the engine decides which data a label sees, when it runs, and who gets its values. Every stage reads only the explore tier; keeping sealed data out of the agent's reach is planned. |
 | **Verdict** | Scores are compared against null worlds, thresholds rise with the number of trials, and every verdict is logged in a hash-chained ledger. |
+
+Engine code is held to whole columns: `eval` and `stages/defaults` run on every idea's data, so a loop over rows, entities, clusters, or decision times has no place there, and `tests/eval/test_columnar.py` fails on any `for` or `while` loop and any `map_groups`, `map_elements`, `apply`, `iter_rows`, or `iterrows` call that is not a reviewed exception. An exception is a structural loop, listed with its file, its function, and one line on why, such as one plugin fetch per cut point, one fold of a walk-forward at a time, PBO partitions taken in chunks, or the iterations of a fit.
 
 ## How it works
 
@@ -82,11 +84,11 @@ STALE   -- the agent: derive, check, or submit        runs the stage again as a 
 ```
 
 - `rci contract derive` puts a DECIDABLE contract up for review; a BLOCKED one stays OPEN with the reason. A person approves the ContractCard, which freezes the claim, the decisive effect, and the budgets.
-- `rci data check` asks two questions. Fidelity: is the data what the venue reported? The source's admission answers it once per source, and the first approval of a DataCard that uses the source admits it for every idea. Fitness: can faithful data be used for this research? A mandatory default list answers it for every idea, with the idea's own tests added: rows the venue really reported can still be a ticker reused for another asset, a price stuck or at zero, or an entity too short for the horizons. Every finding becomes a treatment weighed by its influence on the decisive number, never a silent change. A blocked check stays OPEN; any other puts the DataCard up for review.
-- `rci feat submit <file>` judges one features file, one trial. The data-analysis layers gate on one question: does the output beat random, significantly? The contract's decisive effect with the submitted scores must beat the floor world (the scores shuffled across clusters at each decision time) with `z ≥ 2·√(1+ln n)` on the n-th submission; the first submission calibrates that test before it is judged. Nothing else gates, so potential alpha is not killed early; costs, absolute profit, and robustness are for later layers. Diagnostics, the engine's defaults and any criteria in the idea's optional `feat.py`, are shown on every result and never decide. A PASSED submission goes up for review; FAILED and TAINTED ones leave the layer OPEN. A person can accept only a latest submission that PASSED: verdicts come from code.
+- `rci data check` asks two questions. Fidelity: is the data what the venue reported? The source's admission answers it once per source, and the first approval of a DataCard that uses the source admits it for every idea. Fitness: can faithful data be used for this research? A mandatory default list answers it for every idea, with the idea's own tests added: rows the venue really reported can still be a ticker reused for another asset, a price stuck or at zero, or an entity too short for the horizons. Every finding becomes a treatment weighed by its influence on the decisive number, never a silent change. Last, it calibrates the gate on the treated data, before any features exist: stand-ins must die and a planted signal must live in the floor world. A blocked check, a gate that cannot be calibrated included, stays OPEN; any other puts the DataCard up for review.
+- `rci feat submit <file>` judges one features file, one trial. The data-analysis layers gate on one question: does the output beat random, significantly? The contract's decisive effect with the submitted scores must beat the floor world (the scores shuffled across clusters at each decision time) with `z ≥ 2·√(1+ln n)` on the n-th submission, a test the data check already calibrated. Nothing else gates, so potential alpha is not killed early; costs, absolute profit, and robustness are for later layers. Diagnostics, the engine's defaults and any criteria in the idea's optional `feat.py`, are shown on every result and never decide. A PASSED submission goes up for review; FAILED and TAINTED ones leave the layer OPEN. A person can accept only a latest submission that PASSED: verdicts come from code.
 - `rci feat explore` runs the checks a submission must pass without judging it. It never changes the state and is never counted as a trial.
 - Each layer from feat on gets a submission budget from the contract, shared across its versions, so a new version does not reset it. The data layer has none: nothing in it is chosen by its result.
-- A feat submission is refused, and costs no trial, when it repeats earlier scores, a null world cannot run, or the calibration failed. It is TAINTED when its scores read data from after their decision time, and that costs a trial. Every submission records what it used, and approving it is refused when any of it changed since.
+- A feat submission is refused, and costs no trial, when the file is still the example `rci init` wrote, it or the research code it imports does not parse, a layer file does not load or lacks its list, the features fail or return other columns, it repeats earlier scores, a null world cannot run, or a calibration it had to run again failed; each refusal says how to fix it. Row-by-row code is not refused: the card shows it as a warning. It is TAINTED when its scores read data from after their decision time, and that costs a trial. Every submission records what it used, and approving it is refused when any of it changed since.
 - Checkpoints run once. A failed checkpoint sends the idea back to a layer.
 - There is no separate state file. Every transition is a ledger record, the state is replayed from the ledger, and every command refuses to run on a ledger whose hash chain is broken.
 
@@ -121,15 +123,32 @@ uv add "research-ci @ git+ssh://git@github.com/alva-ai/research-ci@<sha>"
 
 The plugins a contract names must be installed in the same environment, registered under the entry-point group `research_ci.plugins`. Below, `ref.*` plugins ship with the engine and the `toy.*` plugins of the engine's tests stand in for a lab's; the output is what the commands printed ([walkthroughs.md](docs/walkthroughs.md) has the whole run).
 
-Start an idea, write its contract, and let a person approve it:
+Start an idea. `rci init` writes `START.md`, the page an agent with no other context reads first, a contract skeleton, and `research/example.py`; `rci next` says what to do after every step:
 
 ```text
 $ rci init ideas/carry
-created ideas/carry; edit ideas/carry/contract.py, then run `rci contract derive -i ideas/carry`
+created ideas/carry; read ideas/carry/START.md first: it says how the work goes
+then fill in ideas/carry/contract.py and run `rci contract derive -i ideas/carry`
+features start from ideas/carry/research/example.py; `rci next -i ideas/carry` says what to do after every step
 
 $ rci next -i ideas/carry
-agent      rci contract derive                  write contract.py, then derive the contract
+agent      rci contract derive                  fill in contract.py (START.md says how; `rci plugins` lists the plugins, their options and fields), then derive the contract
 ```
+
+`rci plugins` lists what a contract can name, read from the installed code (here the toy plugins, abridged):
+
+```text
+$ rci plugins
+data: Contract(data=Use(name, {options}))
+  toy.data(hours: int = 600, seed: int = 0)
+    Replays as of any time, and answers reconciliation from the venue, here the same generator run apart; the venue keeps no history of funding intervals.
+    fields: close, funding_rate, funding_interval_hours
+    levels: close · factor 5 · window 24 · mask 24h
+    reference source: answers the independent check at admission
+...
+```
+
+Write the contract, and let a person approve it:
 
 ```python
 # ideas/carry/contract.py
@@ -157,14 +176,14 @@ CONTRACT = Contract(
 $ rci contract derive -i ideas/carry
 ContractCard · carry · v1
 claim      Cross-venue funding spreads persist long enough to pay the round trip
-decisive   carry: beats random significantly · target ref.mean
+decisive   carry: beats random significantly · target ref.mean(cluster=symbol, top=0.34)
 decisions  every 1h from execution · 335 decision times
            decide on the hour; fill both legs at the close known then
-data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 257.6 days old
+data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 258.4 days old
 universe   toy.pairs · median 9 candidates in 3 symbol clusters per decision · membership pit
 costs      ref.flat_costs(commission_bps=1, legs=2, slippage_bps=1) · median round trip 8.0 bp
 labels     carry: ref.carry · H 8h 24h
-checks     [!]  data is current: latest data is 257.6 days old
+checks     [!]  data is current: latest data is 258.4 days old
            ok   universe point-in-time: 3 cut points give the same candidates
            ok   universe causal: values after 2026-01-08T04:00Z leave the candidates at it unchanged
            ok   label carry: worked examples: 2 ok
@@ -185,16 +204,16 @@ verdict    DECIDABLE
 warnings   [!] the data source has nothing newer than 2026-01-26T00:00Z; collect live data first
            [!] carry: symbol Z carries 55% at 24h of the noise the MDE rests on; rci data check looks at whether its data is fit for research
 ----------------------------------------------------------------------------------------------------
-card 568e2fec
+card b489a2ab
 up for review; a person approves it with `rci approve --stage contract`
 
 $ rci inbox ideas
-ideas/carry              rci approve --stage contract         review the ContractCard and approve it
+ideas/carry              rci approve --stage contract         review the ContractCard and approve it; `rci contract show` prints it with the card id that a relayed approval quotes
 
 $ rci approve --stage contract -i ideas/carry          # a person, at a terminal
 approve contract v1 of carry
 ...                                                    (the card, as derive printed it)
-card 568e2fec
+card b489a2ab
   frozen dependencies:
     contract 365c17d571b4
 Approve contract v1? [y/N]: y
@@ -220,34 +239,36 @@ $ rci next -i ideas/carry --json
     "stage": "data",
     "kind": "check",
     "command": "rci data check",
-    "reason": "check the data against the contract"
+    "reason": "check the data against the contract; tests for risks the default checks miss go in data.py (`rci methods` lists what they can call)"
   }
 ]
 ```
 
-Approval is refused if `contract.py`, a plugin's code, or the data snapshot changed since the derive. A contract that derive found BLOCKED (a protocol test failed, such as a decisive target that gives the same number whatever the scores, or the noise of a decisive effect cannot be measured) never goes up for review: it stays OPEN with the reason. From here the agent runs the loops on its own. `rci data check` runs the source's admission checks if this plugin, with these options and this code, was never admitted, checks the data against the contract with the default list in `stages/defaults/data.py` (a level that comes back at another level after a long gap is split into a new entity, prices at zero, stuck, or away for a moment are masked, entities shorter than the longest horizon are dropped, and the share of the noise each cluster carries is shown, with a warning above half) and the idea's optional tests in `data.py`, and prints the DataCard; `rci approve --stage data` freezes the treated data that feat reads and, the first time, admits the source. Each `rci feat submit <file>` then judges one features file and prints a ResultCard, the diagnostics shown next to the decisive effect coming from the optional criteria in `feat.py` and the null worlds in `nulls/feat.py`; `rci approve --stage feat` accepts the latest PASSED one. Engine state lives in `ideas/<idea>/.rci/` (commit it with the idea) and in `$RCI_HOME` (default `~/.rci`), which keeps each ledger's latest head outside the idea, the shared ledger of source admissions, and the data vault.
+Approval is refused if `contract.py`, a plugin's code, or the data snapshot changed since the derive. A contract that derive found BLOCKED (a protocol test failed, such as a decisive target that gives the same number whatever the scores, or the noise of a decisive effect cannot be measured) never goes up for review: it stays OPEN with the reason. From here the agent runs the loops on its own. `rci data check` runs the source's admission checks if this plugin, with these options and this code, was never admitted, checks the data against the contract with the default list in `stages/defaults/data.py` (a level that comes back at another level after a long gap is split into a new entity, prices at zero, stuck, or away for a moment are masked, entities shorter than the longest horizon are dropped, and the share of the noise each cluster carries is shown, with a warning above half) and the idea's optional tests in `data.py`, calibrates the gate, and prints the DataCard; `rci approve --stage data` freezes the treated data that feat reads and, the first time, admits the source. The agent then writes features files in `research/`, starting from `research/example.py`: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` (a polars DataFrame or LazyFrame, or a pandas DataFrame), code that goes row by row runs with a warning on the card, and the card shows the time and peak memory the features took. `rci feat explore <file>` tries one for free; each `rci feat submit <file>` judges one and prints a ResultCard, the diagnostics shown next to the decisive effect coming from the optional criteria in `feat.py` (`rci methods` lists what they can call) and the null worlds in `nulls/feat.py`, one per alternative of the contract; `rci approve --stage feat` accepts the latest PASSED one, whose card id `rci feat submit` and `rci feat show` print. When feat passes, `rci next` says the signal layer is not built yet and the idea is done for now. Engine state lives in `ideas/<idea>/.rci/` (commit it with the idea) and in `$RCI_HOME` (default `~/.rci`), which keeps each ledger's latest head outside the idea, the shared ledger of source admissions, and the data vault.
 
 ## CLI
 
 | Command | Called by | Precondition | Available |
 | --- | --- | --- | --- |
-| `rci init <idea>` | agent | none | yes |
+| `rci init <idea>` | agent | none; writes `START.md`, the contract skeleton, and `research/example.py` | yes |
+| `rci plugins [--json]` | agent | none; every installed plugin with its kind, options, and declarations | yes |
+| `rci methods [--json]` | agent | none; the eval methods a criterion, a data test, or a pit can call, with the worked examples that back each, and the fields of a null world | yes |
 | `rci contract derive` | agent, repeatable | none; prints the ContractCard; DECIDABLE goes up for review, BLOCKED stays OPEN | yes |
-| `rci data check [--keep "<treatment>"]` | agent, repeatable | contract passed; runs the source's admission checks first if needed; prints the DataCard; `--keep` leaves a treatment a person rejected unapplied | yes |
-| `rci feat submit <file>` | agent, 1 trial each | data passed, budget left, scores not repeated, calibration holds; prints the ResultCard | yes |
+| `rci data check [--keep "<treatment>"]` | agent, repeatable | contract passed; runs the source's admission checks first if needed, calibrates the gate; prints the DataCard, with a warning for row-by-row code in `data.py` or `nulls/data.py`; `--keep` leaves a treatment a person rejected unapplied | yes |
+| `rci feat submit <file>` | agent, 1 trial each | data passed, budget left, the file is not the example, scores not repeated, calibration holds; prints the ResultCard, with a warning for row-by-row code, and its card id when it PASSED | yes |
 | `rci feat explore <file>` | agent, unlimited | data passed; runs only the checks a submission must pass | yes |
 | `rci approve --stage <stage>` | **human**, interactive | the stage is up for review and nothing its result used changed since; for a layer with submissions, the latest PASSED | yes |
 | `rci approve --stage <stage> --relayed "<words>" --card <id>` | agent, relaying a person's approval after showing the person the whole card | as above; the card has not changed since | yes |
 | `rci approve --stage <stage> --auto` | agent, fully automatic research | as above; not for a DataCard that asks a person to decide | yes |
 | `rci approve --stage <layer> --extend N` | **human**, interactive only | layer PAUSED | yes |
 | `rci next`, `rci status`, `rci inbox`, `rci verify` | anyone | none | yes |
-| `rci data show`, `rci feat show` | anyone | a check or a submission exists | yes |
+| `rci contract show`, `rci data show`, `rci feat show` | anyone | a derive, a check, or a submission exists; prints the card and the id of the one up for review | yes |
 | `rci <layer> submit <file>`, `rci <layer> explore <file>` for signal and algo | agent | upstream passed | later |
 | `rci <checkpoint> register` | agent | the layers passed | later |
 | `rci seal run`, `rci capital run` | human | plan approved | later |
 | `rci forward --all`, `rci monitor --all` | scheduler | plan approved | later |
 
-`<layer>` is signal or algo, and `<checkpoint>` one of seal, forward, capital, and monitor. `status`, `next`, and `inbox` take `--json` for agents. Commands on one idea take `-i <idea>` and default to the current directory; `init` takes the new idea's directory and `inbox` a root directory.
+`<layer>` is signal or algo, and `<checkpoint>` one of seal, forward, capital, and monitor. `status`, `next`, `inbox`, `plugins`, and `methods` take `--json` for agents. Commands on one idea take `-i <idea>` and default to the current directory; `init` takes the new idea's directory and `inbox` a root directory.
 
 ## Glossary
 
@@ -260,11 +281,13 @@ Approval is refused if `contract.py`, a plugin's code, or the data snapshot chan
 | Decisive effect | The number the claim is about: a label's outcome turned into one value per decision time by a target that reads the scores. |
 | Floor world | The scores shuffled across clusters at each decision time. At feat the decisive effect must beat it with `z ≥ z_need`, which rises with each submission: the minimal bar. |
 | Submission | One judged features file: one trial, with the verdict PASSED, FAILED, or TAINTED. Verdicts come from code; a person can accept only a PASSED one. |
-| Calibration | The test of the tests: before the first submission is judged, stand-ins must die and a planted signal must live in the floor world; in data, tests must flag the pits they claim to cover. |
+| Calibration | The test of the tests: at the data check, before any features exist, stand-ins must die and a planted signal must live in the floor world; in data, tests must flag the pits they claim to cover. |
+| Research code | Features files, `feat.py`, `nulls/feat.py`, `data.py`, `nulls/data.py`, and the modules of the idea and of installed labs they import. It is free (polars first, pandas for dates, any library); row-by-row code runs, with a warning on the card. |
+| `START.md` | The page `rci init` writes for an agent with no other context: the loops, `rci next` after every step, where plugins and methods are listed, the rule for features, how approvals are relayed. |
 | Diagnostic | A criterion shown on every feat result against the floor and the idea's null worlds, never deciding. |
 | Source admission | Once per data source: replay as of past times and an independent source must agree with what the plugin gives. The first approval of a DataCard that uses the source admits it. |
 | Treatment | A change the data check makes, such as a mask or a split, weighed by its influence on the decisive number in MDE units, the smallest gain over random the data can detect. |
-| Card | What a person reads: the ContractCard, DataCard, and ResultCard (and the ExploreCard), rendered by code, each printed with `card <id>`. |
+| Card | What a person reads: the ContractCard, DataCard, and ResultCard (and the ExploreCard), rendered by code; every card a person may approve is printed with `card <id>`. |
 | Freeze, ledger | The hashes of everything an approved result used; the hash-chained record of every state change, from which the state is replayed. |
 
 ## Architecture
@@ -277,7 +300,7 @@ Approval is refused if `contract.py`, a plugin's code, or the data snapshot chan
 +------------------------------------------------------------------+
 | stages     per-stage policies: contract, source, data, feat      |
 +------------------------------------------------------------------+
-| runner     plugin loading and code hashes; child process later   |
+| runner     plugins, catalogs, research-code check; child later   |
 +--------------------------------+---------------------------------+
 | store                          | render                          |
 | .rci/, ledger, freeze, vault   | cards from engine files         |
@@ -300,8 +323,8 @@ A layer may import only the layers below it; `store` and `render` do not import 
 | `kernel` | What a verdict rests on, pure functions, no I/O: `time` (asof), `holdout` (tiers), `hashing`, `verdict` (the floor shuffle, z, GridMax, power). | Done |
 | `eval` | The methods: plugin protocol checks, data checks for fidelity and fitness, calibration, and the statistics and structure that criteria use. Each method's module carries worked examples and properties checked on synthetic markets and sources. Grows; imports only `api` and `kernel`, so criteria and plugins may import it. | Done for contract, data, and feat |
 | `stages` | Policies, one file per stage: contract derivation, source admission, the data check, and the feat method and submissions today, with the data layer's default checks and feat's default diagnostics in `stages/defaults/`; signal and algo later. | Contract, data, feat done |
-| `workflow` | Lifecycle: the states every stage shares, the one pipeline with STALE invalidation, `next_actions`, approval provenance; one module of commands per stage. | Done |
-| `runner` | Plugin loading by entry point and plugin code hashes; later process isolation for research code. | Loading done; child process planned |
+| `workflow` | Lifecycle: the states every stage shares, the one pipeline with STALE invalidation, `next_actions`, approval provenance; one module of commands per stage; the files `rci init` writes. | Done |
+| `runner` | Plugin loading by entry point and plugin code hashes, with errors that name close plugins and a plugin's signature; the catalogs behind `rci plugins` and `rci methods`; the static check that finds row-by-row research code for the cards' warning; later process isolation for research code. | Done; child process planned |
 | `store` | All I/O: workspace `.rci/`, ledger and head anchors, freeze records, environment records, the content-hashed data vault. | Done |
 | `render` | Deterministic cards from engine files: the Contract, Data, Result, and Explore cards; citation checks for summaries later. | Done for contract, data, and feat |
 | `cli` | The `rci` command. | Partly done |
@@ -309,7 +332,7 @@ A layer may import only the layers below it; `store` and `render` do not import 
 
 ### Process model
 
-Research code runs in the engine's process today: `feat` imports a features file and calls it once with the frozen data and the candidates, then again on the data cut at a few decision times. Running it in a child process is planned:
+Research code runs in the engine's process today: `feat` reads a features file for row-by-row code, for the card's warning, imports it, and calls it once with the frozen data and the candidates as polars DataFrames, then again on the data cut at a few decision times, timing each call and sampling the process's memory during the first. Running it in a child process is planned:
 
 ```text
 engine (parent)                                     research code (child, planned)
@@ -330,7 +353,7 @@ Then a stray `np.random.seed`, an in-place edit, or a monkeypatch in research co
 
 | Situation | Rule |
 | --- | --- |
-| Normal run in a lab | The engine should be installed at a pinned git SHA and read-only; a lab may install it in editable mode while both are being developed. A layer's freeze pins the contract, the engine source (without `render` and `cli`, which shape only what is shown, not what is judged, and the default lists in `stages/defaults/`: feat's diagnostics in `feat.py`, which never decide, and the data layer's checks in `data.py`, whose result the data freeze pins by content), the interpreter, the engine's own dependencies, and the upstream freezes; the contract's pins its own file. Derive also records the code hash of every plugin and the hash of the data snapshot, and approving the contract checks them again; the data freeze also pins its check and the treated data; each feat submission records its features file, criteria, null worlds, the code of every plugin it runs, and its calibration, and approving it pins them. Each submission also records every installed package and `uv.lock`. |
+| Normal run in a lab | The engine should be installed at a pinned git SHA and read-only; a lab may install it in editable mode while both are being developed. A layer's freeze pins the contract, the engine source (without `render`, `cli`, and `workflow/templates.py`, which shape only what is shown or read, not what is judged, and the default lists in `stages/defaults/`: feat's diagnostics in `feat.py`, which never decide, and the data layer's checks in `data.py`, whose result the data freeze pins by content), the interpreter, the engine's own dependencies, and the upstream freezes; the contract's pins its own file. Derive also records the code hash of every plugin and the hash of the data snapshot, and approving the contract checks them again; the data freeze also pins its check, with the gate's calibration, and the treated data; each feat submission records its features file, criteria, null worlds, the code of every plugin it runs, and its calibration, and approving it pins them. Each submission also records every installed package and `uv.lock`. |
 | Anything a result used changes before approval | Approval is refused and names what moved; the agent runs the stage again. Research code and the libraries it uses may change between submissions. |
 | Approval relayed by an agent, or given by the agent | Recorded in the ledger with the channel and, for a relay, the person's words. The verdict machinery will cap what such stages can reach (planned). |
 | Run from this repo in editable mode | To be marked DEV, so its verdicts do not count (planned). |
@@ -358,7 +381,7 @@ npx markdownlint-cli2
 ```text
 src/research_ci/
   api/  kernel/{time,holdout,verdict}/  eval/{protocol,data,statistics,structure,calibration}/
-  stages/  workflow/  runner/  store/  render/  cli/  reference_plugins/
+  stages/  workflow/  runner/{plugins,catalog,research}  store/  render/  cli/  reference_plugins/
 tests/<package>/  tests/incidents/ (real incidents)  tests/toy.py (toy plugins and broken variants)
 docs/design.md  docs/walkthroughs.md
 ```

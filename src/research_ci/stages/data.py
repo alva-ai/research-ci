@@ -35,6 +35,7 @@ from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
+from research_ci.runner import research
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import DEFAULT_TARGET, _norm_candidates, _per_t, _use_named
 from research_ci.stages.defaults import data as defaults
@@ -47,6 +48,17 @@ ALL = "all applied"
 SPLITS = "splits applied"
 RAW = ""
 PER_T = {"t": pl.Datetime("ns", "UTC"), "value": pl.Float64}
+TESTS_FILE = "data.py"
+PITS_FILE = Path("nulls") / "data.py"
+TESTS_FORMAT = (
+    "data.py defines TESTS = [DataTest(name, check, covers, on_fail), ...], where check(fields) returns the flagged "
+    "rows (entity, event_time, optionally field), covers names the (category, field) pairs it catches, and on_fail is "
+    "mask, drop_entities, or ask; `rci methods` lists the methods it can call"
+)
+PITS_FORMAT = (
+    "nulls/data.py defines PITS = [Pit(category, plant), ...], where plant(fields, field, rng) returns a copy of the "
+    "data with the pit planted in one entity; `rci methods` lists the built-in pits"
+)
 
 
 class DataError(ContractError):
@@ -99,6 +111,10 @@ class _DataCheck:
 
     def run(self) -> Checked:
         started = time.monotonic()
+        found = research.warning([self.root / TESTS_FILE, self.root / PITS_FILE], self.root, self.registry)
+        self.warnings += [found] if found else []
+        self.tests = _layer_file(self.root / TESTS_FILE, "TESTS", tests_of, TESTS_FORMAT)
+        self.pits = _layer_file(self.root / PITS_FILE, "PITS", pits_of, PITS_FORMAT)
         use = as_use(self.c.data)
         plugin = self._plugin(use)
         self.source_plugin = plugin
@@ -244,14 +260,12 @@ class _DataCheck:
         return out
 
     def _tests(self, fields: pl.DataFrame, treatments: list[tr.Treatment]) -> list[dict[str, Any]]:
-        tests, pits = (
-            _layer_file(self.root / "data.py", tests_of),
-            _layer_file(self.root / "nulls" / "data.py", pits_of),
-        )
-        self.pits, self.tests = pits, tests
         out = []
-        for t in tests:
-            flagged = t.check(fields)
+        for t in self.tests:
+            try:
+                flagged = t.check(fields)
+            except Exception as exc:
+                raise DataError(f"data test {t.name!r} failed: {type(exc).__name__}: {exc}; {TESTS_FORMAT}") from exc
             row: dict[str, Any] = {"name": t.name, "covers": [list(c) for c in t.covers], "on_fail": t.on_fail}
             row["flagged"] = flagged.height
             if flagged.height and t.on_fail == "mask":
@@ -668,7 +682,9 @@ def current_data_deps(
     return now
 
 
-def _layer_file(path: Path, read: Callable[[Any], list[Any]]) -> list[Any]:
+def _layer_file(path: Path, name: str, read: Callable[[Any], list[Any]], fmt: str) -> list[Any]:
+    """An optional file of the idea; one that exists must load and declare ``name``, and a failure says what it must
+    look like."""
     if not path.is_file():
         return []
     spec = importlib.util.spec_from_file_location(f"_rci_{path.parent.name}_{path.stem}", path)
@@ -677,9 +693,14 @@ def _layer_file(path: Path, read: Callable[[Any], list[Any]]) -> list[Any]:
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
+    except Exception as exc:
+        raise DataError(f"{path} failed to load: {type(exc).__name__}: {exc}; {fmt}") from exc
+    if not hasattr(module, name):
+        raise DataError(f"{path} defines no {name}; {fmt}")
+    try:
         return read(module)
     except ValueError as exc:
-        raise DataError(f"{path}: {exc}") from exc
+        raise DataError(f"{path}: {exc}; {fmt}") from exc
 
 
 def _moves(

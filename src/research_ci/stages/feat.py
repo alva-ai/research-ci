@@ -5,8 +5,10 @@ scores, must beat the engine's floor world (chance and timing: scores shuffled a
 the same way within a horizon) with ``z ≥ z_need``, which rises with the submission count. Before the first submission
 is judged, the decisive effect is calibrated in the floor world. Diagnostics, the engine's defaults and the idea's
 ``CRITERIA`` (``feat.py``, optional), are judged against the floor and the idea's ``NULLS`` (``nulls/feat.py``) on
-every submission and shown, never deciding. Each submission names its own file of features: the engine checks that
-its scores rank the candidates and read nothing ahead of their time, then judges.
+every submission and shown, never deciding. Each submission names its own file of features: the engine reads it, and
+the criteria and null worlds, for row-by-row code, which the card shows as a warning, hands ``features`` the frozen
+data and the candidates as polars DataFrames, checks that its scores rank the candidates and read nothing ahead of their
+time, then judges. What the calls cost, their wall time and the peak memory of the full one, is shown, never judged.
 """
 
 import importlib.util
@@ -33,6 +35,8 @@ from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_n
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.judge import CriterionError, Evaluate, judge, per_t
 from research_ci.kernel.verdict.permute import Permutation
+from research_ci.runner import research
+from research_ci.runner.meter import Cost, measured
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages.contract import DEFAULT_TARGET, _effect, _norm_candidates, _quantile_times, _use_named
 from research_ci.stages.defaults.feat import defaults
@@ -41,6 +45,24 @@ from research_ci.store.workspace import hash_file
 
 FEAT_FILE = "feat.py"
 NULLS_FILE = Path("nulls") / "feat.py"
+EXAMPLE = Path("research") / "example.py"
+SCORE_COLUMNS = ("t", "entity", "score")
+NO_TRIAL = "; no submission was spent"
+EXPLORED = "; nothing was recorded"
+SHAPE = (
+    "a features file defines features(fields, candidates), which gets polars DataFrames and returns a DataFrame "
+    "(polars or pandas) or a polars LazyFrame with columns t, entity, score; research/example.py shows one"
+)
+CRITERIA_FORMAT = (
+    "feat.py defines CRITERIA = [Criterion(name, evaluate), ...], where evaluate(table) returns t, value for each "
+    "decision time from the evaluation table (t, entity, score, y, y_<component>, and the candidate columns); "
+    "`rci methods` lists the methods it can call"
+)
+NULLS_FORMAT = (
+    "nulls/feat.py defines NULLS = [Null(alternative, PermuteWithin(column, clusters=..., block='horizon')), ...], "
+    "one world for an alternative explanation in the contract; the world shuffles the scores within the buckets of a "
+    "column of the evaluation table"
+)
 
 
 class FeatError(ContractError):
@@ -106,6 +128,18 @@ class Frozen:
     stride: int
     deps: dict[str, str]
     registry: Registry | None
+    panel: str = ""
+    exclusions: str = ""
+
+    def inputs(self, cut: int | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """What a features file gets: the frozen data and the candidates, as polars DataFrames, copies that share
+        their memory; with ``cut``, only the rows known by then and the candidates up to it."""
+        if cut is None:
+            return self.fields.clone(), self.candidates.clone()
+        return (
+            self.fields.filter(pl.col("available_at") <= lit_time(cut)),
+            self.candidates.filter(pl.col("t") <= lit_time(cut)),
+        )
 
 
 def frozen(
@@ -170,7 +204,7 @@ def frozen(
             )
             table = y.join(columns, on=["t", "entity"], how="inner").sort("t", "entity")
             tables[label.name][h] = (table, h_ns)
-    return Frozen(contract, fields, cands, tables, components, start, end, stride, deps, registry)
+    return Frozen(contract, fields, cands, tables, components, start, end, stride, deps, registry, panel, exclusions)
 
 
 def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, Any]:
@@ -194,10 +228,11 @@ def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[st
 
 
 def calibration_key(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, str]:
-    """What a calibration rests on beyond the stage's dependencies: the code of every plugin feat runs and the
-    calibration settings. A calibration is reused while these are unchanged."""
+    """What a calibration rests on beyond the contract and the engine: the treated data, the code of every plugin feat
+    runs, and the calibration settings. A calibration is reused while these are unchanged."""
     s = settings or FeatSettings()
-    return frozen.deps | {"settings": hash_obj(asdict(s) | {"workers": None})}
+    data = {"panel": frozen.panel, "exclusions": frozen.exclusions}
+    return frozen.deps | data | {"settings": hash_obj(asdict(s) | {"workers": None})}
 
 
 def files(root: Path) -> dict[str, str]:
@@ -207,6 +242,23 @@ def files(root: Path) -> dict[str, str]:
         "feat_file": hash_file(feat) if feat.is_file() else "none",
         "nulls_file": hash_file(nulls) if nulls.is_file() else "none",
     }
+
+
+def screen(root: Path, path: Path, registry: Registry | None = None, after: str = NO_TRIAL) -> list[str]:
+    """What is refused before anything runs, a features file that does not exist, is still the example, or does not
+    parse; and the card's warnings: row-by-row code in it, in the idea's criteria and null worlds, or in the research
+    modules they import."""
+    path = Path(path)
+    if not path.is_file():
+        raise FeatError(f"{path} does not exist; {SHAPE}{after}")
+    if research.still_example(path):
+        raise FeatError(
+            f"{path} is still the example; write your own: copy {EXAMPLE} to research/<name>.py, delete its "
+            f"`{research.EXAMPLE_MARKER}` line, and replace every TODO{after}"
+        )
+    root = Path(root)
+    found = research.warning([path, root / FEAT_FILE, root / NULLS_FILE], root, registry)
+    return [found] if found else []
 
 
 def submit(
@@ -222,24 +274,27 @@ def submit(
     is a null world that cannot run."""
     s = settings or FeatSettings()
     started = time.monotonic()
+    warnings = screen(root, path, frozen.registry)
     criteria = _criteria(Path(root))
     diagnostics = _diagnostics(criteria, frozen.contract)
     worlds = [_floor(frozen, s)] + _worlds(Path(root), frozen, set(diagnostics))
-    features = _features_of(path)
-    scores = _scores(features(frozen.fields, frozen.candidates), frozen.candidates)
+    features = _features_of(path, NO_TRIAL)
+    scores, cost = _computed(features, frozen, Path(path), after=NO_TRIAL)
     digest = hash_frame(scores)
     if digest in earlier:
-        raise FeatError(f"the same scores as submission {earlier[digest]}; they would not be a new trial")
-    floors = _floors(features, frozen, scores, s)
+        raise FeatError(f"the same scores as submission {earlier[digest]}; they would not be a new trial{NO_TRIAL}")
+    floors = _floors(features, frozen, Path(path), scores, s)
     out: dict[str, Any] = {
         "n": n,
         "features": {"path": str(Path(path).resolve()), "hash": hash_file(path)},
         "scores": {"hash": digest, **floors["coverage"]},
         "floors": [asdict(ch) for ch in floors["checks"]],
+        "cost": _cost(cost, floors["cuts"]),
         "need": pw.z_need(n, s.z_base),
         "stride": frozen.stride,
         "worlds": [asdict(w) for w in worlds],
         "coverage": asdict(_coverage(frozen.contract, worlds)),
+        "warnings": warnings,
     }
     if floors["leak"]:
         out["verdict"] = _verdict("TAINTED", ["the scores read data from after their decision time"])
@@ -257,21 +312,35 @@ def submit(
     return out
 
 
-def explore(frozen: Frozen, path: Path, settings: FeatSettings | None = None) -> dict[str, Any]:
+def explore(root: Path, frozen: Frozen, path: Path, settings: FeatSettings | None = None) -> dict[str, Any]:
     """The checks a submission must pass before it is judged, without judging it: nothing about how it would do."""
     s = settings or FeatSettings()
-    features = _features_of(path)
-    scores = _scores(features(frozen.fields, frozen.candidates), frozen.candidates)
-    floors = _floors(features, frozen, scores, s)
+    warnings = screen(root, path, frozen.registry, EXPLORED)
+    features = _features_of(path, EXPLORED)
+    scores, cost = _computed(features, frozen, Path(path), after=EXPLORED)
+    floors = _floors(features, frozen, Path(path), scores, s)
     return {
         "features": {"path": str(Path(path).resolve()), "hash": hash_file(path)},
         "scores": {"hash": hash_frame(scores), **floors["coverage"]},
         "floors": [asdict(ch) for ch in floors["checks"]],
+        "cost": _cost(cost, floors["cuts"]),
+        "warnings": warnings,
     }
 
 
 def _criteria(root: Path) -> list[Criterion]:
-    return _layer_file(root / FEAT_FILE, criteria_of, required=False)
+    return _layer_file(root / FEAT_FILE, _declared("CRITERIA", criteria_of), required=False, fmt=CRITERIA_FORMAT)
+
+
+def _declared(name: str, read: Callable[[Any], list[Any]]) -> Callable[[Any], list[Any]]:
+    """A layer file that exists must declare ``name``; an empty list is fine."""
+
+    def checked(module: Any) -> list[Any]:
+        if not hasattr(module, name):
+            raise ValueError(f"it defines no {name}")
+        return read(module)
+
+    return checked
 
 
 def _diagnostics(criteria: list[Criterion], c: Contract) -> dict[str, tuple[str, Criterion]]:
@@ -318,9 +387,9 @@ def _floor(frozen: Frozen, s: FeatSettings) -> World:
 
 
 def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
-    nulls = _layer_file(root / NULLS_FILE, nulls_of, required=False)
+    nulls = _layer_file(root / NULLS_FILE, _declared("NULLS", nulls_of), required=False, fmt=NULLS_FORMAT)
     ids = {a.id for a in frozen.contract.alternatives} | set(FLOOR_ALTERNATIVES)
-    columns = set(next(iter(next(iter(frozen.tables.values())).values()))[0].columns)
+    columns = set(next(iter(next(iter(frozen.tables.values())).values()))[0].columns) | {"score"}
     out, problems = [], []
     for i, n in enumerate(nulls, start=1):
         if n.explains not in ids:
@@ -330,9 +399,12 @@ def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
         w = n.world
         bucket = None if w.bucket_by == "time" else w.bucket_by
         keeps = None if n.keeps in (None, "time") else n.keeps
-        missing = [col for col in (bucket, w.clusters, keeps) if col is not None and col not in columns]
+        missing = [col for col in dict.fromkeys((bucket, w.clusters, keeps)) if col is not None and col not in columns]
         if missing:
-            problems.append(f"null {i}: the evaluation table has no column {', '.join(missing)}")
+            problems.append(
+                f"null {i}: the evaluation table has no column {', '.join(missing)}; its columns are "
+                f"{', '.join(sorted(columns))}, and 'time' buckets by decision time"
+            )
         unknown = [name for name in n.criteria if name not in names]
         if unknown:
             problems.append(f"null {i}: no diagnostic named {', '.join(unknown)}")
@@ -351,7 +423,7 @@ def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
             )
         )
     if problems:
-        raise FeatError(f"{NULLS_FILE}: {'; '.join(problems)}")
+        raise FeatError(f"{NULLS_FILE}: {'; '.join(problems)}{NO_TRIAL}")
     return out
 
 
@@ -437,30 +509,72 @@ def _target(effect: Effect, frozen: Frozen) -> tuple[dict[str, Evaluate], Use, d
     return {h: make(h) for h in frozen.tables[effect.on]}, use, _effect(effect, target)
 
 
-def _features_of(path: Path) -> Callable[[pl.DataFrame, pl.DataFrame], Any]:
-    found = _layer_file(Path(path), lambda m: getattr(m, "features", None), required=True)
+Features = Callable[[pl.DataFrame, pl.DataFrame], Any]
+
+
+def _features_of(path: Path, after: str) -> Features:
+    found = _layer_file(Path(path), lambda m: getattr(m, "features", None), required=True, fmt=SHAPE)
     if not callable(found):
-        raise FeatError(f"{path} must define features(fields, candidates)")
+        raise FeatError(f"{path} defines no function features; {SHAPE}{after}")
     return found
+
+
+def _computed(
+    features: Features, frozen: Frozen, path: Path, cut: int | None = None, after: str = ""
+) -> tuple[pl.DataFrame, Cost]:
+    """The scores of ``features`` on what the engine hands it, collected and checked, and what the call cost, a
+    returned LazyFrame's collection included; the peak memory only for the full call, which runs alone. A failure says
+    what to fix, and ``after`` what it did not cost."""
+    fields, cands = frozen.inputs(cut)
+
+    def call() -> Any:
+        raw = features(fields, cands)
+        return raw.collect() if isinstance(raw, pl.LazyFrame) else raw
+
+    try:
+        raw, cost = measured(call, memory=cut is None)
+    except Exception as exc:
+        raise FeatError(
+            f"{path.name}: features(fields, candidates) failed: {type(exc).__name__}: {exc}{after}"
+        ) from exc
+    asked = frozen.candidates if cut is None else frozen.candidates.filter(pl.col("t") <= lit_time(cut))
+    try:
+        return _scores(raw, asked), cost
+    except FeatError as exc:
+        raise FeatError(f"{exc}{after}") from exc
+
+
+def _cost(full: Cost, cuts: list[float]) -> dict[str, Any]:
+    """What the card's cost line shows: the full call's seconds and peak memory, and the seconds of each call on cut
+    data. Never judged."""
+    return asdict(full) | {"cut_seconds": cuts}
 
 
 def _scores(raw: Any, cands: pl.DataFrame) -> pl.DataFrame:
     frame = pl.from_pandas(raw) if isinstance(raw, pd.DataFrame) else raw
-    if not isinstance(frame, pl.DataFrame) or not {"t", "entity", "score"} <= set(frame.columns):
-        raise FeatError("features must return a DataFrame with columns t, entity, score")
-    out = frame.select(
-        pl.col("t").dt.convert_time_zone("UTC").cast(TIME),
-        pl.col("entity").cast(pl.String),
-        pl.col("score").cast(pl.Float64),
-    )
+    if not isinstance(frame, pl.DataFrame):
+        raise FeatError(f"features returned {type(raw).__name__}; {SHAPE}")
+    missing = [c for c in SCORE_COLUMNS if c not in frame.columns]
+    if missing:
+        got = ", ".join(frame.columns) or "no columns"
+        raise FeatError(f"features returned {got}, without {', '.join(missing)}; {SHAPE}")
+    try:
+        out = frame.select(
+            pl.col("t").dt.convert_time_zone("UTC").cast(TIME),
+            pl.col("entity").cast(pl.String),
+            pl.col("score").cast(pl.Float64),
+        )
+    except pl.exceptions.PolarsError as exc:
+        raise FeatError(
+            f"features must return t as a timezone-aware datetime, entity as text, and score as a number: {exc}; "
+            f"{SHAPE}"
+        ) from exc
     if out.select(pl.struct("t", "entity").is_duplicated().any()).item():
         raise FeatError("features return more than one score for some candidate at some time")
     return out.join(cands.select("t", "entity"), on=["t", "entity"], how="semi").sort("t", "entity")
 
 
-def _floors(
-    features: Callable[[pl.DataFrame, pl.DataFrame], Any], frozen: Frozen, scores: pl.DataFrame, s: FeatSettings
-) -> dict[str, Any]:
+def _floors(features: Features, frozen: Frozen, path: Path, scores: pl.DataFrame, s: FeatSettings) -> dict[str, Any]:
     checks: list[pr.Check] = []
     cands = frozen.candidates
     finite = scores.filter(pl.col("score").is_finite())
@@ -474,15 +588,17 @@ def _floors(
     checks.append(pr.Check("scores rank candidates", status, detail))
     epoch = cands.select(pl.col("t").dt.epoch("ns").unique())["t"]
     cuts = _quantile_times(epoch, s.cuts)
+    seconds: list[float] = []
     with ThreadPoolExecutor(max_workers=s.workers) as pool:
-        jobs = [(cut, pool.submit(_cut_scores, features, frozen.fields, cands, cut)) for cut in cuts]
+        jobs = [(cut, pool.submit(_computed, features, frozen, path, cut)) for cut in cuts]
         problems = []
         for cut, job in jobs:
             try:
-                cut_scores = job.result()
+                cut_scores, cost = job.result()
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"{_iso(cut)}: features failed on the cut data: {exc}")
                 continue
+            seconds.append(cost.seconds)
             before = scores.filter(pl.col("t") <= lit_time(cut))
             mismatch = pr._frame_mismatch(before, cut_scores, ["t", "entity"], ["score"])
             if mismatch:
@@ -490,16 +606,7 @@ def _floors(
     leak = bool(problems)
     detail = "; ".join(problems) if leak else f"the same scores with the data cut at {len(cuts)} decision times"
     checks.append(pr.Check("scores read nothing ahead", "fail" if leak else "pass", detail))
-    return {"checks": checks, "coverage": coverage, "leak": leak, "degenerate": degenerate}
-
-
-def _cut_scores(
-    features: Callable[[pl.DataFrame, pl.DataFrame], Any], fields: pl.DataFrame, cands: pl.DataFrame, cut: int
-) -> pl.DataFrame:
-    known = fields.filter(pl.col("available_at") <= lit_time(cut))
-    before = cands.filter(pl.col("t") <= lit_time(cut))
-    out = _scores(features(known, before), before)
-    return out.filter(pl.col("t") <= lit_time(cut))
+    return {"checks": checks, "coverage": coverage, "leak": leak, "degenerate": degenerate, "cuts": seconds}
 
 
 def _judge_all(
@@ -531,7 +638,7 @@ def _judge_all(
                     return Permutation(table, w.bucket, w.clusters, w.block_ns(h_ns)).index
 
                 args = (cr.evaluate, tables, index, w.reps, s.min_blocks, cr.combine)
-                jobs.append((name, by, w, pool.submit(_safe_judge, *args)))
+                jobs.append((name, by, w, pool.submit(_safe_judge, name, *args)))
         out = []
         for name, by, w, job in jobs:
             result = job.result()
@@ -540,11 +647,12 @@ def _judge_all(
         return out
 
 
-def _safe_judge(*args: Any) -> dict[str, Any]:
+def _safe_judge(name: str, *args: Any) -> dict[str, Any]:
     try:
         return judge(*args)
-    except CriterionError as exc:
-        raise FeatError(str(exc)) from exc
+    except Exception as exc:
+        what = str(exc) if isinstance(exc, CriterionError) else f"{type(exc).__name__}: {exc}"
+        raise FeatError(f"criterion {name!r} failed: {what}; {CRITERIA_FORMAT}{NO_TRIAL}") from exc
 
 
 def _decisive_submit(
@@ -606,10 +714,12 @@ def _frame(frame: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
     return pl.from_pandas(frame) if isinstance(frame, pd.DataFrame) else frame
 
 
-def _layer_file(path: Path, read: Callable[[Any], Any], required: bool) -> Any:
+def _layer_file(path: Path, read: Callable[[Any], Any], required: bool, fmt: str) -> Any:
+    """A file of the idea, loaded and read; a failure names the file, says what it must look like, and spends
+    nothing."""
     if not path.is_file():
         if required:
-            raise FeatError(f"{path} does not exist")
+            raise FeatError(f"{path} does not exist; {fmt}")
         return []
     spec = importlib.util.spec_from_file_location(f"_rci_feat_{path.parent.name}_{path.stem}", path)
     if spec is None or spec.loader is None:
@@ -617,9 +727,12 @@ def _layer_file(path: Path, read: Callable[[Any], Any], required: bool) -> Any:
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
+    except Exception as exc:
+        raise FeatError(f"{path} failed to load: {type(exc).__name__}: {exc}; {fmt}{NO_TRIAL}") from exc
+    try:
         return read(module)
     except ValueError as exc:
-        raise FeatError(f"{path}: {exc}") from exc
+        raise FeatError(f"{path}: {exc}; {fmt}{NO_TRIAL}") from exc
 
 
 def _iso(ns: int) -> str:

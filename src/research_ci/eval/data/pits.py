@@ -38,14 +38,17 @@ def _scale(fields: pl.DataFrame, field: str, rng: np.random.Generator, k: float,
 
 
 def unit(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A unit error: one entity's field a thousand times larger throughout."""
     return _scale(fields, field, rng, 1000.0, after=False)
 
 
 def level_break(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A level break: one entity's field half again as large from a random time on."""
     return _scale(fields, field, rng, 1.5, after=True)
 
 
 def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A gap: ten of one entity's usual spacings of the field missing from a random time."""
     e = target(fields, field, rng)
     ev = events(fields.filter(_rows(fields, e, field)))
     spacing = int(ev["spacing"].drop_nulls()[0])
@@ -58,6 +61,7 @@ def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFr
 
 
 def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A duplicate: one of an entity's events of the field repeated a millisecond later."""
     e = target(fields, field, rng)
     rows = fields.filter(_rows(fields, e, field))
     copy = rows.sample(1, seed=int(rng.integers(2**31))).with_columns(
@@ -67,6 +71,7 @@ def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.
 
 
 def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A shift: one entity's events of the field stamped one usual spacing late."""
     e = target(fields, field, rng)
     spacing = int(events(fields.filter(_rows(fields, e, field)))["spacing"].drop_nulls()[0])
     hit = _rows(fields, e, field)
@@ -78,6 +83,7 @@ def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.Data
 
 
 def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A leak: each of one entity's events of the field carries the value of the event after it."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     rows = fields.filter(hit).sort("event_time").with_columns(pl.col("value").shift(-1)).drop_nulls("value")
@@ -85,6 +91,7 @@ def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataF
 
 
 def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
+    """A spike: one event of one entity's field ten times its value."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     times = fields.filter(hit)["event_time"].sort()

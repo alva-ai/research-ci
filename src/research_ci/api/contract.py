@@ -198,7 +198,10 @@ class Contract:
         if reserved:
             raise ContractError(f"the engine adds {', '.join(sorted(reserved))} itself; use other ids")
         if self.used is None:
-            raise ContractError("say which data was already used to choose anything here; used=() if none")
+            raise ContractError(
+                "say which data was already used to choose anything here: if you looked at the data or at results for "
+                "this idea, declare it, used=(Usage(start, end, what, affects),); used=() only if nothing was seen"
+            )
 
     def _check_tiers(self) -> None:
         latest = self.explore_end == "latest"
