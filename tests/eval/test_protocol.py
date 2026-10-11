@@ -8,7 +8,7 @@ from research_ci.eval import protocol as pr
 from research_ci.kernel.time.clock import from_ns
 from research_ci.reference_plugins.costs import FlatCosts
 from research_ci.reference_plugins.labels import HoldingReturn, PairCarry
-from research_ci.stages.contract import _busiest
+from research_ci.reference_plugins.targets import ClusterMean
 from toy import (
     EarlyCredit,
     FlippedFlow,
@@ -96,6 +96,17 @@ def test_a_correct_label_passes_truncation_when_decisions_fall_between_prices(fi
     assert check.status == "pass", check.detail
 
 
+@pytest.mark.parametrize(
+    ("target", "status"), [(ClusterMean("symbol", top=0.34), "pass"), (ClusterMean("symbol"), "fail")]
+)
+def test_a_target_that_gives_the_same_number_for_any_scores_is_caught(fields: pl.DataFrame, target, status) -> None:
+    h = pd.Timedelta("8h")
+    cands = _cands(fields)
+    rows = PairCarry(flow="funding_rate").values(fields, cands, h).join(cands, on=["t", "entity"], suffix="_candidate")
+    check = pr.target_reads_score("ref.mean", lambda t: target.reduce(t, h, COSTS), rows)
+    assert check.status == status, check.detail
+
+
 @pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (Peeking(), "fail")])
 def test_consumer_truncation_catches_a_consumer_that_trades_on_the_future(fields: pl.DataFrame, plugin, status) -> None:
     base = plugin.run(fields)
@@ -105,7 +116,7 @@ def test_consumer_truncation_catches_a_consumer_that_trades_on_the_future(fields
 
 @pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (EarlyCredit(), "fail")])
 def test_causality_catches_consumers_that_use_data_before_it_exists(fields: pl.DataFrame, plugin, status) -> None:
-    at = _busiest(fields, _times(fields), HOUR_NS)
+    at = pr.busiest(fields, _times(fields), HOUR_NS)
     check = pr.causal(plugin.run, fields, plugin.run(fields), at, HOUR_NS)
     assert check.status == status, check.detail
 

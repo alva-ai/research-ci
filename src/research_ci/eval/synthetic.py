@@ -33,9 +33,9 @@ def market(m: Market, seed: int) -> pl.DataFrame:
     frame = pl.DataFrame(
         {
             "t": t,
-            "entity": np.tile(np.array([f"e{i}" for i in range(m.entities)]), m.times),
-            "cluster": np.tile(np.array([f"c{c}" for c in cluster]), m.times),
-            "group": np.tile(np.array([f"g{g}" for g in group]), m.times),
+            "entity": np.tile(_named("e", np.arange(m.entities)), m.times),
+            "cluster": np.tile(_named("c", cluster), m.times),
+            "group": np.tile(_named("g", group), m.times),
             "score": score.ravel(),
             "y": y.ravel(),
         }
@@ -47,7 +47,7 @@ def source(s: Source, seed: int) -> pl.DataFrame:
     """A field table: ``price`` hourly, known at its event; ``flow`` at each settlement, known ``lag`` hours later,
     some of it revised one settlement after that as vintage 1."""
     rng = np.random.default_rng(seed)
-    names = [f"e{i}" for i in range(s.entities)]
+    names = _named("e", np.arange(s.entities))
     hours = np.arange(1, s.hours + 1, dtype=np.int64)
     walk = 100 * np.exp(np.cumsum(rng.normal(0, 0.003, (s.entities, s.hours)), axis=1))
     price_t = START_NS + np.tile(hours, s.entities) * HOUR_NS
@@ -98,6 +98,10 @@ def hand(columns: Mapping[str, list[Any]], t: int = 0) -> pl.DataFrame:
     rows = len(next(iter(columns.values())))
     frame = pl.DataFrame({"t": [t * HOUR_NS] * rows, **columns}, strict=False)
     return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))
+
+
+def _named(prefix: str, numbers: np.ndarray) -> np.ndarray:
+    return np.char.add(prefix, numbers.astype(str))
 
 
 def _noise(rng: np.random.Generator, shape: tuple[int, int], tail: float | None) -> np.ndarray:

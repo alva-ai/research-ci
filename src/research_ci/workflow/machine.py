@@ -9,25 +9,25 @@ class Kind(StrEnum):
 
 class State(StrEnum):
     OPEN = "OPEN"
-    REGISTERED = "REGISTERED"
-    CHALLENGED = "CHALLENGED"
-    CHECKED = "CHECKED"
-    FROZEN = "FROZEN"
+    REVIEW = "REVIEW"
+    PASSED = "PASSED"
+    PAUSED = "PAUSED"
+    STALE = "STALE"
+
+
+class Verdict(StrEnum):
     PASSED = "PASSED"
     FAILED = "FAILED"
     TAINTED = "TAINTED"
-    INSUFFICIENT = "INSUFFICIENT"
-    PAUSED = "PAUSED"
-    STALE = "STALE"
-    SKIPPED = "SKIPPED"
 
 
 class Command(StrEnum):
-    REGISTER = "register"
-    CHALLENGE = "challenge"
+    DERIVE = "derive"
     CHECK = "check"
-    APPROVE = "approve"
     SUBMIT = "submit"
+    REGISTER = "register"
+    RUN = "run"
+    APPROVE = "approve"
     EXTEND = "extend"
 
 
@@ -37,56 +37,50 @@ class WorkflowError(Exception):
 
 S = State
 C = Command
-VERDICTS = frozenset({S.PASSED, S.FAILED, S.TAINTED, S.INSUFFICIENT})
-DONE = frozenset({S.PASSED, S.SKIPPED})
-BEFORE_FREEZE = frozenset({S.OPEN, S.REGISTERED, S.CHALLENGED, S.CHECKED})
+WORK = frozenset({C.DERIVE, C.CHECK, C.SUBMIT, C.REGISTER})
+AGAIN = frozenset({S.OPEN, S.REVIEW, S.PASSED, S.STALE})
 
 ALLOWED: dict[Kind, dict[Command, frozenset[State]]] = {
     Kind.CONTRACT: {
-        C.REGISTER: frozenset({S.OPEN, S.REGISTERED, S.PASSED}),
-        C.APPROVE: frozenset({S.REGISTERED}),
+        C.DERIVE: frozenset({S.OPEN, S.REVIEW, S.PASSED}),
+        C.APPROVE: frozenset({S.REVIEW}),
     },
     Kind.LAYER: {
-        C.REGISTER: BEFORE_FREEZE | {S.FROZEN, S.PASSED, S.FAILED, S.TAINTED, S.INSUFFICIENT, S.STALE},
-        C.CHALLENGE: frozenset({S.REGISTERED, S.CHALLENGED, S.CHECKED}),
-        C.CHECK: frozenset({S.CHALLENGED, S.CHECKED}),
-        C.APPROVE: frozenset({S.CHECKED}),
-        C.SUBMIT: frozenset({S.FROZEN, S.FAILED, S.TAINTED, S.INSUFFICIENT}),
+        C.CHECK: AGAIN,
+        C.SUBMIT: AGAIN,
+        C.APPROVE: frozenset({S.REVIEW}),
         C.EXTEND: frozenset({S.PAUSED}),
     },
     Kind.CHECKPOINT: {
-        C.REGISTER: frozenset({S.OPEN, S.REGISTERED, S.STALE}),
-        C.APPROVE: frozenset({S.REGISTERED}),
-        C.SUBMIT: frozenset({S.FROZEN}),
+        C.REGISTER: frozenset({S.OPEN, S.REVIEW, S.STALE}),
+        C.APPROVE: frozenset({S.REVIEW}),
+        C.RUN: frozenset({S.OPEN}),
     },
 }
 
 
-def transition(kind: Kind, state: State, command: Command, result: State | None = None) -> State:
-    """State after ``command``. ``result`` is the outcome of a check or a submission, or the verdict an extension
-    restores."""
+def transition(kind: Kind, state: State, command: Command, ready: bool = False, approved: bool = False) -> State:
+    """State after ``command``. ``ready`` says whether the agent's work has a result for a person, or whether a
+    checkpoint's run passed. ``approved`` says whether a checkpoint's plan was approved in this version: it then runs
+    once and takes nothing else."""
     allowed = ALLOWED[kind].get(command, frozenset())
+    if kind is Kind.CHECKPOINT and approved and state is S.REVIEW:
+        raise WorkflowError(f"cannot {command} the checkpoint: it ran once; reopen a layer")
+    if kind is Kind.CHECKPOINT and state is not S.STALE and approved is not (command is C.RUN):
+        if command is C.RUN:
+            raise WorkflowError("a checkpoint runs only after a person approved its plan")
+        raise WorkflowError(f"cannot {command} the checkpoint: its plan is approved and it runs once")
     if state not in allowed:
         expected = " or ".join(sorted(allowed)) if allowed else "never"
         raise WorkflowError(f"cannot {command} a {kind} stage that is {state} (allowed from: {expected})")
-    if command is C.REGISTER:
-        return S.REGISTERED
-    if command is C.CHALLENGE:
-        return S.CHALLENGED
-    if command is C.CHECK:
-        return S.CHECKED if _outcome(command, result, {S.PASSED, S.FAILED}) is S.PASSED else S.CHALLENGED
+    if command in WORK:
+        return S.REVIEW if ready else S.OPEN
     if command is C.APPROVE:
-        return S.PASSED if kind is Kind.CONTRACT else S.FROZEN
-    if command is C.SUBMIT:
-        return _outcome(command, result, VERDICTS)
-    return _outcome(command, result, {S.FAILED, S.TAINTED, S.INSUFFICIENT})
+        return S.OPEN if kind is Kind.CHECKPOINT else S.PASSED
+    if command is C.RUN:
+        return S.PASSED if ready else S.REVIEW
+    return S.OPEN
 
 
 def starts_new_version(state: State, command: Command) -> bool:
-    return command is C.REGISTER and state not in BEFORE_FREEZE
-
-
-def _outcome(command: Command, result: State | None, allowed: set[State] | frozenset[State]) -> State:
-    if result is None or result not in allowed:
-        raise WorkflowError(f"{command} needs a result in {sorted(allowed)}, got {result}")
-    return result
+    return command in WORK and state in (S.PASSED, S.STALE)

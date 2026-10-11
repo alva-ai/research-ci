@@ -1,5 +1,5 @@
 """Judging a criterion: its value per decision time, averaged by blocks of the horizon, against the same average in
-each null world; and the decisive effect against the contract's smallest effect worth having."""
+each null world."""
 
 import math
 from collections.abc import Callable, Mapping
@@ -81,15 +81,3 @@ def judge(
     sd = float(np.nanstd(top, ddof=1))
     z = (best["z"] - float(np.nanmean(top))) / sd if sd > 0 else math.nan
     return {"z": z, "best": best["h"], "horizons": rows, "note": f"best of {len(counted)} horizons"}
-
-
-def decide(effect: float, se: float, z: float, at_least: float, need: float, margin: float) -> str:
-    """``failed`` when even ``effect + margin·se`` misses ``at_least``; ``passed`` when the effect beats its null by
-    ``need`` and ``effect - margin·se`` still reaches ``at_least``; otherwise ``insufficient``."""
-    if not (math.isfinite(effect) and math.isfinite(se)):
-        return "insufficient"
-    if effect + margin * se < at_least:
-        return "failed"
-    if math.isfinite(z) and z >= need and effect - margin * se >= at_least:
-        return "passed"
-    return "insufficient"

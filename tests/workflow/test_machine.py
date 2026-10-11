@@ -2,7 +2,7 @@ import pytest
 
 from research_ci.workflow.machine import (
     ALLOWED,
-    VERDICTS,
+    WORK,
     Command,
     Kind,
     State,
@@ -15,99 +15,71 @@ C = Command
 S = State
 
 
-def _walk(kind: Kind, steps: list[tuple[Command, State | None]]) -> State:
-    state = S.OPEN
-    for command, result in steps:
-        state = transition(kind, state, command, result)
-    return state
-
-
-def test_a_layer_goes_from_open_to_passed_in_order() -> None:
-    steps = [(C.REGISTER, None), (C.CHALLENGE, None), (C.CHECK, S.PASSED), (C.APPROVE, None), (C.SUBMIT, S.FAILED)]
-    assert _walk(Kind.LAYER, steps) is S.FAILED
-    assert transition(Kind.LAYER, S.FAILED, C.SUBMIT, S.PASSED) is S.PASSED
+def test_the_agent_s_work_goes_up_for_review_when_it_is_ready_and_stays_open_when_not() -> None:
+    for kind, command in ((Kind.CONTRACT, C.DERIVE), (Kind.LAYER, C.CHECK), (Kind.LAYER, C.SUBMIT)):
+        assert transition(kind, S.OPEN, command, ready=True) is S.REVIEW
+        assert transition(kind, S.OPEN, command, ready=False) is S.OPEN
+        assert transition(kind, S.REVIEW, command, ready=False) is S.OPEN, "a later result replaces the one in review"
+        assert transition(kind, S.REVIEW, C.APPROVE) is S.PASSED
 
 
 @pytest.mark.parametrize(
-    ("state", "command"),
+    ("kind", "state", "command"),
     [
-        (S.OPEN, C.APPROVE),
-        (S.OPEN, C.CHALLENGE),
-        (S.OPEN, C.SUBMIT),
-        (S.REGISTERED, C.CHECK),
-        (S.REGISTERED, C.APPROVE),
-        (S.CHALLENGED, C.APPROVE),
-        (S.CHECKED, C.SUBMIT),
-        (S.FROZEN, C.CHALLENGE),
-        (S.PASSED, C.SUBMIT),
-        (S.PAUSED, C.SUBMIT),
-        (S.PAUSED, C.REGISTER),
-        (S.STALE, C.SUBMIT),
+        (Kind.CONTRACT, S.OPEN, C.APPROVE),
+        (Kind.CONTRACT, S.PASSED, C.APPROVE),
+        (Kind.LAYER, S.OPEN, C.APPROVE),
+        (Kind.LAYER, S.PASSED, C.APPROVE),
+        (Kind.LAYER, S.STALE, C.APPROVE),
+        (Kind.LAYER, S.PAUSED, C.SUBMIT),
+        (Kind.LAYER, S.PAUSED, C.APPROVE),
+        (Kind.LAYER, S.OPEN, C.EXTEND),
+        (Kind.LAYER, S.OPEN, C.REGISTER),
+        (Kind.CONTRACT, S.OPEN, C.SUBMIT),
     ],
 )
-def test_out_of_order_layer_commands_are_rejected(state: State, command: Command) -> None:
+def test_out_of_order_commands_are_rejected(kind: Kind, state: State, command: Command) -> None:
     with pytest.raises(WorkflowError, match=f"cannot {command}"):
-        transition(Kind.LAYER, state, command, S.PASSED)
+        transition(kind, state, command, ready=True)
 
 
-def test_a_failed_check_stays_challenged() -> None:
-    assert transition(Kind.LAYER, S.CHALLENGED, C.CHECK, S.FAILED) is S.CHALLENGED
-    assert transition(Kind.LAYER, S.CHECKED, C.CHECK, S.FAILED) is S.CHALLENGED
+def test_work_on_a_passed_or_stale_stage_starts_a_new_version() -> None:
+    for command in WORK:
+        for state in (S.OPEN, S.REVIEW):
+            assert not starts_new_version(state, command)
+        for state in (S.PASSED, S.STALE):
+            assert starts_new_version(state, command)
+    assert not starts_new_version(S.REVIEW, C.APPROVE) and not starts_new_version(S.PAUSED, C.EXTEND)
 
 
-def test_new_nulls_undo_a_passed_check() -> None:
-    assert transition(Kind.LAYER, S.CHECKED, C.CHALLENGE) is S.CHALLENGED
+def test_extending_a_paused_layer_opens_it_again() -> None:
+    assert transition(Kind.LAYER, S.PAUSED, C.EXTEND) is S.OPEN
 
 
-def test_changing_tests_after_the_freeze_starts_a_new_version() -> None:
-    for state in (S.OPEN, S.REGISTERED, S.CHALLENGED, S.CHECKED):
-        assert not starts_new_version(state, C.REGISTER)
-    for state in (S.FROZEN, S.PASSED, S.FAILED, S.TAINTED, S.STALE):
-        assert starts_new_version(state, C.REGISTER)
-        assert transition(Kind.LAYER, state, C.REGISTER) is S.REGISTERED
+def test_a_checkpoint_registers_a_plan_a_person_approves_and_runs_once() -> None:
+    assert transition(Kind.CHECKPOINT, S.OPEN, C.REGISTER, ready=True) is S.REVIEW
+    assert transition(Kind.CHECKPOINT, S.STALE, C.REGISTER, ready=True, approved=True) is S.REVIEW
+    assert transition(Kind.CHECKPOINT, S.REVIEW, C.APPROVE) is S.OPEN
+    assert transition(Kind.CHECKPOINT, S.OPEN, C.RUN, ready=True, approved=True) is S.PASSED
+    assert transition(Kind.CHECKPOINT, S.OPEN, C.RUN, ready=False, approved=True) is S.REVIEW
+    with pytest.raises(WorkflowError, match="after a person approved its plan"):
+        transition(Kind.CHECKPOINT, S.OPEN, C.RUN, ready=True)
+    with pytest.raises(WorkflowError, match="its plan is approved"):
+        transition(Kind.CHECKPOINT, S.OPEN, C.REGISTER, ready=True, approved=True)
+    for command in (C.REGISTER, C.APPROVE, C.RUN):
+        with pytest.raises(WorkflowError, match="it ran once"):
+            transition(Kind.CHECKPOINT, S.REVIEW, command, ready=True, approved=True)
 
 
-def test_submit_needs_a_verdict() -> None:
-    with pytest.raises(WorkflowError, match="needs a result"):
-        transition(Kind.LAYER, S.FROZEN, C.SUBMIT)
-    with pytest.raises(WorkflowError, match="needs a result"):
-        transition(Kind.LAYER, S.FROZEN, C.SUBMIT, S.CHECKED)
-
-
-def test_a_contract_is_derived_then_approved() -> None:
-    assert _walk(Kind.CONTRACT, [(C.REGISTER, None), (C.APPROVE, None)]) is S.PASSED
-    with pytest.raises(WorkflowError):
-        transition(Kind.CONTRACT, S.REGISTERED, C.CHALLENGE)
-    with pytest.raises(WorkflowError):
-        transition(Kind.CONTRACT, S.OPEN, C.APPROVE)
-
-
-def test_checkpoints_run_once() -> None:
-    assert _walk(Kind.CHECKPOINT, [(C.REGISTER, None), (C.APPROVE, None), (C.SUBMIT, S.FAILED)]) is S.FAILED
-    for state in (S.FAILED, S.TAINTED, S.PASSED):
-        with pytest.raises(WorkflowError):
-            transition(Kind.CHECKPOINT, state, C.SUBMIT, S.PASSED)
-        with pytest.raises(WorkflowError):
-            transition(Kind.CHECKPOINT, state, C.REGISTER)
-
-
-def test_extending_a_paused_layer_restores_its_last_verdict() -> None:
-    assert transition(Kind.LAYER, S.PAUSED, C.EXTEND, S.TAINTED) is S.TAINTED
-    with pytest.raises(WorkflowError):
-        transition(Kind.LAYER, S.PAUSED, C.EXTEND, S.PASSED)
-
-
-def test_only_approve_and_submit_can_produce_a_pass() -> None:
+def test_only_a_person_s_approval_or_a_checkpoint_run_can_produce_a_pass() -> None:
     for kind, commands in ALLOWED.items():
         for command, sources in commands.items():
             for state in sources:
-                for result in (None, *State):
-                    try:
-                        after = transition(kind, state, command, result)
-                    except WorkflowError:
-                        continue
-                    if after is S.PASSED:
-                        assert command is C.SUBMIT or (kind is Kind.CONTRACT and command is C.APPROVE)
-                    if command is C.SUBMIT:
-                        assert after in VERDICTS
-                    assert after is not S.SKIPPED
+                for ready in (False, True):
+                    for approved in (False, True):
+                        try:
+                            after = transition(kind, state, command, ready, approved)
+                        except WorkflowError:
+                            continue
+                        if after is S.PASSED:
+                            assert command is C.APPROVE or command is C.RUN

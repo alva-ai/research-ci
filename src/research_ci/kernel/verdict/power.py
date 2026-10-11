@@ -1,4 +1,4 @@
-"""How much a target's estimate can move by chance, what that allows to be decided, and how long new data takes.
+"""How much a target's estimate can move by chance, and what that allows to be detected.
 
 Everything is computed from the dispersion of the target across independent time blocks, never from where it sits,
 so a planning number never reveals a result.
@@ -47,25 +47,19 @@ def block_se(values: pl.DataFrame, h_ns: int) -> float:
 
 @dataclass(frozen=True)
 class Power:
-    """For one horizon: independent blocks in the span, the standard error of the target, the smallest effect the
-    data can detect at 80% power, how far below ``min_effect`` an estimate must be to count as FAIL, and the days of
-    new data needed to reach 80% power at ``min_effect``."""
+    """For one horizon: independent blocks in the span, the standard error of the target, and the smallest gain over
+    random the data can detect at 80% power."""
 
     blocks: float
     se: float
     mde: float
-    fail_margin: float
-    forward_days: float
 
 
-def power(se: float, span_ns: int, h_ns: int, min_effect: float, z: float = Z_BASE) -> Power:
+def power(se: float, span_ns: int, h_ns: int, z: float = Z_BASE) -> Power:
     """``se`` NaN (too few blocks to measure dispersion) gives NaN for everything that needs it."""
     blocks = span_ns / h_ns
     t_a = float(stats.t.ppf(stats.norm.cdf(z), max(blocks - 1, 1)))
-    per_block = se * math.sqrt(blocks)
-    needed = ((z + Z_BETA) * per_block / min_effect) ** 2
-    days = (needed * h_ns + h_ns) / DAY_NS
-    return Power(blocks=blocks, se=se, mde=(t_a + Z_BETA) * se, fail_margin=t_a * se, forward_days=days)
+    return Power(blocks=blocks, se=se, mde=(t_a + Z_BETA) * se)
 
 
 def scaling(sd_by_days: dict[float, float]) -> float:

@@ -1,43 +1,43 @@
-"""The feat layer on the toy: a real spread passes, noise fails, a peek is tainted, and a null world that does not
-keep what it claims is returned before anything is judged."""
+"""The feat layer on the toy: the decisive effect alone decides. A real spread passes and goes up for review, noise
+fails, a peek is tainted; diagnostics and alternatives without a world are shown, never deciding; a decisive target
+that cannot see a planted signal fails calibration and the submission is refused without a trial."""
 
 from pathlib import Path
 
 import pytest
 
 from research_ci.render.common import card_id
+from research_ci.runner import plugins
 from research_ci.stages.contract import Settings
 from research_ci.stages.feat import FeatError, FeatSettings
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
-from toy import consumer_contract, label_contract
+from toy import REGISTRY, Backwards, NeverRun, label_contract, strategy_contract
 
-FAST = Settings(workers=2, universe_cuts=2, label_cuts=1, consumer_cuts=1, pilot=((1, 3), (2, 2)))
-QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, consumer_reps=6, cuts=2)
+FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
+QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
 
 CRITERIA = """
+import polars as pl
+
 from research_ci.api import Criterion
 from research_ci.eval.statistics.ic import rank_ic
-from research_ci.eval.structure.filters import without_top
 
 
-def rest(table):
-    return rank_ic(without_top(table, "symbol", 0.34))
+def backwards(table):
+    return rank_ic(table.with_columns(-pl.col("score")))
 
 
-CRITERIA = [
-    Criterion("ic", rank_ic),
-    Criterion("ic without the top symbol", rest),
-]
+CRITERIA = [Criterion("ic of the reversed score", backwards)]
 """
 
 NULLS = """
 from research_ci.api import Null, PermuteWithin
 
 NULLS = [
-    Null("tail", PermuteWithin("time", clusters="symbol", block="horizon"), {keeps}
-         criteria=("ic without the top symbol",), reps=60),
+    Null("tail", PermuteWithin("time", clusters="symbol", block="horizon"),
+         criteria=("rank ic without top symbol",), reps=60),
 ]
 """
 
@@ -70,41 +70,20 @@ def features(fields, candidates):
 """
 
 
-def _contract() -> str:
-    effect = "unit='per entry after the round trip')"
-    target = "unit='per entry after the round trip', target=Use('ref.mean', {'cluster': 'symbol', 'top': 0.34}))"
-    text = label_contract().replace(effect, target).replace("at_least=0.001", "at_least=0.0003")
-    assert target in text
-    return text
-
-
-def _random_scores_contract() -> str:
-    """The consumer judges the claim against random scores of the same candidates; there is no baseline."""
-    decisive = (
-        "decisive=(Effect(on='consumer', at_least=0.05, unit='per year over random scores', "
-        "pilot=Perturb('shuffle', 1.0, block='24h'), design=FullPath()),),"
-    )
-    text = label_contract().replace("execution=Execution(every='1h')", "consumer='toy.carry'")
-    old = "decisive=(Effect(on='carry', at_least=0.001, unit='per entry after the round trip'),),"
-    assert old in text and "consumer='toy.carry'" in text
-    return text.replace(old, decisive)
-
-
-def _idea(tmp_path: Path, keeps: str = "", contract: str | None = None, nulls: str | None = None) -> Idea:
-    idea = Idea.init(tmp_path / "idea", "factor", settings=FAST, feat_settings=QUICK)
-    (idea.root / "contract.py").write_text(contract or _contract())
+def _idea(tmp_path: Path, contract: str | None = None, nulls: str = NULLS, criteria: str | None = CRITERIA) -> Idea:
+    idea = Idea.init(tmp_path / "idea", settings=FAST, feat_settings=QUICK)
+    (idea.root / "contract.py").write_text(contract or label_contract())
     for name, text in (("strategy.toml", "[s]\nk = 2\n"), ("live.toml", "[s]\nk = 2\n"), ("strategy.py", "K = 2\n")):
         (idea.root / name).write_text(text)
     idea.derive_contract()
     idea.approve("contract")
     idea.check_data()
-    idea.approve_source(_relayed(idea, "source"))
-    idea.check_data()
-    idea.approve("data")
-    assert idea.submit_data() is State.PASSED
-    (idea.root / "feat.py").write_text(CRITERIA)
+    idea.approve("data", approval=_relayed(idea, "data"))
+    assert idea.status().stage("data").state is State.PASSED
+    if criteria is not None:
+        (idea.root / "feat.py").write_text(criteria)
     (idea.root / "nulls").mkdir()
-    (idea.root / "nulls" / "feat.py").write_text(nulls or NULLS.format(keeps=keeps))
+    (idea.root / "nulls" / "feat.py").write_text(nulls)
     return idea
 
 
@@ -119,97 +98,111 @@ def _file(idea: Idea, name: str, text: str) -> Path:
     return path
 
 
-def test_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> None:
-    idea = _idea(tmp_path)
-    spec, card = idea.register_feat()
-    assert spec["verdict"]["status"] == "ready", card
-    assert "MethodCard" in card and "tail: null 1" in card
-    assert all(r["ok"] for r in spec["calibration"]), card
-    assert idea.status().stage("feat").state is State.CHECKED
-    idea.approve("feat", approval=_relayed(idea, "feat"))
+def _calibrations(idea: Idea) -> list[dict]:
+    return [r["payload"] for r in idea.ledger.records() if r["kind"] == "calibrate"]
 
+
+def test_the_decisive_effect_alone_decides_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> None:
+    idea = _idea(tmp_path)
     explored, _ = idea.explore_feat(_file(idea, "peek", PEEK))
     assert [f["status"] for f in explored["floors"]] == ["pass", "fail"]
-    assert idea.status().stage("feat").trials == 0
+    assert idea.status().stage("feat").trials == 0 and _calibrations(idea) == []
 
     result, text, state = idea.submit_feat(_file(idea, "noise", NOISE))
-    assert state is State.FAILED, text
+    assert state is State.OPEN and result["verdict"]["status"] == "FAILED", text
+    assert result["decisive"][0]["z"] < result["need"]
     assert "ResultCard" in text and "submission 1 of 3" in text
+    (calibration,) = _calibrations(idea)
+    assert [(r["effect"], r["world"], r["ok"]) for r in calibration["rows"]] == [("carry", "floor", True)]
+    assert result["calibration"]["ran"] and "calibrate  ok   carry at 8h vs floor: stand-ins die" in text
+    assert idea.next_actions()[0].reason.startswith("submission 1 FAILED: carry: does not beat random")
     with pytest.raises(FeatError, match="same scores as submission 1"):
         idea.submit_feat(_file(idea, "noise again", NOISE))
 
     result, text, state = idea.submit_feat(_file(idea, "peek", PEEK))
-    assert state is State.TAINTED, text
-    assert "criteria" not in result
+    assert state is State.OPEN and result["verdict"]["status"] == "TAINTED", text
+    assert "criteria" not in result and "calibrate" not in text and len(_calibrations(idea)) == 1
 
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
-    assert state is State.PASSED, text
-    assert result["need"] > 2.8
-    assert all(r["passed"] for r in result["criteria"])
-    assert result["decisive"][0]["outcome"] == "passed"
-    assert idea.next_actions()[0].stage == "signal"
-
-
-def test_a_null_world_that_does_not_keep_what_it_claims_blocks_the_method(tmp_path: Path) -> None:
-    idea = _idea(tmp_path, keeps='keeps="venue_pair",')
-    spec, card = idea.register_feat()
-    assert spec["verdict"]["status"] == "blocked", card
-    returned = [r for r in spec["calibration"] if not r["ok"]]
-    assert [(r["criterion"], r["world"]) for r in returned] == [("ic without the top symbol", "null 1")]
-    assert idea.status().stage("feat").state is State.CHALLENGED
-    with pytest.raises(WorkflowError, match="blocked"):
-        idea.approve("feat", approval=_relayed(idea, "feat"))
-
-
-def test_every_alternative_needs_a_world(tmp_path: Path) -> None:
-    idea = _idea(tmp_path)
-    (idea.root / "nulls" / "feat.py").write_text("NULLS = []\n")
-    spec, card = idea.register_feat()
-    assert spec["verdict"]["status"] == "blocked"
-    assert "keeps tail" in card
-
-
-def test_the_method_is_pinned_once_approved(tmp_path: Path) -> None:
-    idea = _idea(tmp_path)
-    idea.register_feat()
-    pinned = [r for r in idea.ledger.records() if r["kind"] == "register" and r["stage"] == "feat"][-1]
-    assert {"plugin:ref.mean", "plugin:ref.flat_costs"} <= set(pinned["payload"]["deps"])
+    assert state is State.REVIEW and result["verdict"]["status"] == "PASSED", text
+    decisive = result["decisive"][0]
+    assert result["need"] > 2.8 and decisive["z"] >= result["need"] and decisive["outcome"] == "passed"
+    assert decisive["effect"] > 0 and "gain over random" in text and "bp/entry" in text and "%/yr if rolled" in text
+    assert [(a.who, a.command) for a in idea.next_actions()] == [("human", "rci approve --stage feat")]
+    assert idea.card("feat") == text
     idea.approve("feat", approval=_relayed(idea, "feat"))
-    (idea.root / "feat.py").write_text(CRITERIA + "\n# changed\n")
-    with pytest.raises(WorkflowError, match="feat_file"):
+    assert idea.status().stage("feat").state is State.PASSED and idea.next_actions()[0].stage == "signal"
+    shown = idea.results()
+    assert len(shown) == 3 and shown[0].startswith("ResultCard") and "calibrate  ok   carry at 8h" in shown[0]
+
+
+def test_diagnostics_are_shown_and_never_decide(tmp_path: Path) -> None:
+    """The engine's defaults run next to the idea's criteria and judge the null worlds; one that fails every world
+    does not fail a submission whose decisive effect beats random."""
+    idea = _idea(tmp_path)
+    result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
+    assert state is State.REVIEW, text
+    rows = {(r["criterion"], r["by"], r["world"]): r["passed"] for r in result["criteria"]}
+    assert {("rank ic", "engine", "floor"), ("rank ic without top symbol", "engine", "null 1")} <= set(rows)
+    assert ("top minus bottom fifth", "engine", "null 1") not in rows
+    assert rows[("ic of the reversed score", "idea", "floor")] is False
+    assert "[!]  ic of the reversed score (idea) vs floor" in text and "not deciding" in text
+    assert "ok   alternatives covered: chance: floor · timing: floor · tail: null 1" in text
+
+
+def test_without_feat_py_or_a_world_for_an_alternative_a_submission_is_still_judged(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, nulls="NULLS = []\n", criteria=None)
+    result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
+    assert state is State.REVIEW, text
+    assert result["coverage"]["status"] == "warn" and "no world answers tail" in text
+    assert {r["by"] for r in result["criteria"]} == {"engine"}
+    assert result["calibration"]["ran"]
+
+
+def test_a_null_world_that_cannot_run_is_refused_without_a_trial(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, nulls=NULLS.replace('"tail"', '"nowhere"'))
+    with pytest.raises(FeatError, match="not an alternative of the contract"):
         idea.submit_feat(_file(idea, "spread", SPREAD))
     assert idea.status().stage("feat").trials == 0
 
 
-def test_through_the_consumer_a_spread_beats_random_scores_and_noise_does_not(tmp_path: Path) -> None:
-    idea = _idea(tmp_path, contract=_random_scores_contract())
-    spec, card = idea.register_feat()
-    assert spec["verdict"]["status"] == "ready", card
-    assert "over random changes to the submitted scores" in card
-    idea.approve("feat", approval=_relayed(idea, "feat"))
+def test_a_failed_calibration_refuses_the_submission_and_costs_no_trial(tmp_path: Path, monkeypatch) -> None:
+    """A decisive target that cannot see a planted signal is returned before anything is judged; the failure is kept,
+    so the next submission is refused at once, until the target or the contract changes."""
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.backwards": Backwards})
+    idea = _idea(tmp_path, contract=label_contract().replace("'ref.mean'", "'toy.backwards'"))
+    with pytest.raises(WorkflowError, match="failed its calibration.*a planted signal lived"):
+        idea.submit_feat(_file(idea, "spread", SPREAD))
+    feat = idea.status().stage("feat")
+    assert (feat.state, feat.trials) == (State.OPEN, 0)
+    (row,) = _calibrations(idea)[0]["rows"]
+    assert (row["effect"], row["world"], row["ok"]) == ("carry", "floor", False) and row["planted_lives"] < 0.8
+    assert idea.next_actions()[0].reason.startswith("calibration failed: carry in the floor world at 8h")
+    with pytest.raises(WorkflowError, match="no submission was spent"):
+        idea.submit_feat(_file(idea, "noise", NOISE))
+    assert len(_calibrations(idea)) == 1 and idea.ledger.n_trials("feat") == 0
+    assert "FAIL carry at 8h vs floor" in idea.results()[0]
 
-    result, text, _ = idea.submit_feat(_file(idea, "noise", NOISE))
-    decisive = result["decisive"][0]
-    assert (decisive["kind"], decisive["design"], decisive["runs"]) == ("consumer", "full_path", 6), text
-    assert decisive["outcome"] != "passed", text
 
+def test_what_a_submission_used_is_recorded_and_checked_again_when_a_person_accepts_it(tmp_path: Path) -> None:
+    idea = _idea(tmp_path)
+    idea.submit_feat(_file(idea, "spread", SPREAD))
+    deps = [r for r in idea.ledger.records() if r["kind"] == "submit"][-1]["payload"]["deps"]
+    assert {"features", "feat_file", "nulls_file", "engine", "calibration", "plugin:ref.mean"} <= set(deps)
+    (idea.root / "feat.py").write_text(CRITERIA + "\n# changed\n")
+    with pytest.raises(WorkflowError, match="changed since submission 1: feat_file; submit again"):
+        idea.approve("feat", approval=Approval(by="agent", channel="auto"))
+    (idea.root / "feat.py").write_text(CRITERIA)
+    idea.approve("feat", approval=Approval(by="agent", channel="auto"))
+    approval = list(idea.ledger.records())[-1]["payload"]
+    assert approval["deps"]["features"] == deps["features"] and "feat_submission" in approval["deps"]
+
+
+def test_a_strategy_contract_judges_its_label_effect_and_never_runs_the_backtest(tmp_path: Path, monkeypatch) -> None:
+    """Improving an existing strategy: its backtester gives the decision times, and only the algo layer runs it."""
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.carry": NeverRun})
+    idea = _idea(tmp_path, contract=strategy_contract(), nulls=NULLS.replace('"tail"', '"level"'))
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     decisive = result["decisive"][0]
-    assert decisive["outcome"] == "passed" and decisive["z"] > result["need"], text
-    assert decisive["over"].startswith("the mean of runs") and decisive["run"]["trades"] > 0
-    assert state is State.PASSED, text
-
-
-def test_branching_from_the_baseline_gains_nothing_with_the_baseline_own_scores(tmp_path: Path) -> None:
-    """The toy baseline already ranks by the spread: submitting the same scores changes no branch. Fourteen days
-    of toy branches are too noisy to rule out 5% a year, so the data cannot decide."""
-    nulls = NULLS.format(keeps="").replace('"tail"', '"level"').replace('criteria=("ic without the top symbol",), ', "")
-    idea = _idea(tmp_path, contract=consumer_contract(), nulls=nulls)
-    spec, card = idea.register_feat()
-    assert spec["verdict"]["status"] == "ready", card
-    idea.approve("feat", approval=_relayed(idea, "feat"))
-    result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
-    decisive = result["decisive"][0]
-    assert (decisive["design"], decisive["over"]) == ("branch", "the baseline"), text
-    assert decisive["branches"] > 3 and decisive["effect"] == 0.0
-    assert decisive["outcome"] == "insufficient" and state is State.INSUFFICIENT, text
+    assert (decisive["kind"], decisive["target"]) == ("label", "ref.mean"), text
+    assert decisive["outcome"] == "passed" and state is State.REVIEW, text

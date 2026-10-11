@@ -10,7 +10,6 @@ from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import WorkflowError
 
 data_app = typer.Typer(no_args_is_help=True, help="Check the data against the contract.")
-source_app = typer.Typer(no_args_is_help=True, help="Admit a data source, once for every idea that uses it.")
 
 
 @data_app.command("check")
@@ -20,26 +19,20 @@ def data_check(
         list[str] | None, typer.Option("--keep", help="A treatment a person chose not to apply, by its name.")
     ] = None,
 ) -> None:
-    """Admit the data source if needed, check the data against the contract, and print the cards."""
+    """Run the source's admission checks if needed, check the data against the contract, and print the DataCard."""
     with common.errors():
-        target = Idea(idea)
-        spec, card = target.check_data(tuple(keep or ()))
-        if spec["source"]["status"] != "admitted":
-            source = target.source_card()
-            typer.echo(source)
-            typer.echo(f"card {card_id(source)}")
+        spec, card = Idea(idea).check_data(tuple(keep or ()))
     typer.echo(card)
     typer.echo(f"card {card_id(card)}")
-    status = spec["verdict"]["status"]
-    if status == "blocked":
+    if spec["verdict"]["status"] == "blocked":
         typer.echo("blocked; see the verdict above")
     else:
-        typer.echo("checked; a person freezes it with `rci approve --stage data`")
+        typer.echo("up for review; a person approves it with `rci approve --stage data`")
 
 
 @data_app.command("show")
 def data_show(idea: common.IdeaDir = Path(".")) -> None:
-    """Print the last data card."""
+    """Print the last DataCard."""
     with common.errors():
         target = Idea(idea)
         path = target.workspace.path(DATA_TEXT)
@@ -48,42 +41,3 @@ def data_show(idea: common.IdeaDir = Path(".")) -> None:
     text = path.read_text().rstrip()
     typer.echo(text)
     typer.echo(f"card {card_id(text)}")
-
-
-@data_app.command("submit")
-def data_submit(idea: common.IdeaDir = Path(".")) -> None:
-    """Record the frozen data check as passed."""
-    with common.errors():
-        state = Idea(idea).submit_data()
-    typer.echo(f"data {state}")
-
-
-@source_app.command("show")
-def source_show(idea: common.IdeaDir = Path(".")) -> None:
-    """Print the admission card of the idea's data source."""
-    with common.errors():
-        text = Idea(idea).source_card()
-    typer.echo(text)
-    typer.echo(f"card {card_id(text)}")
-
-
-@source_app.command("approve")
-def source_approve(
-    idea: common.IdeaDir = Path("."),
-    relayed: Annotated[
-        str | None, typer.Option(help="An agent relays a person's approval; quote the person's words.")
-    ] = None,
-    auto: Annotated[bool, typer.Option(help="Fully automatic research: the agent admits the source.")] = False,
-    card: common.Card = "",
-) -> None:
-    """Admit the idea's data source, once for this plugin, options and code."""
-    who = common.who(relayed, auto, card)
-    with common.errors():
-        target = Idea(idea)
-        text = target.source_card()
-        typer.echo(text)
-        typer.echo(f"card {card_id(text)}")
-        if who.channel == "terminal":
-            typer.confirm("Admit this source?", abort=True)
-        record = target.approve_source(who)
-    typer.echo(f"admitted {record['stage']}: {record['payload']['approval']['note']}")

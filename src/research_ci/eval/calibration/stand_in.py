@@ -45,7 +45,7 @@ def calibrate(
     level_z = _standard(level)
     resid = _standard(y - level)
     rng = np.random.default_rng(seed)
-    noise = [rng.standard_normal(len(y)) for _ in range(reps)]
+    noise = rng.standard_normal((reps, len(y)))
     shuffles = [shuffle(10_000 + k) for k in range(nulls)]
 
     def value(scores: np.ndarray) -> float:
@@ -63,7 +63,6 @@ def calibrate(
     lam = _size(lambda k: value(stand + k * resid) - value(stand), 1.5 * mde)
     die = [z(level_z + n) < z_base for n in noise]
     live = [z(level_z + n + lam * resid) >= z_base for n in noise]
-    kept = None if len(keys) == 1 else float(np.mean([np.isclose(level[i], level).mean() for i in shuffles]))
     chance = float(stats.t.sf(z_base / math.sqrt(1 + 1 / nulls), nulls - 1))
     allowed = chance + 3 * math.sqrt(chance * (1 - chance) / reps)
     out = {
@@ -75,7 +74,6 @@ def calibrate(
         "stand_in_dies": float(np.mean(die)),
         "planted_lives": float(np.mean(live)),
         "dies_at_least": 1 - allowed,
-        "kept": kept,
     }
     out["ok"] = out["stand_in_dies"] >= 1 - allowed and out["planted_lives"] >= 0.80
     return out

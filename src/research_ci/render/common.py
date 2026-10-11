@@ -3,6 +3,7 @@
 import math
 from typing import Any
 
+from research_ci.api.contract import span
 from research_ci.kernel.hashing import sha256_hex
 
 MARK = {"pass": "ok", "fail": "FAIL", "warn": "[!]", "skip": "--"}
@@ -31,15 +32,22 @@ def bp(x: float | None) -> str:
     return "n/a" if x is None or not math.isfinite(x) else f"{x * 1e4:.1f}"
 
 
-def days(days: float | None) -> str:
-    if days is None or not math.isfinite(days):
-        return "n/a"
-    return f"{days:.0f} d" if days < 60 else f"{days / 30.4:.0f} mo"
-
-
 def num(x: float | None) -> str:
     return "n/a" if x is None or not math.isfinite(x) else f"{x:.4g}"
 
 
-def pct(x: float | None) -> str:
-    return "n/a" if x is None or not math.isfinite(x) else f"{x:+.1%}"
+def figure(x: float | None, units: dict[str, Any]) -> str:
+    """A target's number without its unit: basis points when the target says what one value is (``per``)."""
+    return bp(x) if units.get("per") else num(x)
+
+
+def amount(x: float | None, units: dict[str, Any]) -> str:
+    """A target's number with its unit, such as ``5.9 bp/entry``; the raw number for a target without ``per``."""
+    return f"{bp(x)} bp/{units['per']}" if units.get("per") else num(x)
+
+
+def rolled(x: float | None, horizon: str, units: dict[str, Any]) -> str:
+    """What a return over ``horizon`` comes to over a year, repeated back to back, for a target that ``rolls``."""
+    if not units.get("rolls") or x is None or not math.isfinite(x):
+        return ""
+    return f"≈ {x * (span('365 days') / span(horizon)):.1%}/yr"

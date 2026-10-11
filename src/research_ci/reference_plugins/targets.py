@@ -9,6 +9,9 @@ class ClusterMean:
     trip. With ``top``, when the rows carry a ``score``, only that share of the candidates with the highest scores at
     each time counts."""
 
+    per = "entry"
+    rolls = True
+
     def __init__(self, cluster: str = "entity", net: bool = True, top: float | None = None) -> None:
         if top is not None and not 0 < top <= 1:
             raise ValueError("top is a share in (0, 1]")
