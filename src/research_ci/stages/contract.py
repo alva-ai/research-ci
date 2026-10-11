@@ -5,6 +5,7 @@ runs a backtest: a consumer the contract names only declares the decision times,
 result is a JSON-ready spec. Planning numbers come from dispersion only; no level of any target is reported.
 """
 
+import inspect
 import math
 import os
 import time
@@ -25,7 +26,7 @@ from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME, from_ns, span_ns, time_series, to_ns
 from research_ci.kernel.verdict import power as pw
-from research_ci.runner.plugins import Registry, code_hash, load
+from research_ci.runner.plugins import Registry, code_hash, factory_of, load
 from research_ci.stages.defaults import data as defaults
 from research_ci.store import vault
 
@@ -184,6 +185,9 @@ class _Derivation:
             plugin: LabelPlugin = self._plugin(use)
             self.labels[label.name] = plugin
             self.checks.extend(pr.label_cases(label.name, plugin.values, plugin.cases()))
+            named = self._named_fields(label, use, plugin, fields, cands)
+            if named is not None:
+                self.checks.append(named)
             if cands is not None:
                 cuts = _quantile_times(time_series(self.times), self.s.label_cuts)
                 for h in sorted({label.horizons[0], label.horizons[-1]}, key=pd.Timedelta):
@@ -191,6 +195,31 @@ class _Derivation:
                     self.checks.append(pr.label_truncation(label.name, plugin.values, fields, cands, horizon, cuts))
             info.append({"name": label.name, "plugin": use.name, "horizons": list(label.horizons)})
         self.spec["labels"] = info
+
+    def _named_fields(
+        self, label: Label, use: Use, plugin: LabelPlugin, fields: pl.DataFrame, cands: pl.DataFrame | None
+    ) -> pr.Check | None:
+        """A label option, given or by default, that names text which is neither a field of the data nor a candidate
+        column: a warning, or a failure when the label then gives no rows at all."""
+        present = sorted(fields["field"].unique().to_list())
+        columns = set(cands.columns) if cands is not None else set()
+        options = _text_defaults(factory_of(use.name, self.registry)) | {
+            k: v for k, v in use.options.items() if isinstance(v, str)
+        }
+        absent = [f"{k}={v!r}" for k, v in sorted(options.items()) if v not in present and v not in columns]
+        if not absent:
+            return None
+        h = label.horizons[0]
+        try:
+            rows = 0 if cands is None else plugin.values(fields, cands, span(h)).height
+        except Exception:  # noqa: BLE001
+            rows = 0
+        detail = (
+            f"{use.name} option {', '.join(absent)} is not a field of the data; its fields are {', '.join(present)}"
+        )
+        if rows:
+            return pr.Check(f"label {label.name}: fields", "warn", detail)
+        return pr.Check(f"label {label.name}: fields", "fail", f"{detail}; the label gives no rows at {h}")
 
     def _label_effect(self, effect: Effect, fields: pl.DataFrame, cands: pl.DataFrame) -> dict[str, Any]:
         label = _label(self.c, effect.on)
@@ -228,7 +257,8 @@ class _Derivation:
         assert shortest is not None
         h0, table = shortest
         self.checks.append(pr.target_reads_score(use.name, lambda t: target.reduce(t, h0, self.costs), table))
-        out = {"kind": "label", **_effect(effect, target), "target": use.name, "horizons": rows}
+        out = {"kind": "label", **_effect(effect, target), "target": use.name, "options": dict(use.options)}
+        out["horizons"] = rows
         return out | {"label": {"name": label.name, "plugin": as_use(label.use).name}}
 
     def _rest(self, decisive: list[dict[str, Any]]) -> None:
@@ -273,6 +303,14 @@ def _verdict(decisive: list[dict[str, Any]], failed: list[str]) -> dict[str, Any
             notes.append(f"{d['on']}: too few blocks on every horizon to measure the noise")
             measurable = False
     return {"status": "decidable" if measurable and not failed else "blocked", "notes": notes}
+
+
+def _text_defaults(factory: Callable[..., Any]) -> dict[str, str]:
+    try:
+        params = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return {}
+    return {p.name: p.default for p in params if isinstance(p.default, str)}
 
 
 def _label(c: Contract, name: str) -> Label:

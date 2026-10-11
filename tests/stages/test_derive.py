@@ -140,3 +140,22 @@ def test_a_number_that_is_not_finite_somewhere_is_left_out_of_the_power_not_bloc
     assert spec["verdict"]["status"] == "decidable"
     assert all(math.isfinite(r["mde"]) for r in spec["decisive"][0]["horizons"])
     assert any(w.startswith("carry: the number is not finite at some decision times") for w in spec["warnings"])
+
+
+def test_a_label_option_that_names_no_field_of_the_data_lists_the_fields(tmp_path: Path) -> None:
+    """A misspelled flow still gives rows, with no flow in them: a warning. A misspelled price gives no rows: the
+    contract is blocked."""
+    fields = "its fields are close, funding_interval_hours, funding_rate"
+    idea = _idea(tmp_path, label_contract().replace("{'flow': 'funding_rate'}", "{'flow': 'funding_rat'}"))
+    idea.derive_contract()
+    checks = {c["name"]: c for c in idea.workspace.read_json("contract.json")["spec"]["checks"]}
+    assert checks["label carry: fields"]["status"] == "warn"
+    assert (
+        checks["label carry: fields"]["detail"]
+        == f"ref.carry option flow='funding_rat' is not a field of the data; {fields}"
+    )
+    other = Idea.init(tmp_path / "other", settings=FAST)
+    (other.root / "contract.py").write_text(label_contract().replace("{'flow'", "{'price': 'closee', 'flow'"))
+    _, card = other.derive_contract()
+    assert f"FAIL label carry: fields: ref.carry option price='closee' is not a field of the data; {fields}" in card
+    assert "the label gives no rows at 8h" in card and other.status().stage("contract").state is State.OPEN

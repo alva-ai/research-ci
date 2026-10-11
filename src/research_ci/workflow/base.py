@@ -2,6 +2,7 @@
 transitions. Each stage adds its own commands in a module of its own; ``Idea`` puts them together."""
 
 import importlib.util
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -12,7 +13,7 @@ from research_ci.render.common import card_id
 from research_ci.runner.plugins import Registry
 from research_ci.stages.contract import Settings
 from research_ci.stages.data import DataSettings
-from research_ci.stages.feat import FeatSettings
+from research_ci.stages.feat import FeatSettings, Frozen, calibration_key
 from research_ci.store.environment import environment_record, judging_deps
 from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError
@@ -20,27 +21,12 @@ from research_ci.store.workspace import Workspace, hash_file, rci_home
 from research_ci.workflow.lineage import CONTRACT, STAGES, blockers, invalidated, kind_of, upstream
 from research_ci.workflow.machine import Command, Kind, State, Verdict, WorkflowError, starts_new_version, transition
 from research_ci.workflow.next import Action, IdeaStatus, StageStatus, next_actions
+from research_ci.workflow.templates import CONTRACT_FILE, EXAMPLE, EXAMPLE_FILE, SKELETON, START, START_FILE
 
-CONTRACT_FILE = "contract.py"
 LEDGER_FILE = "ledger.jsonl"
 FORMAT = 2
 DATA = "data"
 FEAT = "feat"
-SKELETON = """from research_ci.api import Alternative, Contract, Effect, Execution, Forward, Label, Universe, Use
-
-CONTRACT = Contract(
-    claim="TODO: state the claim in one sentence",
-    decisive=(Effect(on="return", target=Use("ref.mean", {"cluster": "entity", "top": 0.2})),),
-    alternatives=(Alternative("TODO", "TODO: another reason the same result could appear"),),
-    used=None,  # which data was already used to choose anything here; () if none
-    data="TODO-data-plugin",
-    costs=Use("ref.flat_costs", {"commission_bps": 0.0, "slippage_bps": 0.0}),
-    execution=Execution(every="24h"),
-    universe=Universe("TODO-universe-plugin", clusters="entity"),
-    labels=(Label("return", Use("ref.return", {"price": "close"}), horizons=("24h",)),),
-    forward=Forward("TODO-data-plugin"),
-)
-"""
 DEFAULT_BUDGET = 20
 
 
@@ -102,7 +88,7 @@ class IdeaBase:
         self.workspace = Workspace(self.root)
         self.ledger = _ledger(self.workspace)
         if not self.ledger.path.exists():
-            raise WorkflowError(f"{self.root} is not a Research CI idea; run `rci init` first")
+            raise WorkflowError(_not_an_idea(self.root))
         self.ledger.verify()
         first = next(self.ledger.records(), None)
         if first is not None and first["kind"] == "init" and first["payload"].get("format") != FORMAT:
@@ -125,9 +111,16 @@ class IdeaBase:
             ledger = _ledger(workspace)
             if ledger.path.exists():
                 raise WorkflowError(f"{root} is already a Research CI idea")
-            contract = Path(root) / CONTRACT_FILE
-            if not contract.exists():
-                contract.write_text(SKELETON)
+            files = {
+                CONTRACT_FILE: SKELETON,
+                START_FILE: START.format(name=Path(root).resolve().name, idea=Path(root)),
+                EXAMPLE_FILE: EXAMPLE,
+            }
+            for name, text in files.items():
+                path = Path(root) / name
+                if not path.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(text)
             ledger.append("init", "idea", {"format": FORMAT})
             (workspace.root / ".gitignore").write_text("lock\n")
         return cls(root, registry, settings, data_settings, feat_settings)
@@ -252,6 +245,11 @@ class IdeaBase:
         """A stage's own card and pins, from the module of the stage that has them."""
         return None
 
+    def _gate_key(self, frozen: Frozen) -> dict[str, str]:
+        """What the calibration of the gate, the contract's decisive effect in the floor world, rests on: the contract,
+        the engine, the treated data, the code of the plugins feat runs, and the calibration settings."""
+        return self.deps(CONTRACT) | judging_deps() | calibration_key(frozen, self.feat_settings)
+
     def _allowed(self, stage: str, command: Command, ready: bool = False) -> StageStatus:
         return self._check(self.status(), stage, command, ready)
 
@@ -371,6 +369,18 @@ class _Replay:
 
 def _ledger(workspace: Workspace) -> Ledger:
     return Ledger(workspace.path(LEDGER_FILE), anchors=rci_home() / "heads")
+
+
+def _not_an_idea(root: Path) -> str:
+    """Why ``root`` is not an idea, and the likely fix when the current directory, or the directory above ``root``,
+    is one."""
+    head = f"{root} is not a Research CI idea"
+    here = Path.cwd().resolve()
+    if here != root and Workspace(here).path(LEDGER_FILE).exists():
+        return f"{head}; you are already in the idea {here.name}; drop -i, or run from its parent"
+    if Workspace(root.parent).path(LEDGER_FILE).exists():
+        return f"{head}; {root.parent.name} is the idea; pass -i {os.path.relpath(root.parent, here)}"
+    return f"{head}; run `rci init` first"
 
 
 def _move(s: StageStatus, to: State, note: str) -> dict[str, Any]:

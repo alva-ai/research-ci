@@ -4,8 +4,9 @@ source."""
 from dataclasses import asdict
 from typing import Any
 
-from research_ci.api.contract import as_use
+from research_ci.api.contract import Contract, ContractError, as_use
 from research_ci.render.data import data_card
+from research_ci.stages import feat as fs
 from research_ci.stages.contract import jsonable
 from research_ci.stages.data import check_data, current_data_deps
 from research_ci.store import vault
@@ -30,6 +31,12 @@ class DataCommands(IdeaBase):
         previous = self._last(Command.CHECK, DATA)
         checked = check_data(contract, self.root, self.registry, self.data_settings, keep=keep)
         spec = jsonable(checked.spec)
+        if spec["verdict"]["status"] != "blocked" and contract.universe is not None:
+            spec["calibration"] = self._calibrate_gate(contract, spec["panel"])
+            if not spec["calibration"]["ok"]:
+                why = "; ".join(spec["calibration"]["notes"])
+                note = f"the gate cannot be calibrated on this data: {why}; change the target or the contract"
+                spec["verdict"] = {"status": "blocked", "notes": [note]}
         version = current.version + starts_new_version(current.state, Command.CHECK)
         text = data_card(spec, self.root.name, version)
         verdict = spec["verdict"]
@@ -45,6 +52,16 @@ class DataCommands(IdeaBase):
         if previous is not None:
             self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["panel"], spec["panel"])
         return spec, text
+
+    def _calibrate_gate(self, contract: Contract, panel: dict[str, Any]) -> dict[str, Any]:
+        """The gate in the floor world on the treated data, before any features exist: the contract's decisive target
+        must read the scores, a stand-in must die as often as chance allows, and a planted signal must live. Feat
+        reuses it while nothing it rests on changes."""
+        try:
+            frozen = fs.frozen(contract, panel["hash"], panel["exclusions"], self.registry, self.feat_settings)
+        except ContractError as exc:
+            return {"ok": False, "notes": [str(exc)], "rows": [], "checks": [], "key": {}}
+        return jsonable(fs.calibration(frozen, self.feat_settings) | {"key": self._gate_key(frozen)})
 
     def _stage_freeze(self, stage: str, current: StageStatus) -> StageFreeze | None:
         if stage != DATA:

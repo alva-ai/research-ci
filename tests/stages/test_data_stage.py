@@ -13,6 +13,7 @@ from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
+from research_ci.runner.research import ResearchError
 from research_ci.stages import data as data_stage
 from research_ci.stages.contract import Settings
 from research_ci.stages.data import DataSettings
@@ -331,3 +332,36 @@ def test_dropping_a_short_series_a_split_made_does_the_same_with_or_without_the_
     alone, both = drop.apply(fields), drop.apply(split.apply(fields))
     assert drop.rows == fields.height - alone.height > 0
     assert alone.equals(both)
+
+
+ROW_TEST = """
+import polars as pl
+from research_ci.api import DataTest
+
+
+def zeros(fields):
+    flagged = [(e, t) for e, f, t, v in fields.select("entity", "field", "event_time", "value").iter_rows() if v == 0]
+    return pl.DataFrame(flagged, schema=["entity", "event_time"], orient="row")
+
+
+TESTS = [DataTest("zeros", zeros, covers=[("spike", "close")], on_fail="mask")]
+"""
+
+
+def test_a_wrong_test_file_says_how_to_fix_it_and_a_row_wise_one_runs_with_a_warning(tmp_path: Path) -> None:
+    idea = _idea(tmp_path)
+    (idea.root / "data.py").write_text("TESTS = [\n")
+    with pytest.raises(ResearchError, match=r"data.py:1: .*fix the file"):
+        idea.check_data()
+    (idea.root / "data.py").write_text("import polars as pl\n")
+    with pytest.raises(data_stage.DataError, match=r"data.py defines no TESTS; data.py defines TESTS = \[DataTest"):
+        idea.check_data()
+    (idea.root / "data.py").write_text("TESTS = [print]\n")
+    with pytest.raises(data_stage.DataError, match=r"TESTS must be a list of DataTest; .*`rci methods` lists"):
+        idea.check_data()
+    assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
+    (idea.root / "data.py").write_text(ROW_TEST)
+    spec, card = idea.check_data()
+    warning = "row-wise code: data.py:7 iter_rows — polars expressions are usually much faster"
+    assert spec["warnings"][0] == warning and f"warnings   [!] {warning}" in card
+    assert [t["name"] for t in spec["tests"]] == ["zeros"]
