@@ -15,7 +15,8 @@ SLOTS = (
 LEGEND = (
     "**List**: floor steps run on every idea, are part of the engine hash, and no idea can change them; default steps "
     "are adjusted from experience, and the engine hash leaves them out. *(levels)*, *(hedge)*, *(reference)*: only "
-    "when a plugin declares it; *(data.py)* and the other files: only when the idea adds the file. **Used by**: "
+    "when a plugin declares it; *(data.py)* and the other files: only when the idea adds the file; *(cross)*, "
+    "*(series)*, *(events)*: only for a universe of that shape. **Used by**: "
     "contract, data, feat run it; research code may call it (`rci methods`); inside eval: other eval functions call "
     "it; worked examples: other modules' examples build on it; algo, planned: waits for the algo layer; tests only: "
     "nothing else calls it. **Backing**: ex worked examples, prop properties on synthetic markets, — none declared "
@@ -30,6 +31,7 @@ def markdown(catalog: dict[str, Any]) -> str:
         f"Generated from the code by `rci methods --markdown`; a test fails when it is out of date: `{REGENERATE}`.",
         "",
         SLOTS,
+        *_shapes(catalog["shapes"]),
         "",
         "## Stages",
     ]
@@ -56,6 +58,29 @@ def markdown(catalog: dict[str, Any]) -> str:
     roles = " · ".join(f"`{role}`: {means}" for role, means in catalog["roles"].items())
     out += ["", "## Legend", "", f"**Role**: {roles}. {LEGEND}"]
     return "\n".join(out)
+
+
+def _shapes(shapes: list[dict[str, Any]]) -> list[str]:
+    """The shapes a universe declares, each with its floor world, the target that fits it and its default
+    diagnostics; then what each of those targets is for."""
+    out = ["", "## Shapes", "", SHAPES, ""]
+    out += [_line("Shape", "The question", "Floor world", "Target", "Default diagnostics"), _line(*["---"] * 5)]
+    for s in shapes:
+        shape = f"`{s['shape']}`" + (" (the default)" if s["shape"] == "cross" else "")
+        diagnostics = ", ".join(s["diagnostics"]) or "—"
+        out.append(_line(shape, s["question"], f"`{s['world']}`", f"`{s['target']}`", diagnostics))
+    roles = {s["name"]: s["role"] for s in shapes}
+    out += ["", _line("Target", "Role"), _line("---", "---")]
+    out += [_line(f"`{name}`", role) for name, role in roles.items()]
+    return out
+
+
+SHAPES = (
+    "A universe says which question its scores answer, `Universe(use, clusters, shape=...)`, and the shape sets the "
+    "floor world of the decisive test, the target that fits it, and the default diagnostics feat shows. For events, "
+    "the features score only the event rows, every candidate row stays in feat's tables, and statistics and targets "
+    "judge the rows with a finite score, which move in time with the shift."
+)
 
 
 def _lab(lab: dict[str, Any]) -> list[str]:

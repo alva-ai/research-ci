@@ -264,7 +264,8 @@ def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
         "    Eval(of, name='', h0='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')",
         '  for example: CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)]',
         "null world: nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every alternative of the contract",
-        "  from research_ci.api import Null, PermuteWithin\n    Null(explains: str, world: PermuteWithin, keeps: ",
+        "  from research_ci.api import Null, PermuteWithin, ShiftInTime\n"
+        "    Null(explains: str, world: PermuteWithin | ShiftInTime, keeps: ",
         "      explains  the id of the contract's alternative this world answers",
         "    PermuteWithin(bucket_by: str, clusters: str | None = None, block: str | None = None)",
         '  for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), '
@@ -273,7 +274,7 @@ def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
         assert needed in text, needed
     listed = json.loads(runner.invoke(app, ["methods", "--json"]).stdout)
     assert {"use", "import", "signature", "doc", "examples", "properties"} <= set(listed[0])
-    assert [m["name"] for m in listed if m["use"] == "null world"] == ["Null", "PermuteWithin"]
+    assert [m["name"] for m in listed if m["use"] == "null world"] == ["Null", "PermuteWithin", "ShiftInTime"]
     assert [m["name"] for m in listed if m["use"] == "lab eval"][:2] == ["Eval", "Case"]
 
 

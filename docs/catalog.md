@@ -4,6 +4,21 @@ Generated from the code by `rci methods --markdown`; a test fails when it is out
 
 Every layer is the same four slots. **1 floor**: the premises and the decisive test, which alone can pass a claim (z ≥ z_need, rising with the submissions). **2 engine lists**: the default list and the library evals an idea lists; they test generic H0s and are shown, or treat the data. **3 lab evals**: the evals the idea writes for its own case, and its null worlds; they can veto, never pass. **4 tests of lab evals**: what holds a lab eval to its own tests before it judges anything.
 
+## Shapes
+
+A universe says which question its scores answer, `Universe(use, clusters, shape=...)`, and the shape sets the floor world of the decisive test, the target that fits it, and the default diagnostics feat shows. For events, the features score only the event rows, every candidate row stays in feat's tables, and statistics and targets judge the rows with a finite score, which move in time with the shift.
+
+| Shape | The question | Floor world | Target | Default diagnostics |
+| --- | --- | --- | --- | --- |
+| `cross` (the default) | which candidates do better than the others at the same decision time | `PermuteWithin(time, clusters=<cluster column>, block=horizon)` | `Use("ref.mean", {"cluster": "<cluster column>", "top": 0.2})` | rank ic, rank ic without top {clusters}, top minus bottom fifth |
+| `series` | when one or a few assets do better: timing, long or short | `ShiftInTime(min_shift=horizon)` | `Use("ref.timing")` | ts ic |
+| `events` | what follows an event; the scores exist only at the event rows | `ShiftInTime(min_shift=horizon)` | `Use("ref.mean", {"cluster": "entity"})` | mean at events |
+
+| Target | Role |
+| --- | --- |
+| `ref.mean` | Which candidates do better (cross), or what follows an event (events): the mean label per decision time over the candidates with a score, each cluster weighted equally; with `net`, after each candidate's round trip. |
+| `ref.timing` | When to be long or short (series): the mean over the candidates at each decision time of sign(score) × label, long where the score is positive, short where it is negative, flat at zero. |
+
 ## Stages
 
 ### contract: `rci contract derive`
@@ -66,14 +81,16 @@ Lists: `stages/feat/floor.py`, `stages/feat/defaults.py`, `stages/lab.py`.
 | --- | --- | --- | --- | --- |
 | **1 floor** | | | | |
 | screen | Refuses a missing, example, or unparsable file | blocks | floor | — |
-| scores rank candidates | Scores rank candidates at half the times | blocks | floor | — |
+| scores rank candidates | Scores rank candidates, or times, or mark events | blocks | floor | — |
 | scores read nothing ahead | Same scores with the data cut early | blocks | floor | — |
 | decisive test | The decisive effect beats the floor world: z ≥ z_need | decides | floor | — |
 | cost | Wall time and peak memory of the features call | shown | floor | — |
 | **2 engine lists** | | | | |
-| rank ic | Rank correlation of score and label per time | shown | default | `statistics.ic.rank_ic` |
-| rank ic without top {clusters} | Rank IC without the top fifth of clusters | shown | default | `statistics.ic.rank_ic` · `structure.filters.{without_top, kept_without_top}` |
-| top minus bottom fifth | Top fifth by score less the bottom fifth | shown | default | `statistics.spread.quantile_spread` |
+| rank ic *(cross)* | Rank correlation of score and label per time | shown | default | `statistics.ic.rank_ic` |
+| rank ic without top {clusters} *(cross)* | Rank IC without the top fifth of clusters | shown | default | `statistics.ic.rank_ic` · `structure.filters.{without_top, kept_without_top}` |
+| top minus bottom fifth *(cross)* | Top fifth by score less the bottom fifth | shown | default | `statistics.spread.quantile_spread` |
+| ts ic *(series)* | Rank correlation of score and label over time | shown | default | `statistics.ic.ts_ic` |
+| mean at events *(events)* | Mean label at the event rows | shown | default | — |
 | library evals *(feat.py)* | Each library eval feat.py lists, vs the floor | shown | floor | — |
 | **3 lab evals** | | | | |
 | lab evals listed *(data.py, feat.py)* | The layer file lists at least one lab eval | blocks | floor | — |
@@ -99,7 +116,7 @@ A lab eval is a function of the idea's own, in a module such as `evals/<name>.py
 | `Size(of, market=Market(), markets=100)` | On markets with no information, the statistic must beat the floor world (z ≥ 2) no more often than chance allows, over `markets` seeds. |
 | `Power(of, market=Market(), markets=40, rate=0.8)` | On markets with `market.ic` of information, the statistic must beat the floor world at least `rate` of the time. |
 | `Recovers(of, market, expect, tol, markets=20)` | Averaged over `markets` seeds and decision times, the statistic must come within `tol` of `expect`. |
-| `Market(times=120, entities=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0)` | A synthetic evaluation table: `entities` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times. |
+| `Market(times=120, entities=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0, shape='cross')` | A synthetic evaluation table: `entities` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times. |
 | `Source(entities=12, hours=336, settle=8, lag=0, revised=0.0)` | A synthetic field table: `entities` entities with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later. |
 | `Pit(category, plant, note='')` | A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one entity where the field varies. |
 
@@ -110,14 +127,15 @@ A null world, in `nulls/feat.py`, one for every alternative of the contract:
 | Field | Means |
 | --- | --- |
 | `Null.explains` | the id of the contract's alternative this world answers |
-| `Null.world` | a PermuteWithin: how the scores are shuffled while the labels stay |
-| `Null.keeps` | the column the alternative lives in; None means the world's bucket_by |
+| `Null.world` | a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay |
+| `Null.keeps` | the column the alternative lives in; None means the world's bucket_by, or entity for a ShiftInTime |
 | `Null.evals` | the names of the evals this world judges, any eval of the layer; () means the decisive effect |
 | `Null.reps` | the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default |
 | `Null.note` | free text kept with the world in the submission's record |
 | `PermuteWithin.bucket_by` | shuffle the scores across entities inside each bucket of this column; "time" is one bucket per decision time |
 | `PermuteWithin.clusters` | a column whose members move together and are shuffled as one |
 | `PermuteWithin.block` | repeat the same shuffle for every decision time inside a block this long; "horizon" uses each label horizon |
+| `ShiftInTime.min_shift` | shift each entity's scores along its decision times, by one offset for all entities, at least this far either way round; "horizon" uses each label horizon |
 
 ## Slot 4: tests of lab evals
 
@@ -148,7 +166,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `label` | How a test is named in its check. | — |
 | | `obligations` | One check per case and property the module declares. | — |
 | | `run_tests` | One check per case and property, each named after `name`. | — |
-| `validation/calibration.py` | `calibrate` | Stand-ins die as often as chance allows; planted signals live. | 2 ex |
+| `validation/calibration.py` | `calibrate` | Stand-ins die as often as chance allows; planted signals live. | 4 ex |
 | `stages/data/treatments.py` | `apply_all` | The field table after every field treatment. | — |
 | | `apply_candidates` | The candidates after every candidate treatment. | — |
 | | `drop_candidates` | Drop candidate rows (`t`, `entity`). | — |
@@ -227,6 +245,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
 | `ic` | `rank_ic` | Spearman correlation of score and label at each decision time. | feat, research code | 3 ex · 3 prop |
+| | `ts_ic` | Rank correlation of score and label over time, per entity. | feat, research code | 3 ex · 3 prop |
 | `spread` | `quantile_spread` | Mean label of the top `share` less the bottom `share`. | feat, research code | 3 ex · 2 prop |
 
 ### structure
@@ -246,4 +265,4 @@ What the engine runs on its own, with worked examples like the library's, that n
 
 ## Legend
 
-**Role**: `blocks`: stops the stage when it fails: BLOCKED, refused, TAINTED, or FAILED · `decides`: PASS or FAIL; only the decisive test · `vetoes`: rejects the claim where it does not hold; never passes what the decisive test failed · `treats`: changes the data by default, weighed by its influence · `warns`: a warning on the card, or an item a person decides · `shown`: on the card, decides nothing. **List**: floor steps run on every idea, are part of the engine hash, and no idea can change them; default steps are adjusted from experience, and the engine hash leaves them out. *(levels)*, *(hedge)*, *(reference)*: only when a plugin declares it; *(data.py)* and the other files: only when the idea adds the file. **Used by**: contract, data, feat run it; research code may call it (`rci methods`); inside eval: other eval functions call it; worked examples: other modules' examples build on it; algo, planned: waits for the algo layer; tests only: nothing else calls it. **Backing**: ex worked examples, prop properties on synthetic markets, — none declared (the protocol tests are held to broken toy plugins in `tests/eval/test_protocol.py`).
+**Role**: `blocks`: stops the stage when it fails: BLOCKED, refused, TAINTED, or FAILED · `decides`: PASS or FAIL; only the decisive test · `vetoes`: rejects the claim where it does not hold; never passes what the decisive test failed · `treats`: changes the data by default, weighed by its influence · `warns`: a warning on the card, or an item a person decides · `shown`: on the card, decides nothing. **List**: floor steps run on every idea, are part of the engine hash, and no idea can change them; default steps are adjusted from experience, and the engine hash leaves them out. *(levels)*, *(hedge)*, *(reference)*: only when a plugin declares it; *(data.py)* and the other files: only when the idea adds the file; *(cross)*, *(series)*, *(events)*: only for a universe of that shape. **Used by**: contract, data, feat run it; research code may call it (`rci methods`); inside eval: other eval functions call it; worked examples: other modules' examples build on it; algo, planned: waits for the algo layer; tests only: nothing else calls it. **Backing**: ex worked examples, prop properties on synthetic markets, — none declared (the protocol tests are held to broken toy plugins in `tests/eval/test_protocol.py`).

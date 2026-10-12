@@ -24,6 +24,7 @@ rci = "research_ci.cli.main:app"
 "ref.carry" = "research_ci.reference_plugins.labels:PairCarry"
 "ref.markout" = "research_ci.reference_plugins.labels:Markout"
 "ref.mean" = "research_ci.reference_plugins.targets:ClusterMean"
+"ref.timing" = "research_ci.reference_plugins.targets:SignedMean"
 "ref.flat_costs" = "research_ci.reference_plugins.costs:FlatCosts"
 
 [build-system]

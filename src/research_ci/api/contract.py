@@ -11,6 +11,12 @@ class ContractError(ValueError):
 
 
 FLOOR_ALTERNATIVES = ("chance", "timing")
+Shape = Literal["cross", "series", "events"]
+SHAPES: dict[str, str] = {
+    "cross": "which candidates do better than the others at the same decision time",
+    "series": "when one or a few assets do better: timing, long or short",
+    "events": "what follows an event; the scores exist only at the event rows",
+}
 USAGE_TARGETS = ("claim", "costs", "labels")
 LAYER_NAMES = ("data", "feat", "signal", "algo")
 
@@ -54,18 +60,26 @@ class Universe:
     ``clusters`` names the column whose members move together (nulls shuffle whole clusters, blocks count them once);
     ``groups`` are columns nulls may bucket by. ``membership="static"`` means the candidate list was fixed with
     hindsight; the engine then records that the history is explore-grade for the universe.
+
+    ``shape`` is the question the scores answer (``SHAPES``), and it sets the floor world: ``"cross"`` ranks the
+    candidates at each decision time, and the floor shuffles scores across clusters there; ``"series"`` times one or a
+    few assets, and ``"events"`` asks what follows the rows the features score, the others left without a score; for
+    both the floor shifts each entity's scores in time.
     """
 
     use: Use | str
     clusters: str
     groups: tuple[str, ...] = ()
     membership: Literal["pit", "static"] = "pit"
+    shape: Shape = "cross"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "use", as_use(self.use))
         object.__setattr__(self, "groups", tuple(self.groups))
         if not self.clusters.strip():
             raise ContractError("name the cluster column of the universe")
+        if self.shape not in SHAPES:
+            raise ContractError(f"the universe's shape is one of {', '.join(SHAPES)}, not {self.shape!r}")
 
 
 @dataclass(frozen=True)

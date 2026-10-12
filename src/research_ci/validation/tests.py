@@ -1,6 +1,7 @@
 """Running an eval's tests: its worked examples, and its behaviour on synthetic markets judged the way the engine
-judges a submission (block means against the floor world, as a z score). The engine's own methods are held to theirs
-in its CI; an idea's lab evals are held to theirs before the engine runs them."""
+judges a submission (block means against the floor world, as a z score: the scores shuffled across clusters at each
+time, or, on a series, shifted in time). The engine's own methods are held to theirs in its CI; an idea's lab evals
+are held to theirs before the engine runs them."""
 
 import math
 from collections.abc import Sequence
@@ -17,6 +18,7 @@ from research_ci.kernel.verdict.check import Check
 from research_ci.kernel.verdict.judge import judge, per_t
 from research_ci.kernel.verdict.permute import Permutation
 from research_ci.kernel.verdict.power import Z_BASE
+from research_ci.kernel.verdict.shift import Shift
 
 REPS = 60
 SHOWN = 3
@@ -65,7 +67,8 @@ def _judged(named: str, prop: Property) -> Check:
         got = float(np.nanmean(values))
         ok = abs(got - prop.expect) <= prop.tol
         return Check(named, "pass" if ok else "fail", f"mean {got:.4f}, expected {prop.expect} ± {prop.tol}")
-    passed = [_z(prop.of, market(prop.market, seed), seed) >= Z_BASE for seed in range(prop.markets)]
+    series = prop.market.shape == "series"
+    passed = [_z(prop.of, market(prop.market, seed), seed, series) >= Z_BASE for seed in range(prop.markets)]
     rate = float(np.mean(passed))
     beats = f"beats the floor world on {rate:.0%} of {prop.markets} markets"
     if isinstance(prop, Size):
@@ -78,9 +81,10 @@ def _judged(named: str, prop: Property) -> Check:
     return Check(named, "pass" if rate >= prop.rate else "fail", detail)
 
 
-def _z(of: Statistic, table: pl.DataFrame, seed: int) -> float:
-    shuffle = Permutation(table, None, "cluster", HOUR_NS).index
-    result = judge(of, {"1h": (table, HOUR_NS)}, lambda h: lambda r: shuffle(seed * REPS + r), REPS, 5, "max")
+def _z(of: Statistic, table: pl.DataFrame, seed: int, series: bool = False) -> float:
+    shuffle = Shift(table, HOUR_NS).index if series else Permutation(table, None, "cluster", HOUR_NS).index
+    index = (lambda h: shuffle) if series else (lambda h: lambda r: shuffle(seed * REPS + r))
+    result = judge(of, {"1h": (table, HOUR_NS)}, index, REPS, 5, "max", within=not series)
     z = result["z"]
     return z if math.isfinite(z) else -math.inf
 

@@ -3,18 +3,20 @@
 Before anything runs, and before the submission is counted: ``SCREEN`` refuses a features file that cannot be a trial;
 the checks of the lab's evals (``stages/lab.py``) refuse a ``feat.py`` without a lab eval (slot 3) or with one that
 fails its tests (slot 4); ``COVERED`` refuses a contract alternative without a null world (slot 3). ``FLOORS`` checks
-the scores, the premises of slot 1: they must rank the candidates and read nothing ahead of their time; a submission
-that fails one is TAINTED or FAILED and nothing is judged. ``JUDGE`` holds the decisive test, the one bar, fixed by the
-contract (slot 1): the contract's decisive effect, computed with the submitted scores, must beat the engine's floor
-world (chance and timing: scores shuffled across clusters at each decision time, the same way within a horizon) with
-``z ≥ z_need``, which rises with the submission count; it passes at the horizons whose z against the family's null
-reaches the bar. Next to it slot 2, the default diagnostics and the library evals ``feat.py`` lists, judged in the
-floor world and shown, never deciding; and slot 3, the lab evals of ``feat.py``, judged in the floor world, and the
-null worlds of ``nulls/feat.py``, each judging the evals it names or, naming none, the decisive effect: each must reach
-``z ≥ 2`` (``VETO_Z``) at every horizon it covers, or the submission fails there (``kernel/verdict/rule.py``). Only the
-candidates the features gave a finite score are judged, in every world alike. ``SHOWN`` says what the features cost.
-Before the first submission is judged, the data check calibrates the decisive test in the floor world
-(``calibration``).
+the scores, the premises of slot 1: they must rank what the universe's shape compares (the candidates at each time, each
+entity's times, or events) and read nothing ahead of their time; a submission that fails one is TAINTED or FAILED and
+nothing is judged. ``JUDGE`` holds the decisive test, the one bar, fixed by the contract (slot 1): the contract's
+decisive effect, computed with the submitted scores, must beat the engine's floor world with ``z ≥ z_need``, which rises
+with the submission count; it passes at the horizons whose z against the family's null reaches the bar. The floor world
+follows the shape: for ``cross``, chance and timing, scores shuffled across clusters at each decision time, the same way
+within a horizon; for ``series`` and ``events``, chance, each entity's scores shifted in time by at least the horizon.
+Next to it slot 2, the default diagnostics and the library evals ``feat.py`` lists, judged in the floor world and shown,
+never deciding; and slot 3, the lab evals of ``feat.py``, judged in the floor world, and the null worlds of
+``nulls/feat.py``, each judging the evals it names or, naming none, the decisive effect: each must reach ``z ≥ 2``
+(``VETO_Z``) at every horizon it covers, or the submission fails there (``kernel/verdict/rule.py``). Only the candidates
+the features gave a finite score are judged, in every world alike; for events every candidate row stays in the tables,
+and the rows without a score are where the events can move to. ``SHOWN`` says what the features cost. Before the first
+submission is judged, the data check calibrates the decisive test in the floor world (``calibration``).
 """
 
 import math
@@ -30,7 +32,7 @@ from typing import Any, cast
 import pandas as pd
 import polars as pl
 
-from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, ContractError, Effect, Use, as_use, span
+from research_ci.api.contract import Contract, ContractError, Effect, Use, as_use, span
 from research_ci.api.evals import FORMAT, Eval, source_of
 from research_ci.api.plugins import CostModel, TargetPlugin
 from research_ci.eval import protocol as pr
@@ -46,16 +48,15 @@ from research_ci.kernel.verdict.judge import (
     Statistic,
     per_t,
 )
-from research_ci.kernel.verdict.permute import Permutation
 from research_ci.kernel.verdict.worlds import World, lanes
 from research_ci.runner import research
 from research_ci.runner.meter import Cost, measured
 from research_ci.runner.plugins import Registry, load
 from research_ci.stages import lab
-from research_ci.stages.common import default_workers, iso, owner, quantile_times, target_use, units
+from research_ci.stages.common import UNSCORED, default_workers, iso, owner, quantile_times, target_use, units
 from research_ci.stages.skeleton import DEFAULTS, Found, Step
 from research_ci.validation import load as ev
-from research_ci.validation.calibration import calibrate
+from research_ci.validation.calibration import EVENTS, calibrate
 
 FEAT_FILE = "feat.py"
 NULLS_FILE = Path("nulls") / "feat.py"
@@ -70,6 +71,17 @@ SHAPE = (
 EVALS_FORMAT = FORMAT["feat"]
 Features = Callable[[pl.DataFrame, pl.DataFrame], Any]
 Tables = dict[str, dict[str, tuple[pl.DataFrame, int]]]
+RANKS: dict[str, tuple[str, str]] = {
+    "cross": ("the scores do not rank the candidates", "give two or more candidates distinct scores at each time"),
+    "series": (
+        "the scores do not time the entities",
+        "give each entity's scores two or more distinct values over time",
+    ),
+    "events": (
+        "the scores mark no events",
+        "score the candidate rows at the events and leave the others without a score",
+    ),
+}
 
 
 class FeatError(ContractError):
@@ -155,6 +167,11 @@ class Seen:
         assert self.frozen.contract.universe is not None
         return self.frozen.contract.universe.clusters
 
+    @property
+    def shape(self) -> str:
+        assert self.frozen.contract.universe is not None
+        return self.frozen.contract.universe.shape
+
     def judge(self, evaluate: Evaluate) -> Found:
         """A default diagnostic, ``evaluate`` on the label of the first decisive effect, judged under ``name``."""
         e = Eval(evaluate, self.name, label=self.frozen.contract.decisive[0].on, combine="max")
@@ -179,18 +196,28 @@ def screen_file(seen: Seen) -> Found:
 
 
 def ranks(seen: Seen) -> Found:
-    """The scores must rank the candidates, with two or more distinct values, at half the decision times or more."""
+    """The scores must rank what the shape compares: the candidates, with two or more distinct values, at half the
+    decision times or more (cross); each entity's decision times, with two or more distinct values over time, for half
+    the entities or more (series); or mark events, some of the candidate rows and not all (events)."""
     assert seen.scores is not None
     cands = seen.frozen.candidates
     finite = seen.scores.filter(pl.col("score").is_finite())
-    distinct = finite.group_by("t").agg(pl.col("score").n_unique().alias("k"))
-    times = cands["t"].n_unique()
-    share = distinct.filter(pl.col("k") >= 2).height / times if times else 0.0
+    by = "entity" if seen.shape == "series" else "t"
+    distinct = finite.group_by(by).agg(pl.col("score").n_unique().alias("k"))
+    total = cands[by].n_unique()
+    share = distinct.filter(pl.col("k") >= 2).height / total if total else 0.0
     coverage = {"rows": finite.height, "share": finite.height / cands.height if cands.height else 0.0, "ranks": share}
-    detail = f"scores {coverage['share']:.0%} of candidate rows; ranks candidates at {share:.0%} of decision times"
-    return Found(
-        [pr.Check("scores rank candidates", "fail" if share < 0.5 else "pass", detail)], shown={"scores": coverage}
-    )
+    scored = f"scores {coverage['share']:.0%} of candidate rows"
+    if seen.shape == "events":
+        failed = not 0 < finite.height < cands.height
+        detail = f"{scored}: {finite.height:,} of {cands.height:,} are events"
+    elif seen.shape == "series":
+        failed = share < 0.5
+        detail = f"{scored}; varies over time for {share:.0%} of entities"
+    else:
+        failed = share < 0.5
+        detail = f"{scored}; ranks candidates at {share:.0%} of decision times"
+    return Found([pr.Check("scores rank candidates", "fail" if failed else "pass", detail)], shown={"scores": coverage})
 
 
 def nothing_ahead(seen: Seen) -> Found:
@@ -281,8 +308,8 @@ def idea_eval(seen: Seen, e: Eval) -> Found:
 
 def alternatives(seen: Seen) -> Found:
     """Which world answers which alternative: every alternative of the contract needs a null world in
-    ``nulls/feat.py``, or the submission is refused before it is counted; the floor world answers chance and
-    timing."""
+    ``nulls/feat.py``, or the submission is refused before it is counted; the floor world answers chance, and for a
+    cross shape timing."""
     check = coverage(seen.frozen.contract, seen.worlds)
     return Found([check], shown={"coverage": asdict(check)})
 
@@ -291,7 +318,8 @@ def coverage(c: Contract, judging: Sequence[World]) -> pr.Check:
     """Which of ``judging`` answers each alternative of the contract, and the engine's; failed, with what to write,
     when one has none."""
     lines, missing = [], []
-    for alt in [*FLOOR_ALTERNATIVES, *(a.id for a in c.alternatives)]:
+    floors = dict.fromkeys(alt for w in judging if w.by == "engine" for alt in w.explains)
+    for alt in [*floors, *(a.id for a in c.alternatives)]:
         kept_by = [w.name for w in judging if alt in w.explains]
         lines.append(f"{alt}: {', '.join(kept_by) or 'none'}")
         missing += [] if kept_by else [alt]
@@ -300,11 +328,14 @@ def coverage(c: Contract, judging: Sequence[World]) -> pr.Check:
     texts = {a.id: a.text for a in c.alternatives}
     named = "; ".join(f"{alt} ({texts.get(alt, '')})" for alt in missing)
     clusters = c.universe.clusters if c.universe is not None else "<cluster column>"
+    world = f'PermuteWithin("time", clusters="{clusters}", block="horizon")'
+    if c.universe is not None and c.universe.shape != "cross":
+        world = 'ShiftInTime(min_shift="<a duration the alternative needs, such as 72h>")'
     detail = (
         f"slot 3, null worlds: no world answers {named}: every alternative explanation of the contract needs one "
-        f'in {NULLS_FILE}, such as NULLS = [Null("{missing[0]}", PermuteWithin("time", clusters="{clusters}", '
-        'block="horizon"), evals=("<an eval it judges>",))], which keeps what the alternative says and shuffles '
-        "the rest; it judges the evals it names, or the decisive effect when it names none"
+        f'in {NULLS_FILE}, such as NULLS = [Null("{missing[0]}", {world}, evals=("<an eval it judges>",))], which '
+        "keeps what the alternative says and shuffles the rest; it judges the evals it names, or the decisive effect "
+        "when it names none"
     )
     return pr.Check("alternatives covered", "fail", detail)
 
@@ -328,7 +359,7 @@ COVERED = (
     ),
 )
 FLOORS = (
-    Step("scores rank candidates", "blocks", ranks, "Scores rank candidates at half the times"),
+    Step("scores rank candidates", "blocks", ranks, "Scores rank candidates, or times, or mark events"),
     Step("scores read nothing ahead", "blocks", nothing_ahead, "Same scores with the data cut early"),
 )
 JUDGE = (
@@ -377,7 +408,7 @@ def judged(seen: Seen, e: Eval, by: str, validation: "ev.Validation | None" = No
         veto = by == "lab" or not floor
         reps = (s.floor_reps if floor else w.reps) if veto else s.shown_reps
         settle = Sequential(s.floor_batch, rule.VETO_Z, horizons=combine == "each") if veto else None
-        key = (w.bucket, w.clusters, w.block, reps, veto)
+        key = (w.bucket, w.clusters, w.block, w.shift, reps, veto)
         if key not in alike:
             alike[key] = Request(e.of, lanes(tables, w), reps, s.min_blocks, combine, settle)
         row = partial(_eval_row, e, by, validation, w, seen, label, veto)
@@ -407,8 +438,9 @@ def horizons_of(e: Eval, frozen: Frozen) -> tuple[str, ...]:
 
 
 def floor_world(frozen: Frozen, s: FeatSettings) -> World:
-    assert frozen.contract.universe is not None
-    return worlds.floor_world(frozen.contract.universe.clusters, s.shown_reps)
+    u = frozen.contract.universe
+    assert u is not None
+    return worlds.floor_world(u.clusters, s.shown_reps, u.shape)
 
 
 def target(effect: Effect, frozen: Frozen) -> tuple[dict[str, Evaluate], Use, dict[str, Any]]:
@@ -506,6 +538,7 @@ def _outcome(use: Use, head: dict[str, Any], result: dict[str, Any], need: float
         "horizons": rows,
         "passing": [r["h"] for r in rows if r["passed"]],
         "shuffles": result["shuffles"],
+        **({"distinct": result["distinct"]} if "distinct" in result else {}),
         "outcome": "passed" if math.isfinite(z) and z >= need else "failed",
     }
 
@@ -572,24 +605,30 @@ def _joined(a: Found, b: Found) -> Found:
 
 
 def _calibrate(frozen: Frozen, s: FeatSettings) -> list[dict[str, Any]]:
-    """Each decisive effect in the floor world, on its shortest horizon: a stand-in that carries only each decision
-    time's level must die as often as chance allows, and a planted signal must live."""
+    """Each decisive effect in the floor world, on its shortest horizon: a stand-in that carries only what the world
+    keeps (each decision time's level, or for a shift in time each entity's) must die as often as chance allows, and a
+    planted signal must live; for events both are events, at a share of the rows. A shift with fewer offsets than
+    calibration shuffles draws each offset once."""
     floor = floor_world(frozen, s)
+    assert frozen.contract.universe is not None
+    events = EVENTS if frozen.contract.universe.shape == "events" else 0.0
     out = []
     for effect in frozen.contract.decisive:
         evaluate, _, _ = target(effect, frozen)
         h = min(evaluate, key=span)
         table, h_ns = frozen.tables[effect.on][h]
         table = _thin(table, s.calibration_times)
-        shuffle = Permutation(table, floor.bucket, floor.clusters, floor.block_ns(h_ns)).index
-        args = (evaluate[h], table, h_ns, floor.keeps, shuffle, s.calibration_reps, s.calibration_nulls, s.z_base)
-        out.append({"effect": effect.on, "world": floor.name, "horizon": h, **_safe_calibrate(*args)})
+        shuffle, distinct = worlds.shuffler(table, floor, h_ns)
+        nulls = min(s.calibration_nulls, distinct or s.calibration_nulls)
+        args = (evaluate[h], table, h_ns, floor.keeps, shuffle, s.calibration_reps, nulls, s.z_base)
+        found = _safe_calibrate(*args, shifts=floor.shift is not None, events=events)
+        out.append({"effect": effect.on, "world": floor.name, "horizon": h, **found})
     return out
 
 
-def _safe_calibrate(*args: Any) -> dict[str, Any]:
+def _safe_calibrate(*args: Any, **options: Any) -> dict[str, Any]:
     try:
-        return calibrate(*args)
+        return calibrate(*args, **options)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -612,11 +651,14 @@ def _returned(r: dict[str, Any]) -> str:
 
 
 def _reads_score(effect: Effect, frozen: Frozen) -> pr.Check:
-    """Derive already blocks a target that ignores the scores; feat checks again on its own evaluation table."""
+    """Derive already blocks a target that ignores the scores; feat checks again on its own evaluation table, for
+    events with rows left without a score."""
     evaluate, use, _ = target(effect, frozen)
     h = next(iter(frozen.tables[effect.on]))
     table, _ = frozen.tables[effect.on][h]
-    return pr.target_reads_score(use.name, lambda t: per_t(evaluate[h], t), table)
+    assert frozen.contract.universe is not None
+    missing = UNSCORED if frozen.contract.universe.shape == "events" else 0.0
+    return pr.target_reads_score(use.name, lambda t: per_t(evaluate[h], t), table, missing)
 
 
 def _scores(raw: Any, cands: pl.DataFrame) -> pl.DataFrame:

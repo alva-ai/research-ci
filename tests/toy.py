@@ -76,6 +76,64 @@ def venue_reference(venue: pl.DataFrame, requests: pl.DataFrame) -> Reference:
     return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
 
 
+def timed_fields(hours: int = 24 * 25, seed: int = 0, drift: float = 0.002) -> pl.DataFrame:
+    """The toy market with a timing signal planted: each symbol has a regime, +1 or -1 for stretches of one to four
+    days, which every entity publishes each hour as the field ``regime`` and whose closes drift with it, by ``drift``
+    per hour, over the next hour."""
+    rows = toy_fields(hours, seed)
+    rng = np.random.default_rng(seed + 1)
+    plans = []
+    for symbol in SYMBOLS:
+        sign, regime = float(rng.choice([-1.0, 1.0])), []
+        while len(regime) < hours:
+            regime += [sign] * int(rng.integers(24, 97))
+            sign = -sign
+        side = np.array(regime[:hours])
+        lift = np.exp(np.concatenate([[0.0], np.cumsum(drift * side)[:-1]]))
+        plans.append(pl.DataFrame({"symbol": symbol, "h": np.arange(hours), "lift": lift, "regime": side}))
+    plan = pl.concat(plans)
+    hour = ((pl.col("event_time") - pl.lit(START)).dt.total_hours() - 1).alias("h")
+    keyed = rows.with_columns(hour, symbol=pl.col("entity").str.split(":").list.get(1)).join(plan, on=["symbol", "h"])
+    close = pl.col("field") == "close"
+    lifted = keyed.with_columns(value=pl.when(close).then(pl.col("value") * pl.col("lift")).otherwise("value"))
+    published = keyed.filter(close).with_columns(field=pl.lit("regime"), value=pl.col("regime"))
+    out = pl.concat([lifted, published]).select("entity", "field", "event_time", "available_at", "value", "vintage")
+    return field_table(out)
+
+
+class ToyTimed(ToyData):
+    """The toy market with a planted timing signal (``timed_fields``); the venue reports it too."""
+
+    fields = ("close", "funding_rate", "funding_interval_hours", "regime")
+
+    def build(self, as_of: Any = None) -> pl.DataFrame:
+        return timed_fields(self.hours, self.seed)
+
+    def reference(self, requests: pl.DataFrame) -> Reference:
+        return venue_reference(self.build(), requests)
+
+
+class ToySeries:
+    """The ``entities`` (one asset, by default) at every decision time once their first close is known."""
+
+    def __init__(self, entities: Sequence[str] = ("a:X",)) -> None:
+        self.entities = list(entities)
+
+    def candidates(self, fields: pl.DataFrame, times: Sequence[Any]) -> pl.DataFrame:
+        listed = fields.filter((pl.col("field") == "close") & pl.col("entity").is_in(self.entities))
+        first = listed.group_by("entity").agg(pl.col("available_at").min().alias("since"))
+        grid = pl.DataFrame({"t": list(times)}, schema={"t": TIME})
+        out = grid.join(first, how="cross").filter(pl.col("t") >= pl.col("since"))
+        return out.select("t", "entity").sort("t", "entity")
+
+
+class ToyEvents(ToySeries):
+    """One asset per symbol, every one a candidate at every decision time; the features score only the events."""
+
+    def __init__(self) -> None:
+        super().__init__(("a:X", "a:Y", "a:Z"))
+
+
 class ToyHindsight(ToyData):
     """Drops a symbol's closes in a window once it knows a jump follows, as an ex-post repair would."""
 
@@ -393,7 +451,14 @@ class Backwards(ClusterMean):
         return super().reduce(flipped, horizon, costs)
 
 
-REGISTRY = {"toy.data": ToyData, "toy.pairs": ToyPairs, "toy.carry": ToyCarry}
+REGISTRY = {
+    "toy.data": ToyData,
+    "toy.pairs": ToyPairs,
+    "toy.carry": ToyCarry,
+    "toy.timed": ToyTimed,
+    "toy.series": ToySeries,
+    "toy.events": ToyEvents,
+}
 CARRY = "Label('carry', Use('ref.carry', {'flow': 'funding_rate'}), horizons=('8h', '24h'))"
 COSTS = "Use('ref.flat_costs', {'commission_bps': 1, 'slippage_bps': 1, 'legs': 2})"
 EFFECT = "Effect(on='carry', target=Use('ref.mean', {'cluster': 'symbol', 'top': 0.34}))"
@@ -500,3 +565,101 @@ def lab(root: Any, alternative: str = "tail", data: str = DATA_EVALS, feat: str 
     (root / "data.py").write_text(data)
     (root / "feat.py").write_text(feat)
     (root / "nulls" / "feat.py").write_text(TOY_NULLS.replace("{alternative}", alternative))
+
+
+RETURN = "Label('return', Use('ref.return', {'price': 'close'}), horizons=('8h', '24h'))"
+SHAPED_COSTS = "Use('ref.flat_costs', {'commission_bps': 1, 'slippage_bps': 1})"
+SHAPED = {
+    "series": ("toy.series", "Use('ref.timing')", "the regime times the asset"),
+    "events": ("toy.events", "Use('ref.mean', {'cluster': 'entity'})", "a regime turning up is followed by gains"),
+}
+
+
+def shaped_contract(shape: str, budget: int = 5) -> str:
+    """A contract on the timed toy market for a ``series`` (one asset, timed) or ``events`` shape."""
+    universe, target, claim = SHAPED[shape]
+    return (
+        "from research_ci.api import *\n\n"
+        f"CONTRACT = Contract(claim={claim!r},\n"
+        f"    decisive=(Effect(on='return', target={target}),),\n"
+        "    alternatives=(Alternative('trend', 'the score only follows the last days'),),\n"
+        f"    used=(), data='toy.timed', costs={SHAPED_COSTS}, execution=Execution(every='1h'),\n"
+        f"    universe=Universe('{universe}', clusters='entity', shape='{shape}'),\n"
+        f"    labels=({RETURN},),\n"
+        "    explore_end='2026-01-15T00:00:00Z', seal_end='2026-01-20T00:00:00Z',\n"
+        f"    budget={budget!r})\n"
+    )
+
+
+SHAPED_EVALS = '''
+"""The timed toy's lab evals: whether a score's sign is the label's, and the label after the events."""
+
+from datetime import UTC, datetime, timedelta
+
+import polars as pl
+
+from research_ci.api import Case
+
+T = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def hits(table):
+    """At each decision time, the share of the scored rows whose score has the label's sign, less a half."""
+    rows = table.filter(pl.col("score").is_finite())
+    same = (pl.col("score").sign() == pl.col("y").sign()).cast(pl.Float64)
+    return rows.group_by("t").agg((same.mean() - 0.5).alias("value")).sort("t")
+
+
+def after(table):
+    """At each decision time, the mean label at the events, the rows with a finite score."""
+    rows = table.filter(pl.col("score").is_finite())
+    return rows.group_by("t").agg(pl.col("y").mean().alias("value")).sort("t")
+
+
+def backwards(table):
+    """At each decision time, the mean of the label against the score's sign: the score read the wrong way round."""
+    rows = table.filter(pl.col("score").is_finite())
+    return rows.group_by("t").agg((-pl.col("score").sign() * pl.col("y")).mean().alias("value")).sort("t")
+
+
+FOUR = pl.DataFrame(
+    {
+        "t": [T + timedelta(hours=h) for h in range(4)],
+        "entity": ["a"] * 4,
+        "score": [1.0, -1.0, float("nan"), 1.0],
+        "y": [0.2, 0.1, 0.5, -0.1],
+    }
+)
+CASES = [
+    Case("a hit and two misses: the mean of 0.5, -0.5 and -0.5", lambda: hits(FOUR)["value"].mean(), -1 / 6),
+    Case("the label after the three events", lambda: after(FOUR)["value"].sum(), 0.2),
+    Case("the score read the wrong way round", lambda: backwards(FOUR)["value"][0], -0.2),
+]
+'''
+SHAPED_FEAT = """
+from research_ci.api import Eval
+from evals.timing import {name}
+
+EVALS = [Eval({name}, h0="{h0}")]
+"""
+SHAPED_H0 = {
+    "series": ("hits", "the score's sign is the label's no more often than chance"),
+    "events": ("after", "the label after an event is no larger than at other times"),
+}
+SHAPED_NULLS = """
+from research_ci.api import Null, ShiftInTime
+
+NULLS = [Null("trend", ShiftInTime(min_shift="72h"), evals=("{name}",), reps=60)]
+"""
+
+
+def shaped_lab(root: Any, shape: str) -> None:
+    """The lab an idea of the timed toy needs: the toy's data eval, a lab eval for feat, and a world for the trend."""
+    from pathlib import Path
+
+    lab(root)
+    root = Path(root)
+    name, h0 = SHAPED_H0[shape]
+    (root / "evals" / "timing.py").write_text(SHAPED_EVALS)
+    (root / "feat.py").write_text(SHAPED_FEAT.format(name=name, h0=h0))
+    (root / "nulls" / "feat.py").write_text(SHAPED_NULLS.format(name=name))

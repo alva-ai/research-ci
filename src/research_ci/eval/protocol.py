@@ -231,10 +231,19 @@ def passthrough(run: Run, fields: pl.DataFrame, base: ConsumerResult, scores: pl
     return Check("scores pass through", "pass", "the baseline's own scores reproduce the baseline")
 
 
-def target_reads_score(name: str, reduce: Callable[[pl.DataFrame], pl.DataFrame], rows: pl.DataFrame) -> Check:
-    """A target must move with the scores. The same label rows with two draws of random scores give other values."""
+def target_reads_score(
+    name: str, reduce: Callable[[pl.DataFrame], pl.DataFrame], rows: pl.DataFrame, missing: float = 0.0
+) -> Check:
+    """A target must move with the scores. The same label rows with two draws of random scores give other values;
+    with ``missing``, each draw leaves that share of the rows without a score (NaN), as events leave the rows between
+    them."""
     rng = np.random.default_rng(0)
-    a, b = (_by_t(reduce(rows.with_columns(score=rng.standard_normal(rows.height)))) for _ in range(2))
+
+    def drawn() -> np.ndarray:
+        scores = rng.standard_normal(rows.height)
+        return np.where(rng.random(rows.height) < missing, np.nan, scores) if missing else scores
+
+    a, b = (_by_t(reduce(rows.with_columns(score=drawn()))) for _ in range(2))
     if a.height == b.height and np.allclose(a["value"].to_numpy(), b["value"].to_numpy(), equal_nan=True):
         detail = (
             f"{name} gives the same number for any scores; name a target that reads them, "
@@ -324,6 +333,8 @@ def _frame_mismatch(a: pl.DataFrame, b: pl.DataFrame, keys: list[str], values: l
     joined = a.select(*keys, *values).join(b.select(*keys, *values), on=keys, how="full", suffix="_b", coalesce=True)
     if joined.height != a.height:
         return "different keys"
+    if not values:
+        return ""
     differ = joined.select(_differ(v) for v in values).row(0)
     return next((f"{n} values of {v} differ" for v, n in zip(values, differ, strict=True) if n), "")
 
@@ -331,7 +342,8 @@ def _frame_mismatch(a: pl.DataFrame, b: pl.DataFrame, keys: list[str], values: l
 def _differ(v: str) -> pl.Expr:
     """How many values of ``v`` differ between the two sides: both NaN agree, otherwise within ``np.isclose``."""
     x, y = (pl.col(c).cast(pl.Float64).fill_null(float("nan")) for c in (v, f"{v}_b"))
-    close = (x == y) | ((x - y).abs() <= 1e-12 + 1e-9 * y.abs()) | (x.is_nan() & y.is_nan())
+    near = x.is_not_nan() & y.is_not_nan() & ((x - y).abs() <= 1e-12 + 1e-9 * y.abs())
+    close = (x == y) | near | (x.is_nan() & y.is_nan())
     return (~close).sum().alias(v)
 
 

@@ -23,6 +23,7 @@ from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
+from research_ci.kernel.verdict.worlds import floor_world
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages import skeleton
 from research_ci.stages.common import (
@@ -184,6 +185,8 @@ class _Derivation:
             "plugin": use.name,
             "clusters": u.clusters,
             "membership": u.membership,
+            "shape": u.shape,
+            "world": floor_world(u.clusters, 0, u.shape).describe(),
             "times": per_t.height,
             "candidates_median": median(per_t["n"]),
             "clusters_median": median(per_t["clusters"]),
@@ -212,7 +215,8 @@ class _Derivation:
         confirm_only = bool(affected & {"claim", "labels", "costs"}) or (
             c.universe is not None and c.universe.membership == "static"
         )
-        self.spec["alternatives"] = {"idea": [asdict(a) for a in c.alternatives], "floor": list(FLOOR_ALTERNATIVES)}
+        floors = floor_world(c.universe.clusters, 0, c.universe.shape).explains if c.universe else FLOOR_ALTERNATIVES
+        self.spec["alternatives"] = {"idea": [asdict(a) for a in c.alternatives], "floor": list(floors)}
         self.spec["used"] = [asdict(u) for u in c.used or ()]
         self.spec["history"] = "explore-only" if confirm_only else "can confirm"
         self.spec["seal_end"] = c.seal_end

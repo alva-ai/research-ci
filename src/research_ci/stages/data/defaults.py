@@ -144,7 +144,7 @@ def identity_breaks(seen: Seen) -> Found:
 
 def coverage(seen: Seen) -> Found:
     """Entities whose whole history is shorter than the contract's longest horizon are dropped; decision times with
-    fewer than ``MIN_CANDIDATES`` candidates are only counted."""
+    fewer than ``MIN_CANDIDATES`` candidates are only counted, for a cross shape, which ranks them."""
     horizons = [span(h) for label in seen.contract.labels for h in label.horizons]
     if not horizons:
         return Found([Check("coverage", "skip", "the contract has no labels")])
@@ -167,7 +167,8 @@ def coverage(seen: Seen) -> Found:
             f"{_count(len(names), 'entity', 'entities')} shorter than {_days(longest)}, dropped: "
             f"{', '.join(names[:6])}{more}"
         )
-    if seen.candidates is not None:
+    u = seen.contract.universe
+    if seen.candidates is not None and (u is None or u.shape == "cross"):
         thin = cv.thin(seen.candidates, MIN_CANDIDATES)
         if thin.height:
             times = seen.candidates["t"].n_unique()
@@ -201,7 +202,7 @@ def hedge_guard(seen: Seen) -> Found:
 
 def concentration(seen: Seen) -> Found:
     """How much of the noise the decisive number's MDE rests on comes from each cluster of the universe, on the data
-    as treated so far: the clusters that carry the most are shown, with a warning when one carries more than
+    as treated so far: the clusters that carry the most are shown, with a warning when one of several carries more than
     ``CONCENTRATION``. It is information, never a treatment or an item to decide: broken data is what the identity and
     sanity checks catch, and an effect can be concentrated too."""
     d, u = seen.decisive, seen.contract.universe
@@ -213,7 +214,8 @@ def concentration(seen: Seen) -> Found:
     out = Found(shown={"concentration": {"clusters": u.clusters, "shares": shown, "threshold": CONCENTRATION}})
     name = "influence concentration"
     where = pl.format("{}% at {}", (pl.col("share") * 100).round(0).cast(pl.Int64), pl.col("key"))
-    heavy = found.filter(pl.col("share") > CONCENTRATION).group_by("cluster", maintain_order=True)
+    heavy = found.filter((pl.col("share") > CONCENTRATION) & (pl.len().over("key") > 1))
+    heavy = heavy.group_by("cluster", maintain_order=True)
     heavy = heavy.agg(where.str.join(" and ").alias("where"))
     if heavy.is_empty():
         out.checks.append(Check(name, "pass", f"no {u.clusters} carries more than {CONCENTRATION:.0%} of the noise"))

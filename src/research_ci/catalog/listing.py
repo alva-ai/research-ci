@@ -14,7 +14,7 @@ from typing import Any
 
 from research_ci.api.data import Pit
 from research_ci.api.evals import FORMAT, Case, Eval, Market, Power, Recovers, Size, Source
-from research_ci.api.nulls import Null, PermuteWithin
+from research_ci.api.nulls import Null, PermuteWithin, ShiftInTime
 from research_ci.api.plugins import ENTRY_POINTS
 from research_ci.runner import plugins as loader
 from research_ci.runner.plugins import Registry, annotation, signature
@@ -73,16 +73,17 @@ CASE_FIELDS: dict[type, str] = {
 NULLS_FORMAT = (
     "nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every alternative of the contract needs one, or feat "
     "refuses the submission before it is counted; a world judges the evals it names, or the decisive effect, and must "
-    "reach z ≥ 2.00 at every horizon it judges"
+    "reach z ≥ 2.00 at every horizon it judges; a world is a PermuteWithin, or for a series or events a ShiftInTime"
 )
 NULLS_EXAMPLE = (
-    'NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), evals=("<eval>",))]'
+    'NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), evals=("<eval>",))]; '
+    'for a series or events, Null("<id>", ShiftInTime(min_shift="72h"))'
 )
 NULL_FIELDS: dict[type, dict[str, str]] = {
     Null: {
         "explains": "the id of the contract's alternative this world answers",
-        "world": "a PermuteWithin: how the scores are shuffled while the labels stay",
-        "keeps": "the column the alternative lives in; None means the world's bucket_by",
+        "world": "a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay",
+        "keeps": "the column the alternative lives in; None means the world's bucket_by, or entity for a ShiftInTime",
         "evals": "the names of the evals this world judges, any eval of the layer; () means the decisive effect",
         "reps": "the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default",
         "note": "free text kept with the world in the submission's record",
@@ -93,6 +94,10 @@ NULL_FIELDS: dict[type, dict[str, str]] = {
         "clusters": "a column whose members move together and are shuffled as one",
         "block": 'repeat the same shuffle for every decision time inside a block this long; "horizon" uses each '
         "label horizon",
+    },
+    ShiftInTime: {
+        "min_shift": "shift each entity's scores along its decision times, by one offset for all entities, at least "
+        'this far either way round; "horizon" uses each label horizon',
     },
 }
 
@@ -134,7 +139,7 @@ def methods() -> list[dict[str, Any]]:
 
 
 def nulls() -> list[dict[str, Any]]:
-    """How a null world is written: ``Null`` and ``PermuteWithin``, with what each field means."""
+    """How a null world is written: ``Null``, ``PermuteWithin`` and ``ShiftInTime``, with what each field means."""
     return [
         {
             "use": "null world",

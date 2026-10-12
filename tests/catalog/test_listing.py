@@ -48,7 +48,7 @@ def test_every_method_with_its_import_signature_and_backing() -> None:
 def test_null_worlds_list_every_field_of_null_and_permute_within() -> None:
     for cls, listed in listing.NULL_FIELDS.items():
         assert [f.name for f in fields(cls)] == list(listed), cls
-    null, permute = listing.nulls()
+    null, permute, _ = listing.nulls()
     assert null["import"] == "from research_ci.api import Null"
     assert null["signature"].startswith("(explains: str, world: ")
     assert permute["signature"] == "(bucket_by: str, clusters: str | None = None, block: str | None = None)"

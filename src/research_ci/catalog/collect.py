@@ -1,7 +1,8 @@
-"""What `rci methods --markdown` lists, read from the code: every stage's floor list with its default list where the
-floor marks it, slot by slot, each step with its role, what it needs, and the eval functions it references; how lab
-evals plug in (slot 3) and what holds them to their tests (slot 4), with the engine internals that carry worked
-examples of their own; and every public function of the eval library with where it is used and what backs it."""
+"""What `rci methods --markdown` lists, read from the code: the shapes a universe declares, each with its floor world,
+the target that fits it and its default diagnostics; every stage's floor list with its default list where the floor
+marks it, slot by slot, each step with its role, what it needs, and the eval functions it references; how lab evals
+plug in (slot 3) and what holds them to their tests (slot 4), with the engine internals that carry worked examples of
+their own; and every public function of the eval library with where it is used and what backs it."""
 
 import dis
 import inspect
@@ -12,7 +13,10 @@ from types import CodeType, FunctionType, ModuleType
 from typing import Any
 
 import research_ci.eval
+from research_ci.api.contract import SHAPES
 from research_ci.catalog import listing
+from research_ci.kernel.verdict.worlds import floor_world
+from research_ci.reference_plugins.targets import ClusterMean, SignedMean
 from research_ci.stages import lab, skeleton
 from research_ci.stages.contract import defaults as contract_defaults
 from research_ci.stages.contract import floor as contract_floor
@@ -36,6 +40,11 @@ UNDOCUMENTED = {
     "protocol.truncated": "The field table cut to the rows known by `t`.",
     "data.invariants.hedge_check": "The card's hedged-legs line, naming the pairs most often apart.",
 }
+TARGETS: dict[str, tuple[str, str, type]] = {
+    "cross": ("ref.mean", '{"cluster": "<cluster column>", "top": 0.2}', ClusterMean),
+    "series": ("ref.timing", "", SignedMean),
+    "events": ("ref.mean", '{"cluster": "entity"}', ClusterMean),
+}
 
 
 def collect() -> dict[str, Any]:
@@ -53,6 +62,7 @@ def collect() -> dict[str, Any]:
     }
     tests = {"checks": tested(), "outcomes": dict(lab_evals.OUTCOMES), "internals": internals()}
     return {
+        "shapes": shapes(),
         "stages": stages,
         "roles": dict(skeleton.ROLES),
         "slots": dict(skeleton.SLOTS),
@@ -60,6 +70,26 @@ def collect() -> dict[str, Any]:
         "tests": tests,
         "library": library(stages),
     }
+
+
+def shapes() -> list[dict[str, Any]]:
+    """Each shape a universe declares: the question its scores answer, its floor world, the target that fits it with
+    the target's role, and the default diagnostics feat shows for it."""
+    out = []
+    for shape, question in SHAPES.items():
+        name, options, cls = TARGETS[shape]
+        out.append(
+            {
+                "shape": shape,
+                "question": question,
+                "world": floor_world("<cluster column>", 0, shape).describe(),
+                "target": f'Use("{name}", {options})' if options else f'Use("{name}")',
+                "name": name,
+                "role": listing.first_line(cls),
+                "diagnostics": [s.name for s in feat_defaults.CHECKS if s.needs == shape],
+            }
+        )
+    return out
 
 
 def tested() -> list[dict[str, str]]:
