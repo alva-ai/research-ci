@@ -1,9 +1,9 @@
-"""The checks derive runs on every contract by default, before its floor (``stages/floor/contract.py``): one list, to
+"""The checks derive runs on every contract by default, before its floor (``stages/contract/floor.py``): one list, to
 adjust from experience. The contract is not judged by the engine hash, and the engine hash leaves this list out."""
 
-from research_ci.stages.defaults.data import freshness
-from research_ci.stages.floor.contract import Seen
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.contract.floor import Seen
+from research_ci.stages.data.defaults import freshness
+from research_ci.stages.skeleton import Found, Step
 
 
 def fresh(seen: Seen) -> Found:

@@ -4,7 +4,7 @@ to an independent source first, which says whether the data is faithful or wrong
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Case, Source
+from research_ci.api.evals import Case, Source
 from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.check import Check

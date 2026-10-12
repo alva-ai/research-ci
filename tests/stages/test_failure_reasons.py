@@ -1,6 +1,7 @@
 """Every failure on every card says why. One test per way a DataCard, a ResultCard, or an ExploreCard can fail: the
 card names what failed, says why, and what to do. (The ContractCard's are in ``test_derive.py``; an invalid data eval
-by its pits in ``test_data_stage.py``; an invalid feat eval in ``test_feat_layer.py``.)"""
+by its pits, a data veto, and the refusals before the data is fetched in ``test_data_stage.py``; an invalid feat eval,
+a veto in slot 3, and the refusals before a trial in ``test_feat_layer.py``.)"""
 
 from pathlib import Path
 
@@ -9,14 +10,14 @@ import pytest
 from research_ci.kernel.verdict.check import Check
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataError
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.feat import FeatSettings
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data import defaults as data_defaults
+from research_ci.stages.data.run import DataError
+from research_ci.stages.feat.run import FeatSettings
+from research_ci.stages.skeleton import Found, Step
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
-from toy import REGISTRY, Backwards, ToyHindsight, label_contract
+from toy import REGISTRY, Backwards, ToyHindsight, lab, label_contract
 
 FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
@@ -52,6 +53,7 @@ CASES = [
     Case("no rows, no flags", wrong_shape, 0, given=ROWS.head(0)),
     Case("an empty table", fails, 0, given=ROWS.head(0)),
 ]
+H0 = "no value is zero"
 """
 
 
@@ -60,6 +62,7 @@ def _idea(tmp_path: Path, contract: str | None = None) -> Idea:
     (idea.root / "contract.py").write_text(contract or label_contract())
     idea.derive_contract()
     idea.approve("contract")
+    lab(idea.root)
     return idea
 
 
@@ -67,7 +70,8 @@ def _data(idea: Idea, evals: str) -> None:
     (idea.root / "evals").mkdir(exist_ok=True)
     (idea.root / "evals" / "flags.py").write_text(FLAGS)
     (idea.root / "data.py").write_text(
-        f"from evals.flags import broken, fails, wrong_shape, zeros\n\nEVALS = {evals}\n"
+        "from research_ci.api import Eval\nfrom evals.flags import H0, broken, fails, wrong_shape, zeros\n\n"
+        f"EVALS = [Eval(fn, h0=H0) for fn in {evals}]\n"
     )
 
 
@@ -94,20 +98,19 @@ def test_datacard_a_source_that_failed_admission_says_which_checks_and_what_to_d
     ) in card
 
 
-def test_datacard_an_invalid_case_eval_says_which_test_what_it_expected_and_got_and_how_to_fix_it(
+def test_an_invalid_lab_eval_refuses_the_data_check_saying_which_test_what_it_expected_and_got_and_how_to_fix_it(
     tmp_path: Path,
 ) -> None:
     idea = _idea(tmp_path)
     _data(idea, "[zeros, broken]")
-    spec, card = idea.check_data()
-    assert spec["verdict"]["status"] == "blocked"
-    line = (
-        "case     FAIL broken: invalid 0/1: case 'only the zero is flagged': expected 0, got 1; it did not run; fix "
-        "the eval or its CASES in evals/flags.py; `rci eval check evals/flags.py` runs them for free"
+    with pytest.raises(DataError) as refused:
+        idea.check_data()
+    assert str(refused.value) == (
+        "slot 4, tests of lab evals: the lab eval 'broken' (evals/flags.py) failed its tests, so it cannot judge: "
+        "invalid 0/1: case 'only the zero is flagged': expected 0, got 1; fix the eval or its CASES in evals/flags.py; "
+        "`rci eval check evals/flags.py` runs them for free; nothing was recorded"
     )
-    assert line in card and "case     ok   zeros: valid 1/1 · flagged 0 rows" in card
-    assert "broken (case eval) is invalid: invalid 0/1: case 'only the zero is flagged': expected 0, got 1" in card
-    assert next(e for e in spec["evals"] if e["name"] == "broken")["flagged"] is None, "an invalid eval flags nothing"
+    assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
 
 
 def test_datacard_a_failed_step_says_whose_it_is_why_and_what_to_do(tmp_path: Path, monkeypatch) -> None:
@@ -152,10 +155,11 @@ def test_resultcard_failed_says_the_z_against_the_bar_and_the_effect(tmp_path: P
     (note,) = result["verdict"]["notes"]
     assert (
         note.startswith("carry: does not beat random, z ")
-        and " < 2.00 (decisive test, floor): gain over random " in note
+        and " < 2.00 (decisive test, slot 1): gain over random " in note
     )
     assert "bp per entry ± " in note and note in text
-    assert "floor    carry: gain over random " in text and " < 2.00 · " in text and "· FAILED" in text
+    assert "decisive   carry: gain over random " in text and " < 2.00 · " in text and "· FAILED" in text
+    assert result["verdict"]["slots"] == [1] and "verdict    FAILED\n" in text
     shown = [line for line in text.splitlines() if "[!]" in line and " vs floor" in line]
     assert shown and all(" < 2.00" in line for line in shown), "a diagnostic below the bar says so"
 

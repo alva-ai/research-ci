@@ -7,7 +7,7 @@ from typing import Any
 from research_ci.api.contract import as_use
 from research_ci.render.data import data_card
 from research_ci.stages.common import jsonable
-from research_ci.stages.data import check_data, current_data_deps
+from research_ci.stages.data.run import check_data, current_data_deps
 from research_ci.store import vault
 from research_ci.store.freeze import drift
 from research_ci.store.sources import Sources

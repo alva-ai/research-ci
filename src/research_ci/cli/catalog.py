@@ -1,221 +1,111 @@
-"""What `rci methods --markdown` lists, read from the code: every stage's floor list with its default list where the
-floor marks it, each step with its role, what it needs, and the eval functions it reaches; and every public function
-of the eval library with where it is used and what backs it."""
+import json
+from typing import Annotated, Any
 
-import inspect
-import pkgutil
-from collections.abc import Callable, Iterator, Sequence
-from functools import cached_property
-from types import CodeType, FunctionType, ModuleType
-from typing import Any
+import typer
 
-import research_ci.eval
-from research_ci.runner import catalog
-from research_ci.runner import evals as case_evals
-from research_ci.stages import steps
-from research_ci.stages.defaults import contract as contract_defaults
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.defaults import feat as feat_defaults
-from research_ci.stages.floor import contract as contract_floor
-from research_ci.stages.floor import data as data_floor
-from research_ci.stages.floor import feat as feat_floor
-from research_ci.stages.floor import source as source_floor
+from research_ci.catalog import listing
+from research_ci.catalog.collect import collect
+from research_ci.catalog.markdown import FILE, markdown
+from research_ci.cli import common
 
-EVAL = "research_ci.eval"
-STAGES = "research_ci.stages"
-ORDER = ("protocol", "data", "calibration", "statistics", "structure", "synthetic", "obligations")
-UNDOCUMENTED = {
-    "protocol.deterministic": "Two identical consumer runs must give the same net.",
-    "protocol.max_drawdown": "The consumer's deepest fall in equity from its running peak.",
-    "protocol.total": "The consumer's net summed over the run.",
-    "protocol.truncated": "The field table cut to the rows known by `t`.",
-    "data.invariants.hedge_check": "The card's hedged-legs line, naming the pairs most often apart.",
-    "data.treatments.apply_candidates": "The candidate table after every candidate treatment, in order.",
-    "data.treatments.drop_entities": "Drop every row of the named entities.",
+KIND_USE = {
+    "data": "Contract(data=Use(name, {options}))",
+    "universe": "Universe(name, clusters=<column>, groups=(<column>, ...))",
+    "label": "Label(<label name>, Use(name, {options}), horizons=(...))",
+    "target": "Effect(on=<label name>, target=Use(name, {options}))",
+    "cost": "Contract(costs=Use(name, {options}))",
+    "consumer": "Contract(consumer=Use(name, {options})), for its decision times",
 }
 
 
-def collect() -> dict[str, Any]:
-    stages = [
-        _stage("contract", "rci contract derive", contract_floor, contract_defaults),
-        _stage("data", "rci data check", data_floor, data_defaults, admission=source_floor),
-        _stage("feat", "rci feat submit", feat_floor, feat_defaults),
-    ]
-    cases = {
-        "about": catalog.CASE_EVAL,
-        "example": catalog.CASE_EXAMPLE,
-        "layers": list(case_evals.LAYERS),
-        "declarations": catalog.case_evals(),
-        "outcomes": dict(case_evals.OUTCOMES),
-    }
-    return {"stages": stages, "roles": dict(steps.ROLES), "cases": cases, "library": library(stages)}
+def plugins(as_json: common.AsJson = False) -> None:
+    """Every installed plugin a contract can name: its kind, options, and what it declares."""
+    found = listing.plugins()
+    if as_json:
+        typer.echo(json.dumps(found, indent=2))
+        return
+    order = [*KIND_USE, "unknown", "error"]
+
+    def rank(p: dict[str, Any]) -> tuple[int, str]:
+        first = p["kind"].split("/")[0]
+        return (order.index(first) if first in order else len(order), p["name"])
+
+    shown = ""
+    for p in sorted(found, key=rank):
+        if p["kind"] != shown:
+            shown = p["kind"]
+            typer.echo(f"{shown}: {KIND_USE.get(shown.split('/')[0], '')}".rstrip(": "))
+        if shown == "error":
+            typer.echo(f"  {p['name']}: cannot be loaded: {p['error']}")
+            continue
+        typer.echo(f"  {p['signature']}")
+        for line in _declared(p):
+            typer.echo(f"    {line}")
+    if not found:
+        typer.echo("no plugins installed; a lab registers them under the entry-point group research_ci.plugins")
 
 
-def library(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every public function of every eval module, by package, with where it is used and what backs it."""
-    by_stage: dict[str, list[str]] = {}
-    for s in stages:
-        for _, rows in s["sections"]:
-            for row in rows:
-                for m in row["methods"]:
-                    by_stage.setdefault(m, []).append(s["stage"])
-    research_code = {f"{_short(m['module'])}.{m['name']}" for m in catalog.methods()}
-    modules = {p: list(catalog._modules(f"{EVAL}.{p}")) for p in packages()}
-    inside, examples = _inside([m for ms in modules.values() for m in ms])
-    secondary = (("inside eval", inside), ("worked examples", examples))
-    out = []
-    for p, ms in modules.items():
-        entries = []
-        for module in ms:
-            backing = catalog._backing(module)
-            functions = []
-            for fn in public(module):
-                key = _key(fn)
-                used = list(dict.fromkeys(by_stage.get(key, [])))
-                used += ["research code"] if key in research_code else []
-                used = used or [tag for tag, keys in secondary if key in keys]
-                used = used or ["algo, planned" if p == "protocol" else "tests only"]
-                cases, props = backing.get(fn.__name__, (0, 0))
-                doc = catalog.first_line(fn) or UNDOCUMENTED.get(key, "")
-                functions.append(
-                    {"key": key, "name": fn.__name__, "doc": doc, "used": used, "examples": cases, "properties": props}
-                )
-            entries.append({"module": module.__name__.rsplit(".", 1)[-1], "functions": functions})
-        out.append({"package": p, "modules": entries})
-    return out
+def _declared(p: dict[str, Any]) -> list[str]:
+    """What a plugin says about itself: its docstring's first sentence, and what its kind declares."""
+    lines = [p["doc"]] if p["doc"] else []
+    if p.get("fields") is not None:
+        lines.append(f"fields: {', '.join(p['fields']) or 'not declared'}")
+    if p.get("levels"):
+        lv = p["levels"]
+        lines.append(f"levels: {', '.join(lv['fields'])} · factor {lv['factor']:g} · window {lv['window']}")
+        lines[-1] += f" · mask {lv['mask']}"
+    if p.get("reference"):
+        lines.append("reference source: answers the independent check at admission")
+    if "per" in p:
+        lines.append(f"per: {p['per'] or 'not declared'} · rolls: {'yes' if p['rolls'] else 'no'}")
+    lines.append(f"from the {p['origin']}" if p["origin"] == "registry" else f"from an {p['origin']}")
+    return lines
 
 
-def packages() -> list[str]:
-    found = [m.name for m in pkgutil.iter_modules(research_ci.eval.__path__)]
-    return sorted(found, key=lambda name: (ORDER.index(name) if name in ORDER else len(ORDER), name))
+def methods(
+    as_json: common.AsJson = False,
+    as_markdown: Annotated[
+        bool, typer.Option("--markdown", help=f"The catalog of every stage and the whole eval library, as {FILE}.")
+    ] = False,
+) -> None:
+    """The general evals of the engine's library an idea's EVALS can list or its lab evals can call, with the worked
+    examples that back each; how a lab eval and its tests are written; then how a null world is written."""
+    if as_markdown:
+        typer.echo(markdown(collect()))
+        return
+    found = listing.methods()
+    cases = listing.lab_evals()
+    worlds = listing.nulls()
+    if as_json:
+        typer.echo(json.dumps(found + cases + worlds, indent=2))
+        return
+    formats = listing.formats()
+    shown = ""
+    for m in found:
+        if m["use"] != shown:
+            typer.echo(f"{m['use']}: {formats.get(m['use'], '')}".rstrip(": "))
+            shown = m["use"]
+        typer.echo(f"  {m['import']}")
+        typer.echo(f"    {m['name']}{m['signature']}")
+        if m["doc"]:
+            typer.echo(f"    {m['doc']}")
+        typer.echo(f"    backed by {_count(m['examples'], 'worked example')} · {_count(m['properties'], 'property')}")
+    typer.echo(f"lab eval: {listing.LAB_EVAL}")
+    typer.echo(f"  from research_ci.api import {', '.join(c['name'] for c in cases)}")
+    for c in cases:
+        typer.echo(f"    {c['name']}{c['signature']}")
+        typer.echo(f"      {c['doc']}")
+    typer.echo(f"  for example: {listing.CASE_EXAMPLE}")
+    typer.echo(f"null world: {listing.NULLS_FORMAT}")
+    typer.echo(f"  from research_ci.api import {', '.join(w['name'] for w in worlds)}")
+    for w in worlds:
+        typer.echo(f"    {w['name']}{w['signature']}")
+        width = max(len(f["name"]) for f in w["fields"])
+        for f in w["fields"]:
+            typer.echo(f"      {f['name']:<{width}}  {f['means']}")
+    typer.echo(f"  for example: {listing.NULLS_EXAMPLE}")
 
 
-def public(module: ModuleType) -> list[FunctionType]:
-    return [
-        fn
-        for name, fn in inspect.getmembers(module, inspect.isfunction)
-        if fn.__module__ == module.__name__ and not name.startswith("_")
-    ]
-
-
-def reached(fn: Any) -> list[str]:
-    """The eval functions a step's function reaches, as ``package.module.function`` under ``research_ci.eval``."""
-    return [_key(f) for f in _reach(fn, STAGES) if _is_eval(f)]
-
-
-def _stage(
-    name: str, command: str, floor: ModuleType, defaults: ModuleType, admission: ModuleType | None = None
-) -> dict[str, Any]:
-    """A stage's lists as its table shows them: the floor list with the default list where the floor marks it, and,
-    for the data, the admission's list before them."""
-    sections = []
-    if admission is not None:
-        sections.append(("admission, once per source", _rows(admission.STEPS, [], "floor")))
-    sections.append(("", _rows(floor.STEPS, defaults.CHECKS, "floor")))
-    files = [_path(floor), _path(defaults)] + ([_path(admission)] if admission is not None else [])
-    return {"stage": name, "command": command, "files": files, "sections": sections}
-
-
-def _rows(floor: Sequence[Any], defaults: Sequence[steps.Step[Any]], kind: str) -> list[dict[str, Any]]:
-    out = []
-    for item in floor:
-        listed = [(item, kind)] if isinstance(item, steps.Step) else [(s, "default") for s in defaults]
-        out += [
-            {
-                "item": s.name,
-                "what": s.what,
-                "role": s.role,
-                "list": where,
-                "needs": s.needs,
-                "methods": reached(s.run),
-            }
-            for s, where in listed
-        ]
-    return out
-
-
-def _path(module: ModuleType) -> str:
-    return module.__name__.removeprefix("research_ci.").replace(".", "/") + ".py"
-
-
-def _inside(modules: list[ModuleType]) -> tuple[set[str], set[str]]:
-    """The eval functions other eval functions call, and those the worked examples and properties of other modules
-    call."""
-    inside: set[str] = set()
-    examples: set[str] = set()
-    for module in modules:
-        for fn in public(module):
-            inside |= {_key(f) for f in _reach(fn) if _is_eval(f) and f is not fn}
-        for item in (*getattr(module, "CASES", []), *getattr(module, "PROPERTIES", [])):
-            run = getattr(item, "run", None) or getattr(item, "of", None)
-            examples |= {_key(f) for f in _reach(run) if _is_eval(f) and f.__module__ != module.__name__}
-    return inside, examples
-
-
-def _reach(fn: Any, through: str = "") -> list[FunctionType]:
-    """The functions ``fn`` names, in the order they come: through the functions of its own module it calls, and of
-    the modules under ``through``, and the methods of their classes it names."""
-    code = getattr(fn, "__code__", None)
-    if not isinstance(code, CodeType):
-        return []
-    home = fn.__module__
-    found: list[FunctionType] = []
-    queue: list[tuple[CodeType, dict[str, Any]]] = [(code, fn.__globals__)]
-    seen: set[CodeType] = set()
-    while queue:
-        top, scope = queue.pop(0)
-        for c in _codes(top):
-            for f in _named(c, scope, methods=bool(through)):
-                if f not in found:
-                    found.append(f)
-                inner = f.__module__ == home or (through and (f.__module__ or "").startswith(f"{through}."))
-                if inner and f.__code__ not in seen:
-                    seen.add(f.__code__)
-                    queue.append((f.__code__, f.__globals__))
-    return found
-
-
-def _named(code: CodeType, scope: dict[str, Any], methods: bool = False) -> list[FunctionType]:
-    """The functions one code object names: globals, the values of global tables of functions, ``module.function``,
-    and with ``methods``, the methods and properties of the classes its module defines."""
-    out: list[FunctionType] = []
-    modules = [
-        m for n in code.co_names if isinstance(m := scope.get(n), ModuleType) and m.__name__.startswith("research_ci.")
-    ]
-    home = scope.get("__name__", "")
-    classes = [c for c in scope.values() if inspect.isclass(c) and c.__module__ == home] if methods else []
-    for n in code.co_names:
-        value = scope.get(n)
-        values = list(value.values()) if isinstance(value, dict) else value
-        out += [f for f in (values if isinstance(values, list | tuple) else [value]) if inspect.isfunction(f)]
-        out += [f for m in modules if inspect.isfunction(f := getattr(m, n, None)) and f.__module__ == m.__name__]
-        out += [f for c in classes if inspect.isfunction(f := _method(vars(c).get(n)))]
-    return list(dict.fromkeys(out))
-
-
-def _method(attr: Any) -> Any:
-    """A class attribute as the function that runs: a method, or what a property computes."""
-    if isinstance(attr, property):
-        return attr.fget
-    if isinstance(attr, cached_property):
-        return attr.func
-    return attr
-
-
-def _codes(code: CodeType) -> Iterator[CodeType]:
-    yield code
-    for c in code.co_consts:
-        if isinstance(c, CodeType):
-            yield from _codes(c)
-
-
-def _is_eval(fn: Any) -> bool:
-    return inspect.isfunction(fn) and (fn.__module__ or "").startswith(f"{EVAL}.") and not fn.__name__.startswith("_")
-
-
-def _key(fn: Callable[..., Any]) -> str:
-    return f"{_short(fn.__module__)}.{fn.__name__}"
-
-
-def _short(module: str) -> str:
-    return module.removeprefix(f"{EVAL}.")
+def _count(n: int, what: str) -> str:
+    many = what[:-1] + "ies" if what.endswith("y") else what + "s"
+    return f"{n} {what if n == 1 else many}"

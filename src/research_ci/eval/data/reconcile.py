@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Case, Source
+from research_ci.api.evals import Case, Source
 from research_ci.api.plugins import Reference
 from research_ci.eval.data.baseline import baseline
 from research_ci.eval.data.pits import gap

@@ -1,4 +1,4 @@
-"""The steps derive takes on every contract, after its default list (``stages/defaults/contract.py``): the protocol
+"""The steps derive takes on every contract, after its default list (``stages/contract/defaults.py``): the protocol
 tests of the universe, the labels and the targets, and the power of each decisive effect."""
 
 import inspect
@@ -18,7 +18,7 @@ from research_ci.kernel.time.clock import span_ns, time_series
 from research_ci.kernel.verdict import power as pw
 from research_ci.runner.plugins import Registry, factory_of
 from research_ci.stages.common import per_t, quantile_times, units
-from research_ci.stages.steps import DEFAULTS, Found, Step
+from research_ci.stages.skeleton import DEFAULTS, Found, Step
 
 
 @dataclass(frozen=True)

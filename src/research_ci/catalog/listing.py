@@ -1,6 +1,6 @@
 """What an agent can use without reading the engine's source: every installed plugin with its options and
-declarations (``rci plugins``), and the general evals of the engine's library an idea's ``EVALS`` can list or its case
-evals can call, each with the worked examples and properties that back it, how a case eval and its tests are written,
+declarations (``rci plugins``), and the general evals of the engine's library an idea's ``EVALS`` can list or its lab
+evals can call, each with the worked examples and properties that back it, how a lab eval and its tests are written,
 and how a null world is written (``rci methods``)."""
 
 import importlib
@@ -12,8 +12,8 @@ from importlib.metadata import entry_points
 from types import CodeType, ModuleType
 from typing import Any
 
-from research_ci.api.evals import FORMAT, Eval
-from research_ci.api.methods import Case, Market, Power, Recovers, Size, Source
+from research_ci.api.data import Pit
+from research_ci.api.evals import FORMAT, Case, Eval, Market, Power, Recovers, Size, Source
 from research_ci.api.nulls import Null, PermuteWithin
 from research_ci.api.plugins import ENTRY_POINTS
 from research_ci.runner import plugins as loader
@@ -36,42 +36,55 @@ METHODS: tuple[tuple[str, str, str], ...] = (
     (
         "pit",
         "research_ci.eval.data.pits",
-        "nulls/data.py: PITS = [Pit(category, plant)]; plant(fields, field, rng) returns a copy with the pit planted",
+        "a data eval's module: PITS = [Pit(category, plant)] next to its CASES; plant(fields, field, rng) returns a "
+        "copy with the pit planted; a built-in pit is planted for every eval that covers its category",
     ),
 )
-CASE_EVAL = (
-    "a function of the idea's own, in a module such as `evals/<name>.py`, with its tests next to it: CASES (required) "
-    "and PROPERTIES (optional); data.py or feat.py imports it into EVALS (`from evals.<name> import <eval>`). Before "
-    "anything runs, the engine runs its tests, the cases and properties that run it, and only a case eval that passes "
-    "them all runs; one without tests is refused, an invalid one is shown with the test it failed and no result. "
-    "`rci eval check <file>` runs them any time, for free; a validation is kept until the module's files change"
+LAB_EVAL = (
+    "a function of the idea's own, in a module such as `evals/<name>.py`, with its tests next to it: CASES (required), "
+    "PROPERTIES (optional) and, for a data eval, PITS (optional); data.py or feat.py imports it into EVALS "
+    "(`from evals.<name> import <eval>`) as `Eval(<eval>, h0='<the H0 it rejects>')`. It is a test of the claim: why "
+    "a case is wrong is specific to the case, so every layer with EVALS needs at least one, its h0 is required (and "
+    "refused on a library eval, which tests a generic H0), and it can veto: in feat, it and each null world must reach "
+    "z ≥ 2.00 at every horizon it covers, or the claim fails there; in data, with on_fail='block', any row it flags "
+    "in the data after the treatments before it blocks the data. It never passes what the decisive test failed, "
+    "whose bar rises with the submissions, so it needs no pre-registration. Before anything heavy runs, the engine "
+    "runs its tests, the cases and properties that run it, and refuses a layer with a lab eval that fails them; "
+    "`rci eval check <file>` runs them any time, for free, and a validation is kept until the module's files change"
 )
 CASE_EXAMPLE = (
     'CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars '
     "DataFrame of the evaluation table (t, entity, score, y) and thirds(SIX) returns t, value"
 )
 CASE_FIELDS: dict[type, str] = {
-    Eval: "an entry of EVALS with what its layer reads: on_fail, covers (data.py); label, horizons, combine (feat.py)",
+    Eval: (
+        "an entry of EVALS with what its layer reads: h0, the H0 a lab eval rejects (required for one, refused on a "
+        "library eval); on_fail, covers (data.py); label, horizons, combine (feat.py)"
+    ),
     Case: "",
     Size: "",
     Power: "",
     Recovers: "",
     Market: "",
     Source: "",
+    Pit: "",
 }
 
 NULLS_FORMAT = (
-    "nulls/feat.py: NULLS = [Null(explains, world)]; give each alternative of the contract one, or the ResultCard "
-    "marks it uncovered"
+    "nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every alternative of the contract needs one, or feat "
+    "refuses the submission before it is counted; a world judges the evals it names, or the decisive effect, and must "
+    "reach z ≥ 2.00 at every horizon it judges"
 )
-NULLS_EXAMPLE = 'NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"))]'
+NULLS_EXAMPLE = (
+    'NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), evals=("<eval>",))]'
+)
 NULL_FIELDS: dict[type, dict[str, str]] = {
     Null: {
         "explains": "the id of the contract's alternative this world answers",
         "world": "a PermuteWithin: how the scores are shuffled while the labels stay",
         "keeps": "the column the alternative lives in; None means the world's bucket_by",
-        "evals": "the names of the evals this world judges; () means every eval of the layer, defaults included",
-        "reps": "how many shuffles, at least 20; 50 by default",
+        "evals": "the names of the evals this world judges, any eval of the layer; () means the decisive effect",
+        "reps": "the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default",
         "note": "free text kept with the world in the submission's record",
     },
     PermuteWithin: {
@@ -141,11 +154,12 @@ def formats() -> dict[str, str]:
     return {use: text for use, _, text in METHODS if text}
 
 
-def case_evals() -> list[dict[str, Any]]:
-    """How a case eval is written: ``Eval``, and the tests a case eval's module declares, from ``api/methods.py``."""
+def lab_evals() -> list[dict[str, Any]]:
+    """How a lab eval is written: ``Eval``, and the tests a lab eval's module declares, from ``api/evals.py`` and
+    ``api/data.py``."""
     return [
         {
-            "use": "case eval",
+            "use": "lab eval",
             "module": "research_ci.api",
             "name": cls.__name__,
             "import": f"from research_ci.api import {cls.__name__}",

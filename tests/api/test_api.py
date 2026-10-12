@@ -117,15 +117,46 @@ def test_evals_and_nulls_are_validated() -> None:
     with pytest.raises(ValueError, match="PermuteWithin"):
         Null(explains="chance", world="shift time")  # type: ignore[arg-type]
     assert Null(explains="tail", world=PermuteWithin(bucket_by="symbol"), evals=["a"]).evals == ("a",)  # type: ignore[arg-type]
-    feat = evals_of(types.SimpleNamespace(EVALS=[ic, Eval(ic, name="b", horizons=["8h"])]), "feat")
+    h0 = "the scores do not rank the label"
+    listed = [Eval(ic, h0=h0), Eval(ic, name="b", h0=h0, horizons=["8h"])]
+    feat = evals_of(types.SimpleNamespace(EVALS=listed), "feat")
     assert [(e.name, e.combine, e.horizons) for e in feat] == [("ic", "max", None), ("b", "max", ("8h",))]
-    data = evals_of(types.SimpleNamespace(EVALS=[ic]), "data")
-    assert [(e.name, e.on_fail) for e in data] == [("ic", "mask")]
+    data = evals_of(types.SimpleNamespace(EVALS=[Eval(ic, h0=h0, on_fail="block")]), "data")
+    assert [(e.name, e.on_fail) for e in data] == [("ic", "block")]
     with pytest.raises(ValueError, match="unique; give these a name=: ic"):
-        evals_of(types.SimpleNamespace(EVALS=[ic, ic]), "feat")
+        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, h0=h0), Eval(ic, h0=h0)]), "feat")
     with pytest.raises(ValueError, match="sets on_fail, which only data.py reads"):
         evals_of(types.SimpleNamespace(EVALS=[Eval(ic, on_fail="ask")]), "feat")
     with pytest.raises(ValueError, match="sets label, which only feat.py reads"):
         evals_of(types.SimpleNamespace(EVALS=[Eval(ic, label="carry")]), "data")
     with pytest.raises(ValueError, match="EVALS must be a list"):
         evals_of(types.SimpleNamespace(EVALS=ic), "data")
+    with pytest.raises(ValueError, match="on_fail is mask, drop_entities, ask or block"):
+        Eval(ic, on_fail="drop")  # type: ignore[arg-type]
+
+
+def test_a_lab_eval_must_name_its_h0_and_a_library_eval_must_not() -> None:
+    """A lab eval is a claim test and names the H0 it rejects; a library eval tests a generic H0, is shown, and never
+    vetoes, so h0 and on_fail='block' are refused on one. Each refusal says what to write."""
+    from research_ci.eval.data.sanity import nonpositive
+    from research_ci.eval.statistics.ic import rank_ic
+
+    def flags(fields):
+        return fields
+
+    for layer, example in (("feat", "the scores do not rank the funding part"), ("data", "every close is a price")):
+        with pytest.raises(ValueError) as refused:
+            evals_of(types.SimpleNamespace(EVALS=[flags]), layer)  # type: ignore[arg-type]
+        said = str(refused.value)
+        assert said.startswith("the lab eval 'flags' names no h0: a lab eval tests the claim and can veto it")
+        assert "write Eval(flags, h0='<the H0>', ...) in EVALS, such as h0=" in said and example in said
+    assert evals_of(types.SimpleNamespace(EVALS=[Eval(flags, h0="  the data \n is sound ")]), "data")[0].h0 == (
+        "the data is sound"
+    )
+    assert evals_of(types.SimpleNamespace(EVALS=[rank_ic]), "feat")[0].h0 == ""
+    with pytest.raises(ValueError, match="the library eval 'rank_ic' sets h0: an eval of the engine's library tests"):
+        evals_of(types.SimpleNamespace(EVALS=[Eval(rank_ic, h0="x")]), "feat")
+    with pytest.raises(ValueError, match="the library eval 'nonpositive' sets on_fail='block': only a lab eval"):
+        evals_of(types.SimpleNamespace(EVALS=[Eval(partial(nonpositive, levels=("close",)), on_fail="block")]), "data")
+    with pytest.raises(ValueError, match="h0 is one sentence"):
+        Eval(flags, h0=1)  # type: ignore[arg-type]

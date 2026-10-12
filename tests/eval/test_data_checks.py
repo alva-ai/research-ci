@@ -10,7 +10,7 @@ from research_ci.eval.data import invariants as inv
 from research_ci.eval.data.baseline import baseline
 from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.tables import field_table
-from research_ci.stages.source import admit
+from research_ci.stages.data.source import admit
 from toy import ToyCorrupt, ToyData, ToyHindsight, ToyNoAsOf, ToyPairs, ToySwapped, toy_fields
 
 

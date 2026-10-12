@@ -20,25 +20,28 @@ AGENT: dict[str, tuple[str, str, str]] = {
     "data": (
         "check",
         "rci data check",
-        "check the data against the contract; for a risk the default checks miss, list an eval in EVALS in data.py: "
-        "one of the engine's library, or a case eval of your own in evals/<name>.py with its CASES, which "
-        "`rci eval check <file>` runs for free (`rci methods` lists both)",
+        "list at least one lab eval in EVALS in data.py, then check the data against the contract: a lab eval is a "
+        "function of your own in evals/<name>.py (copy evals/example.py) with its CASES, listed with the H0 it "
+        "rejects, Eval(fn, h0='<the H0>', on_fail=...), where on_fail='block' makes any row it flags after the "
+        "treatments before it block the data; "
+        "`rci eval check <file>` runs its tests for free, and the engine's library (`rci methods`) may be listed too",
     ),
     "feat": (
         "submit",
         "rci feat submit <file>",
-        "write research/<name>.py from research/example.py (polars expressions; row loops run with a warning), try "
-        "it with `rci feat explore <file>`, then submit it; give each alternative of contract.py a world in "
+        "list at least one lab eval in EVALS in feat.py, a function of your own in evals/<name>.py with its CASES, "
+        "listed as Eval(fn, h0='<the H0 it rejects>'); give each alternative of contract.py a null world in "
         'nulls/feat.py, such as NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", '
-        'block="horizon"))], or the ResultCard marks it uncovered; evals in feat.py (EVALS) are optional, the '
-        "engine's library or case evals of your own in evals/<name>.py with their CASES (`rci eval check <file>`); "
-        "`rci methods` lists the library, how a case eval is written, and the fields of a null world",
+        'block="horizon"), evals=("<eval>",))]; each lab eval and world must reach z ≥ 2 at every horizon it covers, '
+        "or the claim fails there; then write research/<name>.py from research/example.py (polars expressions; row "
+        "loops run with a warning), try it with `rci feat explore <file>`, and submit it; `rci methods` lists the "
+        "library, how a lab eval is written, and the fields of a null world",
     ),
 }
 BUILT = frozenset({"contract", "data", "feat"})
 AGAIN: dict[str, str] = {
     "contract": "fix contract.py and derive it again",
-    "data": "fix what it names and check again (`rci eval check <file>` runs a case eval's tests for free)",
+    "data": "fix what it names and check again (`rci eval check <file>` runs a lab eval's tests for free)",
     "feat": "write a new features file in research/ and submit it",
 }
 CALIBRATION = "derive the changed contract with `rci contract derive`, then check the data again"

@@ -1,10 +1,13 @@
-"""An idea's evals, loaded and validated before anything runs them.
+"""An idea's evals, loaded and validated before anything runs them: slot 4 of every layer, the tests of the lab's
+evals.
 
 An eval in ``EVALS`` is a general eval of the engine's library, trusted because the engine's CI holds it to its tests,
-or a case eval, any other function: one of the idea's own, kept with its tests in its module. The tests of a case eval
+or a lab eval, any other function: one of the idea's own, kept with its tests in its module. The tests of a lab eval
 are the cases of its module's ``CASES`` and the properties of its ``PROPERTIES`` that run it: a case whose ``run`` is
 the eval, or reaches it through the functions of the module it calls or holds; a property whose ``of`` does. The engine
-runs only those, never the idea's other code and never pytest. A case eval with no test is refused.
+runs only those, never the idea's other code and never pytest. A lab eval with no test is refused, and so is one whose
+module is still the example ``rci init`` writes. A data eval's module may also list ``PITS``, pits of its own the data
+check plants for the eval's ``covers``.
 
 A validation is kept in the idea's ``.rci/evals/`` under the hash of what it rests on: the eval's module file and the
 files of the idea and of installed labs it imports, the engine, and the interpreter. An eval whose files did not change
@@ -30,38 +33,52 @@ from types import CodeType, ModuleType
 from typing import Any, Literal
 
 from research_ci.api.contract import ContractError
-from research_ci.api.evals import Eval, unwrapped
-from research_ci.api.methods import Case, Power, Property, Recovers, Size
-from research_ci.eval.obligations import run_tests
+from research_ci.api.data import Pit
+from research_ci.api.evals import (
+    Case,
+    Eval,
+    Layer,
+    Power,
+    Property,
+    Recovers,
+    Size,
+    evals_of,
+    source_of,
+    unwrapped,
+)
 from research_ci.kernel.hashing import hash_obj
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner import research
 from research_ci.runner.plugins import Registry
 from research_ci.store.environment import judging_deps
 from research_ci.store.workspace import Workspace, hash_file
+from research_ci.validation.tests import run_tests
 
-LIBRARY = "research_ci.eval"
 CACHE = "evals"
 PIT_TESTS = ("built-in ", "pit ", "pits: ")
-Source = Literal["library", "case"]
 Status = Literal["valid", "invalid", "trusted"]
 CASE_FORMAT = (
-    "a case eval's module holds its tests next to it: CASES = [Case(name, eval, expect, given=frame), ...] (required) "
-    "and PROPERTIES = [Size(eval), Power(eval), Recovers(eval, market, expect, tol)] (optional), from research_ci.api"
+    "a lab eval's module holds its tests next to it: CASES = [Case(name, eval, expect, given=frame), ...] (required), "
+    "PROPERTIES = [Size(eval), Power(eval), Recovers(eval, market, expect, tol)] (optional), and, for a data eval, "
+    "PITS = [Pit(category, plant)] (optional), from research_ci.api"
+)
+EXAMPLE_FIX = (
+    f"write your own: copy it to evals/<name>.py, delete its `{research.EXAMPLE_MARKER}` line, and replace every TODO"
 )
 
 
 OUTCOMES: dict[str, str] = {
     "trusted": "an eval of the engine's library: its tests run in the engine's CI, never at research time; it runs",
-    "valid n/n": "a case eval that passed all n of its tests: it runs, and its line on the card says so",
+    "valid n/n": "a lab eval that passed all n of its tests: it judges, and its line on the card says so",
     "invalid": (
-        "a case eval that failed a test, or a data eval that missed a pit of what it covers: it does not run and "
-        "counts as no evidence; its line names the test, what it expected and what it got, and how to fix it. A data "
-        "check with one is blocked; a feat submission shows it with no numbers"
+        "a lab eval that failed a test, or a data eval that missed a pit of what it covers: it cannot judge, so the "
+        "layer is refused before anything heavy runs (a missed pit, found on the data, blocks the data check); the "
+        "refusal names the test, what it expected and what it got, and how to fix it"
     ),
     "no tests": (
-        "a case eval no case or property of its module runs: refused before anything runs, saying where CASES go"
+        "a lab eval no case or property of its module runs: refused before anything runs, saying where CASES go"
     ),
+    "example": "a lab eval whose module is still `evals/example.py` as `rci init` wrote it: refused until rewritten",
 }
 LAYERS: tuple[dict[str, str], ...] = (
     {
@@ -69,7 +86,8 @@ LAYERS: tuple[dict[str, str], ...] = (
         "file": "data.py",
         "gets": "the explore data, a FieldTable",
         "returns": "the rows it flags: entity, event_time, optionally field",
-        "wraps": "on_fail (mask, drop_entities, ask), covers",
+        "wraps": "h0, on_fail (mask, drop_entities, ask, block), covers",
+        "vetoes": "with on_fail block, it flags any row of the data after the treatments before it: BLOCKED",
         "validated": "its CASES and PROPERTIES; every pit of what it covers that moves the decisive number",
     },
     {
@@ -77,7 +95,8 @@ LAYERS: tuple[dict[str, str], ...] = (
         "file": "feat.py",
         "gets": "the evaluation table of one horizon",
         "returns": "t, value per decision time",
-        "wraps": "label, horizons, combine (max, each)",
+        "wraps": "h0, label, horizons, combine (max, each)",
+        "vetoes": "it, or a null world that judges it, is below z 2.00 at a horizon it covers: the claim fails there",
         "validated": "its CASES and PROPERTIES",
     },
 )
@@ -89,9 +108,10 @@ class EvalsError(ContractError):
 
 @dataclass(frozen=True)
 class Validation:
-    """How an eval stands before it runs: ``trusted`` (the engine's library), ``valid`` (a case eval that passed
-    every test), or ``invalid`` (one failed: it does not run, and counts as no evidence). ``tests`` are its tests,
-    each with what it expected and got when it failed; ``file`` is the case eval's module, as the cards name it."""
+    """How an eval stands before it runs: ``trusted`` (the engine's library), ``valid`` (a lab eval that passed
+    every test), or ``invalid`` (one failed: it cannot judge, and its layer is refused or blocked). ``tests`` are its
+    tests, each with what it expected and got when it failed; ``file`` is the lab eval's module, as the cards name
+    it."""
 
     status: Status
     file: str = ""
@@ -141,12 +161,6 @@ class Validation:
         }
 
 
-def source_of(fn: Callable[..., Any]) -> Source:
-    """An eval of the engine's library, or a case eval."""
-    module = str(getattr(unwrapped(fn), "__module__", "") or "")
-    return "library" if module == LIBRARY or module.startswith(f"{LIBRARY}.") else "case"
-
-
 def file_of(fn: Callable[..., Any]) -> Path | None:
     """The file of the module a function is defined in."""
     code = getattr(unwrapped(fn), "__code__", None)
@@ -168,17 +182,33 @@ def tests_of(fn: Callable[..., Any]) -> tuple[list[Case], list[Property]]:
     return [c for c in cases if _runs(c.run, base)], [p for p in properties if _runs(p.of, base)]
 
 
+def pits_of(fn: Callable[..., Any]) -> list[Pit]:
+    """The pits a data eval's module lists in ``PITS``, for the evals of the module that cover their category."""
+    scope = getattr(unwrapped(fn), "__globals__", None) or {}
+    found = scope.get("PITS", [])
+    if not isinstance(found, list | tuple) or not all(isinstance(p, Pit) for p in found):
+        raise EvalsError(f"PITS in {_shown_file(unwrapped(fn))} must be a list of Pit; {CASE_FORMAT}")
+    return list(found)
+
+
 def refuse_untested(evals: Sequence[Eval], root: Path, layer_file: str, after: str = "") -> None:
-    """Refuses, before anything runs, a case eval with no test, saying where its tests go."""
+    """Refuses, before anything runs, a lab eval with no test, saying where its tests go, and one whose module is
+    still the example ``rci init`` writes."""
     for e in evals:
-        if source_of(e.of) != "case":
+        if source_of(e.of) != "lab":
             continue
+        where = _relative(file_of(e.of), root) or layer_file
+        path = file_of(e.of)
+        if path is not None and research.still_example(path):
+            raise EvalsError(
+                f"{layer_file}: the lab eval {e.name!r} comes from {where}, which is still the example; "
+                f"{EXAMPLE_FIX}{after}"
+            )
         cases, properties = tests_of(e.of)
         if cases or properties:
             continue
-        where = _relative(file_of(e.of), root) or layer_file
         raise EvalsError(
-            f"{layer_file}: the case eval {e.name!r} has no tests, so it cannot run: write CASES in {where} with at "
+            f"{layer_file}: the lab eval {e.name!r} has no tests, so it cannot run: write CASES in {where} with at "
             f"least one Case that runs it, such as Case('<what it shows>', {_name(e.of)}, <expected>, given=<frame>); "
             f"{CASE_FORMAT}; `rci eval check {where}` runs them{after}"
         )
@@ -187,7 +217,7 @@ def refuse_untested(evals: Sequence[Eval], root: Path, layer_file: str, after: s
 def validate(
     evals: Sequence[Eval], root: Path, registry: Registry | None = None, cache: bool = True
 ) -> dict[str, Validation]:
-    """Every eval's validation by name: a library eval is trusted; a case eval is validated by its tests, or the
+    """Every eval's validation by name: a library eval is trusted; a lab eval is validated by its tests, or the
     validation kept for files that did not change is used."""
     out: dict[str, Validation] = {}
     engine: dict[str, str] = {}
@@ -204,6 +234,8 @@ def checked_file(path: Path, root: Path, registry: Registry | None = None) -> tu
     """Every public function of a module, as an eval, with its validation, run now and kept nowhere; and what is wrong
     with the module as a whole, if anything."""
     path, root = Path(path).resolve(), Path(root).resolve()
+    if research.still_example(path):
+        raise EvalsError(f"{_relative(path, root)} is still the example; {EXAMPLE_FIX}")
     module = load_module(path, root)
     functions = [
         fn
@@ -211,6 +243,11 @@ def checked_file(path: Path, root: Path, registry: Registry | None = None) -> tu
         if fn.__module__ == module.__name__ and not name.startswith("_")
     ]
     problem = "" if hasattr(module, "CASES") else f"{_relative(path, root)} defines no CASES; {CASE_FORMAT}"
+    if not problem and functions:
+        try:
+            pits_of(functions[0])
+        except EvalsError as exc:
+            problem = str(exc)
     out = []
     for fn in functions:
         cases, properties = tests_of(fn)
@@ -219,6 +256,28 @@ def checked_file(path: Path, root: Path, registry: Registry | None = None) -> tu
             continue
         out.append((fn.__name__, _run(fn.__name__, cases, properties, _relative(path, root))))
     return out, problem
+
+
+def listed_in(path: Path, root: Path) -> tuple[list[str], list[str]]:
+    """How the idea's ``data.py`` and ``feat.py`` list the evals of a module: a line for each one listed, with its H0,
+    and what the engine refuses in a layer file that exists, such as a lab eval without ``h0``."""
+    path, root = Path(path).resolve(), Path(root).resolve()
+    lines: list[str] = []
+    problems: list[str] = []
+    layers: tuple[Layer, ...] = ("data", "feat")
+    for layer in layers:
+        file = root / f"{layer}.py"
+        if not file.is_file():
+            continue
+        try:
+            listed = evals_of(load_module(file, root), layer)
+        except (EvalsError, ValueError, AttributeError) as exc:
+            problems.append(f"{layer}.py: {exc}")
+            continue
+        for e in listed:
+            if file_of(e.of) == path:
+                lines.append(f"{layer}.py lists {e.name!r}{f' · H0: {e.h0}' if e.h0 else ''}")
+    return lines, problems
 
 
 class _Fresh(importlib.machinery.SourceFileLoader):

@@ -1,6 +1,6 @@
 """Running an eval's tests: its worked examples, and its behaviour on synthetic markets judged the way the engine
 judges a submission (block means against the floor world, as a z score). The engine's own methods are held to theirs
-in its CI; an idea's case evals are held to theirs before the engine runs them."""
+in its CI; an idea's lab evals are held to theirs before the engine runs them."""
 
 import math
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
-from research_ci.api.methods import Case, Power, Property, Recovers, Size, Statistic
+from research_ci.api.evals import Case, Power, Property, Recovers, Size, Statistic
 from research_ci.eval.synthetic import HOUR_NS, market
 from research_ci.kernel.verdict.check import Check
 from research_ci.kernel.verdict.judge import judge, per_t

@@ -1,10 +1,20 @@
-"""The DataCard."""
+"""The DataCard, slot by slot."""
 
 import math
 from typing import Any
 
-from research_ci.render.common import adder, bp, check_line, eval_line, failed_tests
+from research_ci.render.common import MARK, adder, bp, check_line, eval_line, failed_tests
 from research_ci.render.feat import calibration_lines
+
+SLOT_HEADS = {
+    1: "1 floor · the source's admission, and what the engine weighs on every idea's data",
+    2: "2 engine lists · the default checks and the library evals data.py lists; what they flag is treated by default",
+    3: (
+        "3 lab evals · tests of this idea's data: what each flags is treated as its on_fail says; with on_fail=block "
+        "any row it flags in the data after the treatments before it vetoes the data"
+    ),
+    4: "4 tests of lab evals · their CASES and PROPERTIES before the data was fetched, then the pits each covers",
+}
 
 
 def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
@@ -16,8 +26,10 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['entities']} entities · "
         f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
     )
+    out.append(SLOT_HEADS[1])
     add("source", *_source(spec["source"]))
-    add("evals", *_evals(spec))
+    add("checks", *[check_line(c) for c in spec["checks"] if c.get("by") in ("floor", "")])
+    add("grades", _grades(spec["grades"]))
     rows = spec["treatments"]
     if rows:
         add("treatments", f"{'':<40}{'rows':>10}{'|Δ| bp':>10}{'MDE':>9}  at", *[_treatment(t) for t in rows])
@@ -31,11 +43,17 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     cal = spec.get("calibration")
     if cal is not None:
         add("calibrate", *(calibration_lines(cal) or [f"FAIL {n}" for n in cal["notes"]]))
+    out.append(SLOT_HEADS[2])
+    add("checks", *_evals(spec, ("default", "library")))
     conc = spec.get("concentration")
     if conc and any(v for _, v in conc["shares"]):
         head = f"share of the noise that goes away without each {conc['clusters']}, largest first"
         add("clusters", head, *[_shares(k, v) for k, v in conc["shares"] if v])
-    add("grades", _grades(spec["grades"]))
+    lab = [r for r in spec.get("evals", []) if r["by"] == "lab"]
+    out.append(SLOT_HEADS[3])
+    add("lab evals", *[line for r in lab for line in _lab(r, spec)] or ["none"])
+    out.append(SLOT_HEADS[4])
+    add("tests", *[_tested(r) for r in lab] or ["none"])
     add("decide", *(spec["decide"] or ["nothing"]))
     v = spec["verdict"]
     add("verdict", v["status"].upper(), *v["notes"])
@@ -45,16 +63,40 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     return "\n".join(out)
 
 
-def _evals(spec: dict[str, Any]) -> list[str]:
-    """Every eval that ran, in order, with whose it is: the floor and default lists, then the idea's own, each with
-    its validation; under an invalid one, every other test it failed."""
+def _evals(spec: dict[str, Any], by: tuple[str, ...]) -> list[str]:
+    """The checks of slot 2 that ran, in order, with whose they are: the default list, then the library evals, each
+    with its validation; under one invalid by its pits, every other pit it missed."""
     rows = {r["name"]: r for r in spec.get("evals", [])}
     out = []
     for c in spec["checks"]:
+        if c.get("by") not in by:
+            continue
         out.append(eval_line(c))
-        row = rows.get(c["name"]) if c.get("by") in ("case", "library") else None
+        row = rows.get(c["name"]) if c.get("by") == "library" else None
         out += failed_tests(row["validation"]) if row else []
-    return out
+    return out or ["nothing"]
+
+
+def _lab(r: dict[str, Any], spec: dict[str, Any]) -> list[str]:
+    """A lab eval with its H0, what it flagged and what that did; a veto with a few of the rows it flagged."""
+    check = next((c for c in spec["checks"] if c["name"] == r["name"] and c.get("by") == "lab"), None)
+    file = r["validation"].get("file", "")
+    mark = MARK[check["status"]] if check is not None else MARK["skip"]
+    lines = [f"{mark:<4} {r['name']}{f' ({file})' if file else ''} · H0: {r['h0']}"]
+    if check is not None:
+        lines.append(f"     on_fail {r['on_fail']}: {check['detail']}")
+    if r.get("examples"):
+        lines.append(f"     such as {', '.join(r['examples'])}")
+    return lines + failed_tests(r["validation"])
+
+
+def _tested(r: dict[str, Any]) -> str:
+    v = r["validation"]
+    pits = [t for t in v["tests"] if t["name"].startswith(("built-in ", "pit ", "pits: "))]
+    caught = f" · {sum(t['status'] == 'pass' for t in pits)}/{len(pits)} pits caught" if pits else ""
+    status = "FAIL" if v["status"] == "invalid" else "ok  "
+    file = f" ({v['file']})" if v.get("file") else ""
+    return f"{status} {r['name']}{file}: {v['summary']}{caught}"
 
 
 def _source(src: dict[str, Any]) -> list[str]:

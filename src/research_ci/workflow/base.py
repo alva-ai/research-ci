@@ -11,9 +11,9 @@ from typing import Any, Self
 from research_ci.api.contract import Contract, ContractError
 from research_ci.render.common import card_id
 from research_ci.runner.plugins import Registry
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataSettings
-from research_ci.stages.feat import FeatSettings, Frozen, calibration_key
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data.run import DataSettings
+from research_ci.stages.feat.run import FeatSettings, Frozen, calibration_key
 from research_ci.store.environment import environment_record, judging_deps
 from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError
@@ -21,7 +21,16 @@ from research_ci.store.workspace import Workspace, hash_file, rci_home
 from research_ci.workflow.lineage import CONTRACT, STAGES, blockers, invalidated, kind_of, upstream
 from research_ci.workflow.machine import Command, Kind, State, Verdict, WorkflowError, starts_new_version, transition
 from research_ci.workflow.next import Action, IdeaStatus, StageStatus, next_actions
-from research_ci.workflow.templates import CONTRACT_FILE, EXAMPLE, EXAMPLE_FILE, SKELETON, START, START_FILE
+from research_ci.workflow.templates import (
+    CONTRACT_FILE,
+    EVALS_EXAMPLE,
+    EVALS_EXAMPLE_FILE,
+    EXAMPLE,
+    EXAMPLE_FILE,
+    SKELETON,
+    START,
+    START_FILE,
+)
 
 LEDGER_FILE = "ledger.jsonl"
 FORMAT = 2
@@ -115,6 +124,7 @@ class IdeaBase:
                 CONTRACT_FILE: SKELETON,
                 START_FILE: START.format(name=Path(root).resolve().name, idea=Path(root)),
                 EXAMPLE_FILE: EXAMPLE,
+                EVALS_EXAMPLE_FILE: EVALS_EXAMPLE,
             }
             for name, text in files.items():
                 path = Path(root) / name

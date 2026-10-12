@@ -1,10 +1,11 @@
 """What the stages and their lists share: the target a decisive effect names, candidate and per-time tables as the
-engine reads them, and the JSON values the ledger keeps."""
+engine reads them, the treatments a step finds, and the JSON values the ledger keeps."""
 
 import math
 import os
-from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, cast
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,20 @@ DEFAULT_TARGET = "ref.mean"
 
 class DeriveError(ContractError):
     pass
+
+
+@dataclass(frozen=True)
+class Treatment:
+    """``removed`` gives the rows the treatment drops from a field table or a candidate table, so its influence can be
+    weighed by leaving out the label rows that read them; a treatment without it changes rows instead, such as a
+    split, and only ``apply`` says what it does."""
+
+    name: str
+    on: Literal["fields", "candidates"]
+    reason: str
+    rows: int
+    apply: Callable[[pl.DataFrame], pl.DataFrame]
+    removed: Callable[[pl.DataFrame], pl.DataFrame] | None = None
 
 
 def target_use(effect: Effect, c: Contract) -> Use:

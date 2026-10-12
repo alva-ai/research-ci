@@ -1,10 +1,16 @@
-"""The steps of a data source's admission, run once per plugin, options and code: the data check runs them the first
+"""Admitting a data source: does the plugin give, for any past time, what was known then, and does an independent
+source agree with what it gives? Run once per plugin, options and code; every idea using the source reuses it, and
+the first approval of an idea's data that uses it admits it. The steps are the admission's floor list (``STEPS``), run
+in order.
+
+The steps of a data source's admission, run once per plugin, options and code: the data check runs them the first
 time an idea uses the source. They check fidelity, that the rows are what the venue reported, and have no default
 list: two canaries check the checks on this very data."""
 
 import inspect
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import cached_property
 from typing import Any
 
@@ -12,15 +18,17 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from research_ci.api.contract import span
+from research_ci.api.contract import Use, span
 from research_ci.api.data import Levels
 from research_ci.api.plugins import REQUEST_COLUMNS, Reference
 from research_ci.eval.data import reconcile as rc
 from research_ci.eval.data.baseline import baseline, events
 from research_ci.eval.data.replay import Cut, cut_points, replay
-from research_ci.kernel.time.clock import lit_time, span_ns
+from research_ci.kernel.tables import field_table
+from research_ci.kernel.time.clock import from_ns, lit_time, span_ns
 from research_ci.kernel.verdict.check import Check
-from research_ci.stages.steps import Found, Step
+from research_ci.runner.plugins import code_hash
+from research_ci.stages.skeleton import Found, Step, combined
 
 Fetch = Callable[[int, list[str]], pl.DataFrame]
 
@@ -184,3 +192,32 @@ STEPS = (
     Step("independent source agrees", "blocks", agrees, "Another source agrees; grades every field", "reference"),
     Step("canary: reconciliation", "blocks", agreement_canary, "The comparison catches altered values", "reference"),
 )
+
+
+def admit(use: Use, plugin: Any, fields: pl.DataFrame, settings: SourceSettings | None = None) -> dict[str, Any]:
+    s = settings or SourceSettings()
+    started = time.monotonic()
+    names = sorted(fields["field"].unique().to_list())
+    spec: dict[str, Any] = {
+        "plugin": use.name,
+        "options": dict(use.options),
+        "code": code_hash(plugin),
+        "rows": fields.height,
+        "entities": fields["entity"].n_unique(),
+        "fields": names,
+        "settings": asdict(s),
+    }
+
+    def fetch(at: int, entities: list[str]) -> pl.DataFrame:
+        return field_table(plugin.fetch(as_of=from_ns(at), entities=entities))
+
+    seen = Seen(plugin, fields, names, s, np.random.default_rng(s.seed), fetch if can_replay(plugin) else None)
+    found = combined(step.run(seen) for step in STEPS)
+    spec |= found.shown
+    spec["checks"] = [asdict(c) for c in found.checks]
+    failed = [c.name for c in found.checks if c.status == "fail"]
+    status = "not admitted" if failed else "admissible"
+    notes = [f"failed: {', '.join(failed)}"] if failed else ["admitted once, by approving the data of an idea"]
+    spec["verdict"] = {"status": status, "notes": notes}
+    spec["seconds"] = round(time.monotonic() - started, 1)
+    return spec

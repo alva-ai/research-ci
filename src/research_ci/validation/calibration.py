@@ -19,9 +19,10 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
-from research_ci.api.methods import Case, Market
+from research_ci.api.evals import Case, Market
 from research_ci.eval.statistics.ic import rank_ic
 from research_ci.eval.synthetic import HOUR_NS, market
+from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.judge import (
     Evaluate,
     Prepared,
@@ -33,8 +34,6 @@ from research_ci.kernel.verdict.judge import (
     with_scores,
 )
 from research_ci.kernel.verdict.permute import Permutation
-
-Z_BETA = 0.84
 
 
 def calibrate(
@@ -75,8 +74,7 @@ def calibrate(
 
     stand = level_z + noise[0]
     null0 = shuffled(stand)
-    sd0 = float(np.nanstd(null0, ddof=1))
-    mde = (z_base + Z_BETA) * sd0
+    mde = pw.mde(float(np.nanstd(null0, ddof=1)), z_base)
     lam = _size(lambda k: value(stand + k * resid) - value(stand), 1.5 * mde)
     die = [z(level_z + n) < z_base for n in noise]
     live = [z(level_z + n + lam * resid) >= z_base for n in noise]

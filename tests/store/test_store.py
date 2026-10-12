@@ -104,9 +104,10 @@ def test_tree_hash_sees_content_and_names_but_not_listing_order(tmp_path: Path) 
     [
         "render/contract.py",
         "cli/main.py",
-        "stages/defaults/contract.py",
-        "stages/defaults/feat.py",
-        "stages/defaults/data.py",
+        "catalog/markdown.py",
+        "stages/contract/defaults.py",
+        "stages/feat/defaults.py",
+        "stages/data/defaults.py",
     ],
 )
 def test_rewording_a_card_or_a_command_or_changing_a_default_list_keeps_the_engine_hash(
@@ -120,11 +121,12 @@ def test_rewording_a_card_or_a_command_or_changing_a_default_list_keeps_the_engi
         handle.write("\n# reworded\n")
     assert judging_deps()["engine"] == first
     for judged in (
-        "stages/data.py",
-        "stages/feat.py",
-        "stages/floor/data.py",
-        "stages/floor/feat.py",
-        "stages/steps.py",
+        "stages/data/run.py",
+        "stages/feat/run.py",
+        "stages/data/floor.py",
+        "stages/feat/floor.py",
+        "stages/data/treatments.py",
+        "stages/skeleton.py",
     ):
         before = judging_deps()["engine"]
         with (package / judged).open("a") as handle:

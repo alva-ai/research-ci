@@ -5,28 +5,30 @@ import polars as pl
 import pytest
 
 from research_ci.api.contract import Use, span
-from research_ci.api.methods import Source
+from research_ci.api.evals import Source
 from research_ci.eval.data import coverage as cv
-from research_ci.eval.data import treatments as tr
 from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
 from research_ci.runner.research import ResearchError
-from research_ci.stages import data as data_stage
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataSettings
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.floor.data import Seen
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data import defaults as data_defaults
+from research_ci.stages.data import run as data_stage
+from research_ci.stages.data import treatments as tr
+from research_ci.stages.data.floor import Seen
+from research_ci.stages.data.run import DataSettings
+from research_ci.stages.skeleton import Found, Step
 from research_ci.store import vault
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
 from toy import (
+    DATA_EVALS,
     REGISTRY,
     START,
+    ToyData,
     ToyHindsight,
     ToyPairs,
     ToyRelaunched,
@@ -34,6 +36,7 @@ from toy import (
     ToyShort,
     ToySwapped,
     ToyZeros,
+    lab,
     label_contract,
 )
 
@@ -46,7 +49,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import polars as pl
 
-from research_ci.api import Case
+from research_ci.api import Case, Pit
 
 
 def drifting_legs(fields):
@@ -75,22 +78,34 @@ def _venues(apart):
     )
 
 
+def _wander(fields, field, rng):
+    """One venue's closes walking off on their own: the same moves, in another order."""
+    entity = sorted(fields.filter(pl.col("field") == field)["entity"].unique().to_list())[0]
+    hit = (pl.col("entity") == entity) & (pl.col("field") == field)
+    rows = fields.filter(hit).sort("event_time")
+    moves = rng.permutation(np.diff(np.log(rows["value"].to_numpy())))
+    walk = rows["value"][0] * np.exp(np.concatenate([[0.0], np.cumsum(moves)]))
+    return pl.concat([fields.filter(~hit), rows.with_columns(value=pl.Series(walk))])
+
+
 CASES = [
     Case("a venue moving apart is flagged", lambda: drifting_legs(_venues(True))["entity"].unique().to_list(), ["c:X"]),
     Case("venues moving together are not", drifting_legs, 0, given=_venues(False)),
     Case("nothing flags nothing", nothing, 0, given=_venues(True)),
 ]
+PITS = [Pit("wander", _wander, "one venue walks off on its own")]
 '''
 SWAP_TEST = """
 from research_ci.api import Eval
 from evals.legs import drifting_legs, nothing
 
 EVALS = [
-    Eval(drifting_legs, name="drifting legs", covers=[("swap", "close")], on_fail="drop_entities"),
+    Eval(drifting_legs, name="drifting legs", h0="every venue of a symbol moves with the others",
+         covers=[("swap", "close")], on_fail="drop_entities"),
     {lazy}
 ]
 """
-LAZY = 'Eval(nothing, name="lazy", covers=[("swap", "close")]),'
+LAZY = 'Eval(nothing, name="lazy", h0="nothing is wrong", covers=[("swap", "close")]),'
 
 
 def _evals(idea: "Idea", data: str, legs: str = LEGS) -> None:
@@ -108,6 +123,7 @@ def _idea(tmp_path: Path, settings: DataSettings | None = None) -> Idea:
     (idea.root / "contract.py").write_text(label_contract())
     idea.derive_contract()
     idea.approve("contract")
+    lab(idea.root)
     return idea
 
 
@@ -236,13 +252,18 @@ def test_an_idea_eval_must_catch_the_pits_it_claims(tmp_path: Path, monkeypatch,
         lazy_v = evals["lazy"]["validation"]
         assert lazy_v["status"] == "invalid" and evals["lazy"]["flagged"] is None
         assert spec["verdict"]["status"] == "blocked"
+        assert "FAIL lazy (evals/legs.py) · H0: nothing is wrong" in card
+        assert "on_fail mask: invalid 1/2: built-in swap in close, seed 0: expected it flagged, got nothing" in card
         assert (
-            "case     FAIL lazy: invalid 1/2: built-in swap in close, seed 0: expected it flagged, got nothing" in card
+            "FAIL lazy (evals/legs.py): invalid 1/2: built-in swap in close, seed 0" in card
+            and "0/1 pits caught" in card
         )
-        assert "lazy (case eval) is invalid" in card and "make it catch the pits it claims in covers" in card
+        assert "lab eval 'lazy' (slot 4, tests of lab evals) is invalid" in card
+        assert "make it catch the pits it claims in covers" in card
         assert not [t for t in spec["treatments"] if t["name"].startswith("eval lazy")]
     else:
         assert spec["verdict"]["status"] == "ready"
+        assert "ok   drifting legs (evals/legs.py): valid 3/3 · 1/1 pits caught" in card
 
 
 def test_the_default_list_decides_which_checks_run_and_which_pits_calibrate(tmp_path: Path, monkeypatch) -> None:
@@ -254,7 +275,10 @@ def test_the_default_list_decides_which_checks_run_and_which_pits_calibrate(tmp_
     assert [c["name"] for c in spec["checks"]] == ["data is current", "drifting legs", "field grades"]
     tests = spec["evals"][0]["validation"]["tests"]
     assert spec["evals"][0]["validation"]["status"] == "invalid" and tests[-1]["name"] == "pits: swap in close"
-    assert "no pit plants swap, so the claim cannot be checked" in card and "nulls/data.py" in card
+    assert (
+        "no pit plants swap, so the claim cannot be checked" in card
+        and "add a Pit('swap', plant) to PITS in legs.py" in card
+    )
 
 
 SPLIT = "split entities at identity breaks"
@@ -386,7 +410,7 @@ def zeros(fields):
 
 CASES = [Case("no zeros, no flags", zeros, 0, given=pl.DataFrame({"entity": ["a"], "field": ["close"],
                                                                    "event_time": [0], "value": [1.0]}))]
-EVALS = [Eval(zeros, covers=[("spike", "close")])]
+EVALS = [Eval(zeros, h0="no value is zero", covers=[("spike", "close")])]
 """
 
 
@@ -396,7 +420,9 @@ def test_a_wrong_eval_file_says_how_to_fix_it_and_a_row_wise_one_runs_with_a_war
     with pytest.raises(ResearchError, match=r"data.py:1: .*fix the file"):
         idea.check_data()
     (idea.root / "data.py").write_text("import polars as pl\n")
-    with pytest.raises(data_stage.DataError, match=r"data.py defines no EVALS; data.py defines EVALS = \[fn, Eval"):
+    with pytest.raises(
+        data_stage.DataError, match=r"data.py defines no EVALS; data.py defines EVALS = \[Eval\(fn, h0="
+    ):
         idea.check_data()
     (idea.root / "data.py").write_text("EVALS = [1]\n")
     with pytest.raises(data_stage.DataError, match=r"EVALS\[0\] is a int: an entry is a function or Eval.*methods"):
@@ -417,8 +443,12 @@ from functools import partial
 
 from research_ci.api import Eval
 from research_ci.eval.data.sanity import nonpositive
+from evals.toy import closes_at_zero
 
-EVALS = [Eval(partial(nonpositive, levels=("close",)), name="closes at zero or below")]
+EVALS = [
+    Eval(partial(nonpositive, levels=("close",)), name="closes at zero or below"),
+    Eval(closes_at_zero, h0="every close is above zero", on_fail="ask"),
+]
 """
 
 
@@ -430,4 +460,101 @@ def test_a_library_eval_is_trusted_and_runs_with_its_options(tmp_path: Path, mon
     row = spec["evals"][0]
     assert (row["by"], row["validation"]["status"], row["flagged"]) == ("library", "trusted", 3)
     assert "library  [!]  closes at zero or below: engine library · flagged 3 rows; masked" in card
-    assert not (idea.root / ".rci" / "evals").exists(), "nothing to validate"
+    kept = [p.read_text() for p in (idea.root / ".rci" / "evals").glob("*.json")]
+    assert len(kept) == 1 and '"closes_at_zero"' in kept[0], "only the lab eval is validated"
+
+
+BLOCKS = DATA_EVALS.replace('zero")', 'zero", on_fail="block")')
+
+
+def test_a_lab_eval_that_blocks_vetoes_what_the_treatments_before_it_leave_with_its_h0_and_the_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Without level sanity in the default list, nothing before the eval masks the zeros: the eval flags them, and the
+    data is BLOCKED, naming the eval, its H0, how many rows, and a few of them."""
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.data": ToyZeros})
+    monkeypatch.setattr(data_defaults, "CHECKS", [c for c in data_defaults.CHECKS if c.name != "level sanity"])
+    idea = _idea(tmp_path)
+    (idea.root / "data.py").write_text(BLOCKS)
+    (idea.root / "nulls" / "data.py").write_text("raise RuntimeError('nulls/data.py is not read')\n")
+    spec, card = idea.check_data()
+    assert spec["verdict"]["status"] == "blocked" and "calibration" not in spec
+    (note,) = spec["verdict"]["notes"]
+    assert note.startswith(
+        "lab eval 'closes_at_zero' (slot 3) vetoes the data: H0: every close is above zero; it flagged 3 rows that the "
+        "treatments before it left, such as b:X close 2026-01-05T04:00Z, b:X close 2026-01-05T05:00Z, b:X close "
+        "2026-01-05T06:00Z; with on_fail='block'"
+    )
+    assert "FAIL closes_at_zero (evals/toy.py) · H0: every close is above zero" in card and note in card
+    assert "on_fail block: valid 1/1 · flagged 3 rows of the data as it came; on_fail=block: a veto" in card
+    assert not [t for t in spec["treatments"] if t["name"].startswith("eval closes_at_zero")], "a veto treats nothing"
+    assert idea.status().stage("data").state is State.OPEN
+    assert idea.next_actions()[0].reason.startswith("blocked: lab eval 'closes_at_zero' (slot 3) vetoes the data")
+
+
+def test_a_lab_eval_that_blocks_does_not_veto_what_the_treatments_before_it_took_away(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """With the default list, level sanity masks the zeros before the lab evals run: the blocking eval judges the
+    data after that mask, finds nothing, and the check goes on; a masking eval still reads the data as it came."""
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.data": ToyZeros})
+    idea = _idea(tmp_path)
+    (idea.root / "data.py").write_text(BLOCKS)
+    spec, card = idea.check_data()
+    assert spec["verdict"]["status"] != "blocked" and "calibration" in spec, spec["verdict"]
+    (row,) = [e for e in spec["evals"] if e["name"] == "closes_at_zero"]
+    assert row["flagged"] == 0 and "examples" not in row
+    assert (
+        "on_fail block: valid 1/1 · flagged 0 rows of the data after the treatments before it (mask levels at zero or "
+        "below)"
+    ) in card
+    (idea.root / "data.py").write_text(DATA_EVALS)
+    spec, card = idea.check_data()
+    (row,) = [e for e in spec["evals"] if e["name"] == "closes_at_zero"]
+    assert row["flagged"] == 3 and "on_fail mask: valid 1/1 · flagged 3 rows; masked" in card
+
+
+def test_a_data_py_without_a_valid_lab_eval_is_refused_before_the_data_is_fetched(tmp_path: Path, monkeypatch) -> None:
+    idea = _idea(tmp_path)
+
+    def never(self: object, *args: object, **kwargs: object) -> None:
+        raise AssertionError("the data was fetched")
+
+    monkeypatch.setattr(ToyData, "fetch", never)
+    (idea.root / "data.py").unlink()
+    with pytest.raises(data_stage.DataError, match="slot 3, lab evals: there is no data.py, and the data layer needs"):
+        idea.check_data()
+    (idea.root / "data.py").write_text(
+        LIBRARY.replace('    Eval(closes_at_zero, h0="every close is above zero", on_fail="ask"),\n', "")
+    )
+    with pytest.raises(data_stage.DataError, match="slot 3, lab evals: data.py lists no lab eval") as refused:
+        idea.check_data()
+    assert "Eval(fn, h0='<the H0 it rejects>', on_fail=...," in str(refused.value)
+    (idea.root / "data.py").write_text(DATA_EVALS)
+    toy = idea.root / "evals" / "toy.py"
+    toy.write_text(toy.read_text().replace("closes_at_zero, 1, given", "closes_at_zero, 2, given"))
+    with pytest.raises(data_stage.DataError) as refused:
+        idea.check_data()
+    assert str(refused.value) == (
+        "slot 4, tests of lab evals: the lab eval 'closes_at_zero' (evals/toy.py) failed its tests, so it cannot "
+        "judge: invalid 0/1: case 'a close at zero is flagged': expected 2, got 1; fix the eval or its CASES in "
+        "evals/toy.py; `rci eval check evals/toy.py` runs them for free; nothing was recorded"
+    )
+    (idea.root / "data.py").write_text(DATA_EVALS.replace(', h0="every close is above zero"', ""))
+    with pytest.raises(data_stage.DataError, match="the lab eval 'closes_at_zero' names no h0"):
+        idea.check_data()
+    assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
+
+
+def test_a_data_eval_is_tested_on_the_pits_of_its_own_module(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, DataSettings(materiality=0.05, seeds=1))
+    _evals(idea, SWAP_TEST.replace("{lazy}", "").replace('[("swap", "close")]', '[("wander", "close")]'))
+    spec, card = idea.check_data()
+    tests = spec["evals"][0]["validation"]["tests"]
+    assert tests[-1] == {
+        "name": "pit wander: one venue walks off on its own in close, seed 0",
+        "status": "pass",
+        "detail": "caught",
+        "by": "",
+    }
+    assert spec["verdict"]["status"] == "ready" and "1/1 pits caught" in card

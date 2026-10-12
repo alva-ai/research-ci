@@ -1,9 +1,9 @@
 """The diagnostics the engine shows on every feat submission, next to the idea's own evals from ``feat.py``.
 
-Each is a step (``stages/steps.py``) that judges one eval on the label of the first decisive effect, under the step's
+Each is a step (``stages/skeleton.py``) that judges one eval on the label of the first decisive effect, under the step's
 name (``{clusters}`` is the universe's cluster column), against the floor world and the idea's null worlds like any
 eval; an idea eval of the same name is judged in its place. They never decide a verdict. So this list
-can change with experience without touching any freeze: the engine hash leaves ``stages/defaults`` out.
+can change with experience without touching any freeze: the engine hash leaves ``stages/feat/defaults.py`` out.
 """
 
 import polars as pl
@@ -13,8 +13,8 @@ from research_ci.eval.statistics.shuffled import QuantileSpread, RankCorrelation
 from research_ci.eval.statistics.spread import quantile_spread
 from research_ci.eval.structure.filters import kept_without_top, without_top
 from research_ci.kernel.verdict.judge import Statistic
-from research_ci.stages.floor.feat import Seen
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.feat.floor import Seen
+from research_ci.stages.skeleton import Found, Step
 
 SHARE = 0.2
 

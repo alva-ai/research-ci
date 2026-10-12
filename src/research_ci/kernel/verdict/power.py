@@ -55,6 +55,12 @@ class Power:
     mde: float
 
 
+def mde(sd: float, z: float = Z_BASE) -> float:
+    """The smallest true effect a statistic whose null has spread ``sd`` reaches the bar ``z`` with at 80% power, in
+    the statistic's own units: ``(z + z_0.8) · sd``."""
+    return (z + Z_BETA) * sd
+
+
 def power(se: float, span_ns: int, h_ns: int, z: float = Z_BASE) -> Power:
     """``se`` NaN (too few blocks to measure dispersion) gives NaN for everything that needs it."""
     blocks = span_ns / h_ns
@@ -85,12 +91,12 @@ class ConsumerPower:
 def consumer_power(sd: float, days: float, beta: float, min_effect: float, z: float = Z_BASE) -> ConsumerPower:
     years = days / YEAR_DAYS
     per_year = sd / years
-    mde = (z + Z_BETA) * per_year
+    smallest = mde(per_year, z)
     if not math.isfinite(beta) or beta >= 1:
-        return ConsumerPower(per_year, mde, None)
-    ratio = mde / min_effect
+        return ConsumerPower(per_year, smallest, None)
+    ratio = smallest / min_effect
     months = years * ratio ** (1 / (1 - beta)) * 12
-    return ConsumerPower(per_year, mde, months)
+    return ConsumerPower(per_year, smallest, months)
 
 
 def branch_power(pilot: dict[str, float], min_effect: float, z: float = Z_BASE) -> ConsumerPower:
@@ -101,6 +107,5 @@ def branch_power(pilot: dict[str, float], min_effect: float, z: float = Z_BASE) 
     if n_eff < 2 or not math.isfinite(pilot["sd"]):
         return ConsumerPower(math.nan, math.nan, None)
     per_year = pilot["sd"] / horizon_years
-    mde = (z + Z_BETA) * per_year / math.sqrt(n_eff)
-    needed = ((z + Z_BETA) * per_year / min_effect) ** 2 / pilot["independence"]
-    return ConsumerPower(per_year, mde, needed * pilot["every_days"] / 30.4)
+    needed = (mde(per_year, z) / min_effect) ** 2 / pilot["independence"]
+    return ConsumerPower(per_year, mde(per_year, z) / math.sqrt(n_eff), needed * pilot["every_days"] / 30.4)

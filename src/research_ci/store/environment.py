@@ -8,17 +8,21 @@ from research_ci.kernel.hashing import hash_obj
 from research_ci.store.workspace import hash_file, hash_tree
 
 ENGINE = "research-ci"
-LEFT_OUT = frozenset({"render", "cli", "stages/defaults", "workflow/templates.py"})
+LEFT_OUT = frozenset({"render", "cli", "catalog", "workflow/templates.py"})
+DEFAULT_LISTS = "stages/*/defaults.py"
 
 
 def judging_deps() -> dict[str, str]:
     """What the verdict machinery depends on: engine source, interpreter, and the engine's own dependencies. The
-    engine source leaves out ``render`` and ``cli``, which shape what is shown, not what is judged, the files
-    ``rci init`` writes (``workflow/templates.py``), and the default lists in ``stages/defaults``: feat's diagnostics,
-    which never decide, the data layer's checks, whose result the data freeze pins by content, and derive's, which
-    the contract's approval pins. The floor lists in ``stages/floor`` are part of it."""
+    engine source leaves out ``render``, ``cli`` and ``catalog``, which shape what is shown, not what is judged, the
+    files ``rci init`` writes (``workflow/templates.py``), and the default list of every layer,
+    ``stages/<layer>/defaults.py``: feat's diagnostics, which never decide, the data layer's checks, whose result the
+    data freeze pins by content, and derive's, which the contract's approval pins. The floor lists,
+    ``stages/<layer>/floor.py``, are part of it."""
+    root = Path(research_ci.__file__).parent
+    defaults = {p.relative_to(root).as_posix() for p in root.glob(DEFAULT_LISTS)}
     return {
-        "engine": hash_tree(Path(research_ci.__file__).parent, leave_out=LEFT_OUT),
+        "engine": hash_tree(root, leave_out=LEFT_OUT | defaults),
         "python": f"{platform.python_implementation()} {platform.python_version()}",
         "engine_packages": hash_obj(engine_packages()),
     }
