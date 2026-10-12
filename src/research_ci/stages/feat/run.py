@@ -166,10 +166,13 @@ def submit(
     n: int,
     earlier: dict[str, int],
     settings: FeatSettings | None = None,
+    again: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Judge one file of features as the ``n``-th submission of the layer. ``earlier`` maps the scores of earlier
-    submissions (by hash) to their number; the same scores again are refused, since they are not a new trial, and so
-    are, before anything runs, a ``feat.py`` without a valid lab eval, an alternative of the contract without a null
+    submissions of this version (by hash) to their number; the same scores again are refused, since they are not a new
+    trial. ``again`` maps those of earlier versions: the same scores are judged again under this version as the
+    submission they were, without a new trial, since a reopened contract judges them by its rules. Refused too are,
+    before anything runs, a ``feat.py`` without a valid lab eval, an alternative of the contract without a null
     world, and a null world that cannot run."""
     s = settings or FeatSettings()
     started = time.monotonic()
@@ -186,11 +189,14 @@ def submit(
     digest = hash_frame(scores)
     if digest in earlier:
         raise FeatError(f"the same scores as submission {earlier[digest]}; they would not be a new trial{NO_TRIAL}")
+    rejudged = (again or {}).get(digest)
+    n = rejudged or n
     need = pw.z_need(n, s.z_base)
     seen = replace(seen, features=features, scores=scores, cost=cost, need=need)
     floors, shown = _run(floor.FLOORS, seen), _run(floor.SHOWN, seen)
     out: dict[str, Any] = {
         "n": n,
+        "again": rejudged is not None,
         "features": {"path": str(Path(path).resolve()), "hash": hash_file(path)},
         "scores": {"hash": digest, **floors.shown["scores"]},
         "floors": [asdict(ch) for ch in floors.checks],

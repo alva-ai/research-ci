@@ -30,10 +30,22 @@ class FeatCommands(IdeaBase):
         fs.ready(self.root, contract, self.registry)
         frozen = self._frozen_feat(contract)
         calibration = self._calibration(frozen)
-        earlier = [r["payload"]["result"] for r in self._submissions()]
+        version = current.version + starts_new_version(current.state, Command.SUBMIT)
+        submissions = self._submissions()
+        earlier = [r["payload"]["result"] for r in submissions]
         n = current.trials + 1
-        scores = {e["scores"]["hash"]: e["n"] for e in earlier}
-        result = fs.submit(self.root, frozen, Path(path), n, scores, self.feat_settings)
+        this = {
+            e["scores"]["hash"]: e["n"]
+            for r, e in zip(submissions, earlier, strict=True)
+            if r["payload"]["version"] == version
+        }
+        before = {
+            e["scores"]["hash"]: e["n"]
+            for r, e in zip(submissions, earlier, strict=True)
+            if r["payload"]["version"] != version
+        }
+        result = fs.submit(self.root, frozen, Path(path), n, this, self.feat_settings, again=before)
+        n = result["n"]
         first = (
             all(e["calibration"]["record"] != calibration["hash"] for e in earlier) and calibration["kind"] == CALIBRATE
         )
@@ -44,12 +56,13 @@ class FeatCommands(IdeaBase):
         result = jsonable(result)
         deps = self.deps(FEAT, frozen.deps | fs.files(self.root) | fs.eval_files(self.root, result))
         deps |= {"features": result["features"]["hash"], "calibration": calibration["hash"]}
-        version = current.version + starts_new_version(current.state, Command.SUBMIT)
         text = result_card(result, self.root.name, version)
-        self.workspace.write_json(f"feat-result-{n}.json", result)
-        self.workspace.path(f"feat-result-{n}.txt").write_text(text + "\n")
+        name = f"feat-result-{n}-v{version}" if result["again"] else f"feat-result-{n}"
+        self.workspace.write_json(f"{name}.json", result)
+        self.workspace.path(f"{name}.txt").write_text(text + "\n")
         verdict = Verdict(result["verdict"]["status"])
-        state = self.submit(FEAT, verdict, {"result": result, "deps": deps}, "; ".join(result["verdict"]["notes"]))
+        payload = {"result": result, "deps": deps, "again": result["again"]}
+        state = self.submit(FEAT, verdict, payload, "; ".join(result["verdict"]["notes"]))
         return result, text, state
 
     def explore_feat(self, path: Path) -> tuple[dict[str, Any], str]:

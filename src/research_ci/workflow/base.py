@@ -145,7 +145,7 @@ class IdeaBase:
             kind, payload, r = record["kind"], record["payload"], replay[record["stage"]]
             r.approved = r.approved and payload["version"] == r.version or kind == Command.APPROVE
             r.state, r.version, r.note = State(payload["to"]), payload["version"], payload.get("note", "")
-            r.trials += kind == Command.SUBMIT
+            r.trials += kind == Command.SUBMIT and not payload.get("again", False)
             r.extra += payload["trials"] if kind == Command.EXTEND else 0
             if kind == Command.APPROVE and record["stage"] == CONTRACT:
                 budget = payload["budget"]
@@ -215,7 +215,8 @@ class IdeaBase:
         """Record a layer submission and its verdict, one trial: PASSED puts the layer up for review; FAILED and
         TAINTED leave it OPEN, or PAUSED when that was the last trial."""
         n = self._allowed(stage, Command.SUBMIT, verdict is Verdict.PASSED).trials + 1
-        head = f"submission {n} {verdict}"
+        n = (payload or {}).get("result", {}).get("n", n) if (payload or {}).get("again") else n
+        head = f"submission {n} {verdict}" + (" judged again" if (payload or {}).get("again") else "")
         record = {
             **(payload or {}),
             "verdict": verdict,
