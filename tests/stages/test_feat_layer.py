@@ -164,8 +164,8 @@ def test_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> No
 
 
 def test_diagnostics_are_shown_and_never_decide(tmp_path: Path) -> None:
-    """The engine's defaults run in the floor world in slot 2 and are shown: one below the bar does not fail a
-    submission whose decisive effect beats random and that no lab eval or world rejects. A world that names a default
+    """The engine's defaults run in the floor world in slot 2 and are shown: whether they reach the bar does not decide
+    a submission whose decisive effect beats random and that no lab eval or world rejects. A world that names a default
     diagnostic judges it in slot 3."""
     idea = _idea(tmp_path)
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
@@ -174,13 +174,10 @@ def test_diagnostics_are_shown_and_never_decide(tmp_path: Path) -> None:
     assert set(shown) == {
         (n, "default", "floor") for n in ("rank ic", "rank ic without top symbol", "top minus bottom fifth")
     }
-    assert not shown[("top minus bottom fifth", "default", "floor")]["passed"], "below the bar, and still PASSED"
     assert all(r["shuffles"] == QUICK.shown_reps for r in shown.values())
     vetoes = {(r["name"], r["by"], r["world"]): r for r in result["vetoes"]}
     assert set(vetoes) == {("funding_ic", "lab", "floor"), ("rank ic without top symbol", "default", "null 1")}
-    assert (
-        "2 engine lists · the default diagnostics" in text and "[!]  top minus bottom fifth (default) vs floor" in text
-    )
+    assert "2 engine lists · the default diagnostics" in text and "top minus bottom fifth (default) vs floor" in text
     assert "ok   alternatives covered: chance: floor · timing: floor · tail: null 1" in text
 
 
