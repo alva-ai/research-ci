@@ -20,8 +20,8 @@ def nonpositive(fields: pl.DataFrame, levels: tuple[str, ...]) -> pl.DataFrame:
 
 
 def stale(fields: pl.DataFrame, levels: tuple[str, ...], runs: float) -> pl.DataFrame:
-    """Events that repeat the value before them in a run of one value lasting longer than ``runs`` of the entity's
-    usual spacings; the first event of the run, the last one that changed, is kept."""
+    """Events repeating the value before them in a long run. The run of one value lasts longer than ``runs`` of the
+    entity's usual spacings; the first event of the run, the last one that changed, is kept."""
     e = events(_levels(fields, levels))
     new = (pl.col("value") != pl.col("value").shift(1)).fill_null(True)
     e = e.with_columns(run=new.cum_sum().over(BY))
@@ -31,8 +31,9 @@ def stale(fields: pl.DataFrame, levels: tuple[str, ...], runs: float) -> pl.Data
 
 
 def spikes(fields: pl.DataFrame, levels: tuple[str, ...], factor: float, window: int) -> pl.DataFrame:
-    """Events of a declared level ``factor`` or more away from the median of the last ``window`` events whose move does
-    not last: the median of the ``window`` events from this one is back within ``factor`` of the one before."""
+    """Events of a declared level that jump and come back. An event is ``factor`` or more away from the median of the
+    last ``window`` events, and its move does not last: the median of the ``window`` events from this one is back within
+    ``factor`` of the one before."""
     level = pl.col("value")
     e = events(_levels(fields, levels)).with_columns(
         before=level.rolling_median(window, min_samples=1).shift(1).over(BY),

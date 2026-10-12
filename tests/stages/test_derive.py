@@ -65,7 +65,9 @@ def test_a_target_that_ignores_the_scores_blocks_the_contract(tmp_path: Path) ->
     assert "top" in checks["target reads the score"]["detail"]
     assert "FAIL target reads the score" in card and "BLOCKED" in card
     contract = idea.status().stage("contract")
-    assert (contract.state, contract.note) == (State.OPEN, "blocked: failed checks: target reads the score")
+    assert contract.state is State.OPEN and contract.note.startswith("blocked: target reads the score failed: ref.mean")
+    why = "target reads the score failed: ref.mean gives the same number for any scores"
+    assert why in card and "fix the contract, or the plugin it names, and derive again" in card
     assert [(a.who, a.command) for a in idea.next_actions()] == [("agent", "rci contract derive")]
     with pytest.raises(WorkflowError, match="cannot approve a contract stage that is OPEN"):
         idea.approve("contract")
@@ -89,10 +91,9 @@ def test_a_contract_whose_noise_cannot_be_measured_is_blocked(tmp_path: Path, mo
     _, card = idea.derive_contract()
     verdict = idea.workspace.read_json("contract.json")["spec"]["verdict"]
     assert verdict["status"] == "blocked" and "BLOCKED" in card
-    assert verdict["notes"] == ["carry: too few blocks on every horizon to measure the noise"]
-    assert (
-        idea.status().stage("contract").note == "blocked: carry: too few blocks on every horizon to measure the noise"
-    )
+    why = "carry: too few blocks on every horizon to measure the noise; give the contract a longer explore period"
+    assert verdict["notes"][0].startswith(why) and why in card
+    assert idea.status().stage("contract").note.startswith(f"blocked: {why}")
     with pytest.raises(WorkflowError, match="cannot approve"):
         idea.approve("contract")
 

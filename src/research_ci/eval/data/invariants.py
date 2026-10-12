@@ -22,9 +22,9 @@ def hedged_legs(
     min_move: float,
     keep: tuple[str, ...] = (),
 ) -> pl.DataFrame:
-    """Per candidate row (``t``, ``entity``): the legs' price ratio and the correlation of their latest returns over
-    the pair's last ``window`` decisions, and ``ok``. The correlation counts only when both legs' returns vary by at
-    least ``min_move``; a pegged asset's returns are noise on both venues."""
+    """Per candidate row: the legs' price ratio, correlation, and ``ok``. Rows are ``t`` and ``entity``; the correlation
+    is that of the legs' latest returns over the pair's last ``window`` decisions. The correlation counts only when both
+    legs' returns vary by at least ``min_move``; a pegged asset's returns are noise on both venues."""
     px = (
         fields.filter(pl.col("field") == price)
         .sort("entity", "available_at")

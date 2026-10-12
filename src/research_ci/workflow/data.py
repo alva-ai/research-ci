@@ -4,10 +4,9 @@ source."""
 from dataclasses import asdict
 from typing import Any
 
-from research_ci.api.contract import Contract, ContractError, as_use
+from research_ci.api.contract import as_use
 from research_ci.render.data import data_card
-from research_ci.stages import feat as fs
-from research_ci.stages.contract import jsonable
+from research_ci.stages.common import jsonable
 from research_ci.stages.data import check_data, current_data_deps
 from research_ci.store import vault
 from research_ci.store.freeze import drift
@@ -22,21 +21,23 @@ DATA_TEXT = "data-card.txt"
 
 class DataCommands(IdeaBase):
     def check_data(self, keep: tuple[str, ...] = ()) -> tuple[dict[str, Any], str]:
-        """Run the source's admission checks if it has none yet, check the data against the contract, and record the
-        result: the DataCard goes up for review, or the layer stays OPEN with the reason when the check is blocked.
-        ``keep`` names treatments a person chose not to apply. Treated data of earlier checks that was never frozen
-        is removed from the vault."""
+        """Run the source's admission checks if it has none yet, check the data against the contract, calibrate the
+        decisive test on the treated data, and record the result: the DataCard goes up for review, or the layer stays
+        OPEN with the reason when the check is blocked. ``keep`` names treatments a person chose not to apply. Treated
+        data of earlier checks that was never frozen is removed from the vault."""
         contract = self._approved_contract()
         current = self._allowed(DATA, Command.CHECK)
         previous = self._last(Command.CHECK, DATA)
-        checked = check_data(contract, self.root, self.registry, self.data_settings, keep=keep)
+        checked = check_data(
+            contract,
+            self.root,
+            self.registry,
+            self.data_settings,
+            keep=keep,
+            feat_settings=self.feat_settings,
+            key=self._calibration_key,
+        )
         spec = jsonable(checked.spec)
-        if spec["verdict"]["status"] != "blocked" and contract.universe is not None:
-            spec["calibration"] = self._calibrate_gate(contract, spec["panel"])
-            if not spec["calibration"]["ok"]:
-                why = "; ".join(spec["calibration"]["notes"])
-                note = f"the gate cannot be calibrated on this data: {why}; change the target or the contract"
-                spec["verdict"] = {"status": "blocked", "notes": [note]}
         version = current.version + starts_new_version(current.state, Command.CHECK)
         text = data_card(spec, self.root.name, version)
         verdict = spec["verdict"]
@@ -52,16 +53,6 @@ class DataCommands(IdeaBase):
         if previous is not None:
             self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["panel"], spec["panel"])
         return spec, text
-
-    def _calibrate_gate(self, contract: Contract, panel: dict[str, Any]) -> dict[str, Any]:
-        """The gate in the floor world on the treated data, before any features exist: the contract's decisive target
-        must read the scores, a stand-in must die as often as chance allows, and a planted signal must live. Feat
-        reuses it while nothing it rests on changes."""
-        try:
-            frozen = fs.frozen(contract, panel["hash"], panel["exclusions"], self.registry, self.feat_settings)
-        except ContractError as exc:
-            return {"ok": False, "notes": [str(exc)], "rows": [], "checks": [], "key": {}}
-        return jsonable(fs.calibration(frozen, self.feat_settings) | {"key": self._gate_key(frozen)})
 
     def _stage_freeze(self, stage: str, current: StageStatus) -> StageFreeze | None:
         if stage != DATA:

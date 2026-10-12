@@ -40,7 +40,8 @@ def _dropping(
 
 
 def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged field's rows within ``around_ns`` of each window (``entity``, ``field``, ``start``, ``end``)."""
+    """Drop the flagged field's rows within ``around_ns`` of each window. A window has ``entity``, ``field``, ``start``
+    and ``end``."""
     pad = pl.duration(nanoseconds=around_ns, time_unit="ns")
     keys = ["entity", "field"]
     w = windows.select(*keys, (pl.col("start") - pad).alias("lo"), (pl.col("end") + pad).alias("hi"))
@@ -54,7 +55,8 @@ def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, 
 
 
 def mask_rows(name: str, reason: str, flagged: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged rows: by ``entity`` and ``event_time``, and by ``field`` too when the flags name one."""
+    """Drop the flagged rows. Flags match by ``entity`` and ``event_time``, and by ``field`` too when the flags name
+    one."""
     keys = ["entity", "event_time"] + (["field"] if "field" in flagged.columns else [])
     flags = flagged.select(*keys).with_columns(pl.col("event_time").cast(TIME)).unique()
 
@@ -74,7 +76,7 @@ def drop_entities(name: str, reason: str, entities: Sequence[str], fields: pl.Da
 
 
 def drop_spans(name: str, reason: str, spans: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop every row of each span's ``entity`` whose event falls in ``[start, end]``."""
+    """Drop the rows each span covers. Every row of the span's ``entity`` whose event falls in ``[start, end]`` goes."""
     keys = spans.select("entity", pl.col("start").cast(TIME), pl.col("end").cast(TIME))
 
     def hit(f: pl.DataFrame) -> pl.Series:
@@ -86,9 +88,9 @@ def drop_spans(name: str, reason: str, spans: pl.DataFrame, fields: pl.DataFrame
 
 
 def split_entities(name: str, reason: str, splits: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Rename the rows of each split's ``entity`` whose event is at or after its ``at`` to its ``to``, up to the
-    entity's next split. The rows stay; ``rows`` counts those renamed. It applies to any table with ``entity`` and
-    ``event_time``."""
+    """Rename each split entity's rows from the split on. The rows of each split's ``entity`` whose event is at or after
+    its ``at`` are renamed to its ``to``, up to the entity's next split. The rows stay; ``rows`` counts those renamed.
+    It applies to any table with ``entity`` and ``event_time``."""
     s = splits.select("entity", pl.col("at").cast(TIME), "to").sort("at")
     names = s["entity"].unique()
 
@@ -121,7 +123,7 @@ def drop_candidates(name: str, reason: str, bad: pl.DataFrame) -> Treatment:
 
 
 def apply_all(treatments: Sequence[Treatment], fields: pl.DataFrame) -> pl.DataFrame:
-    """The field table after every field treatment: the drops at once, then the rest in order."""
+    """The field table after every field treatment. The drops come at once, then the rest in order."""
     drops = [t.removed for t in treatments if t.on == "fields" and t.removed is not None]
     if drops:
         indexed = fields.with_row_index("_row")

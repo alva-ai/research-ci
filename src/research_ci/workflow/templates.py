@@ -38,15 +38,24 @@ write, and the helper commands.
    cost models, with their options and fields. If you looked at the data or at results for this idea (plugin data,
    notebooks, backtests), declare it in `used`; `used=()` only if nothing was seen. Run `rci contract derive`; a
    person approves the ContractCard before any other work starts.
-2. Data, your loop: run `rci data check`. Add tests in `data.py` only for a risk the default checks miss;
-   `rci methods` lists the functions they can call.
+2. Data, your loop: run `rci data check`. For a risk the default checks miss, add an eval to `EVALS` in `data.py`
+   (see Evals below).
 3. Feat, your loop: copy `research/example.py` to `research/<name>.py` and write your features there. Try a file with
    `rci feat explore <file>` (free), then judge it with `rci feat submit <file>` (one trial of the budget). Give each
    alternative of the contract a world in `nulls/feat.py`, or the ResultCard marks it uncovered: import `Null` and
    `PermuteWithin` from `research_ci.api`, then
    `NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"))]`. Optional
-   diagnostics go in `feat.py`; `rci methods` lists what they can call and every field of a null world.
+   diagnostics are evals in `EVALS` in `feat.py`; `rci methods` lists every field of a null world.
 4. A person reviews each result after your loop and approves it; then the next stage opens.
+
+Evals: `EVALS = [...]` in `data.py` or `feat.py` lists general evals of the engine's library (`rci methods` lists
+them; they are trusted) and case evals of your own. A case eval is a polars function in a module of the idea, such as
+`evals/<name>.py`, imported into `EVALS` (`from evals.<name> import <eval>`), with its tests in the same module:
+`CASES = [Case("<what it shows>", <eval>, <expected frame or number>, given=<input frame>)]`, required, and
+`PROPERTIES`, optional. The engine runs those tests before it runs the eval: one without tests is refused, and one
+that fails a test does not run and is shown with the test, what it expected, and what it got. Run
+`rci eval check evals/<name>.py` any time; it is free. Wrap an eval in `Eval(fn, ...)` when its layer needs more:
+`on_fail` and `covers` in `data.py`, `label`, `horizons`, and `combine` in `feat.py`.
 
 Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with

@@ -18,9 +18,9 @@ OPEN = 2**62
 
 
 def spans(fields: pl.DataFrame, removed: pl.DataFrame, by: Sequence[str] = ()) -> pl.DataFrame:
-    """When each removed row was current in ``fields``: ``entity``, ``event_time``, ``start`` (when it became known)
-    and ``end`` (when the next row of its entity and field did; far in the future for the last), both in ns. ``by``
-    names columns of ``removed`` that set its rows apart, such as the treatment; they come first."""
+    """When each removed row was current in ``fields``. Columns ``entity``, ``event_time``, ``start`` (when it became
+    known) and ``end`` (when the next row of its entity and field did; far in the future for the last), both in ns.
+    ``by`` names columns of ``removed`` that set its rows apart, such as the treatment; they come first."""
     keys, group = ["entity", "field"], list(by)
     schema = {**{k: removed.schema[k] for k in group}, **SPAN_SCHEMA}
     known = fields.lazy().join(removed.lazy().select(keys).unique(), on=keys, how="semi")
@@ -34,9 +34,10 @@ def spans(fields: pl.DataFrame, removed: pl.DataFrame, by: Sequence[str] = ()) -
 def touched(
     rows: pl.DataFrame, found: pl.DataFrame, legs: Sequence[str], h: str = "h_ns", by: Sequence[str] = ()
 ) -> pl.DataFrame:
-    """The label rows (``_r``) whose window ``[t, t + h]`` meets a span (``entity``, ``start``, ``end``) of one of
-    their ``legs``, the columns that name entities; ``h`` is the column with each row's horizon in ns, and ``by`` the
-    columns of ``found`` that set spans apart, such as the treatment: one row per group and label row touched."""
+    """Label rows whose window meets a span of a leg. One row per group and label row touched: a label row (``_r``)
+    whose window ``[t, t + h]`` meets a span (``entity``, ``start``, ``end``) of one of its ``legs``, the columns that
+    name entities. ``h`` is the column with each row's horizon in ns, and ``by`` the columns of ``found`` that set spans
+    apart, such as the treatment."""
     keys = list(by)
     legs = [c for c in legs if c in rows.columns]
     schema = {**{k: found.schema[k] for k in keys}, "_r": rows.schema["_r"]}

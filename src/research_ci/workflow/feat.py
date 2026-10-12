@@ -7,7 +7,7 @@ from research_ci.api.contract import Contract
 from research_ci.render.common import adder
 from research_ci.render.feat import calibration_lines, explore_card, result_card
 from research_ci.stages import feat as fs
-from research_ci.stages.contract import jsonable
+from research_ci.stages.common import jsonable
 from research_ci.store.freeze import drift
 from research_ci.store.workspace import hash_file
 from research_ci.workflow.base import DATA, FEAT, IdeaBase, StageFreeze
@@ -41,7 +41,7 @@ class FeatCommands(IdeaBase):
         result["calibration"] |= {k: cal[k] for k in ("rows", "checks")}
         result["budget"] = current.budget
         result = jsonable(result)
-        deps = self.deps(FEAT, frozen.deps | fs.files(self.root))
+        deps = self.deps(FEAT, frozen.deps | fs.files(self.root) | fs.eval_files(self.root, result))
         deps |= {"features": result["features"]["hash"], "calibration": calibration["hash"]}
         version = current.version + starts_new_version(current.state, Command.SUBMIT)
         text = result_card(result, self.root.name, version)
@@ -87,7 +87,7 @@ class FeatCommands(IdeaBase):
         the frozen data, the engine, the plugins feat runs, and the settings are unchanged; otherwise the first
         submission runs and records one, and later ones reuse it. A failed one refuses the submission until one of them
         changes."""
-        key = self._gate_key(frozen)
+        key = self._calibration_key(frozen)
         checked = self._frozen_check()
         cal = checked["payload"]["spec"].get("calibration") if checked else None
         if checked is not None and cal is not None and cal["key"] == key and cal["ok"]:

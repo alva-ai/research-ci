@@ -20,11 +20,12 @@ BREAK_SCHEMA = {"entity": pl.String, "last": TIME, "at": TIME, "ratio": pl.Float
 def breaks(
     fields: pl.DataFrame, levels: tuple[str, ...], factor: float, window: int, gap_factor: float
 ) -> pl.DataFrame:
-    """Where a declared level comes back, after a gap longer than ``gap_factor`` of the entity's usual spacings (the
-    baseline's long gap), at ``factor`` or more away from where it was: the median of the ``window`` events from the
-    return against the median of the ``window`` events before the gap. One row per entity and gap, however many
-    fields show it: ``entity``, ``last`` (the last event before the gap), ``at`` (the first after it), ``ratio`` (the
-    level after over the level before, the largest move among the fields) and ``fields``."""
+    """Declared levels that come back elsewhere after a long gap. A level comes back after a gap longer than
+    ``gap_factor`` of the entity's usual spacings (the baseline's long gap), at ``factor`` or more away from where it
+    was: the median of the ``window`` events from the return against the median of the ``window`` events before the gap.
+    One row per entity and gap, however many fields show it: ``entity``, ``last`` (the last event before the gap),
+    ``at`` (the first after it), ``ratio`` (the level after over the level before, the largest move among the fields)
+    and ``fields``."""
     if not levels:
         return pl.DataFrame(schema=BREAK_SCHEMA)
     level, by = pl.col("value"), ["entity", "field"]
@@ -49,8 +50,8 @@ def breaks(
 
 
 def renames(found: pl.DataFrame, taken: pl.Series | Collection[str]) -> pl.DataFrame:
-    """What the split calls each new series: ``entity``, ``at`` and ``to``. The k-th break of ``E`` starts
-    ``E#{k+1}``; an entity already named ``E#n`` continues at ``E#{n+1}``; names already in use are skipped."""
+    """What the split calls each new series: ``entity``, ``at``, ``to``. The k-th break of ``E`` starts ``E#{k+1}``; an
+    entity already named ``E#n`` continues at ``E#{n+1}``; names already in use are skipped."""
     schema = {"entity": pl.String, "at": TIME, "to": pl.String}
     if found.is_empty():
         return pl.DataFrame(schema=schema)

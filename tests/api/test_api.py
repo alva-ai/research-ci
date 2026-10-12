@@ -1,6 +1,7 @@
 import json
 import types
 from dataclasses import asdict
+from functools import partial
 
 import pytest
 
@@ -8,8 +9,8 @@ from research_ci.api import (
     Alternative,
     Contract,
     ContractError,
-    Criterion,
     Effect,
+    Eval,
     Execution,
     Forward,
     Label,
@@ -18,7 +19,7 @@ from research_ci.api import (
     Universe,
     Usage,
     Use,
-    criteria_of,
+    evals_of,
 )
 
 CARRY = Label("carry", Use("ref.carry", {"flow": "funding_rate"}), horizons=("8h", "24h", "72h"))
@@ -98,19 +99,33 @@ def test_a_backtest_is_refused_as_the_decisive_effect_because_the_algo_layer_jud
     assert "label effect" in str(refused.value) and "top" in str(refused.value)
 
 
-def test_criteria_and_nulls_are_validated() -> None:
-    Criterion("predictive", evaluate=lambda table: table)
+def test_evals_and_nulls_are_validated() -> None:
+    def ic(table):
+        return table
+
+    assert Eval(ic).name == "ic" and Eval(partial(ic), name="ic again").name == "ic again"
     with pytest.raises(ValueError, match="combine"):
-        Criterion("predictive", evaluate=lambda table: table, combine="sum")
+        Eval(ic, combine="sum")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="lambda"):
+        Eval(lambda table: table)
+    with pytest.raises(ValueError, match="on_fail"):
+        Eval(ic, on_fail="drop")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="explanation"):
         Null(explains=" ", world=PermuteWithin(bucket_by="time"))
     with pytest.raises(ValueError, match="20"):
         Null(explains="chance", world=PermuteWithin(bucket_by="time"), reps=5)
     with pytest.raises(ValueError, match="PermuteWithin"):
         Null(explains="chance", world="shift time")  # type: ignore[arg-type]
-    assert Null(explains="tail", world=PermuteWithin(bucket_by="symbol")).keeps == "symbol"
-    ok = types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda table: table)])
-    assert [c.name for c in criteria_of(ok)] == ["a"]
-    assert criteria_of(types.SimpleNamespace()) == [] == criteria_of(types.SimpleNamespace(CRITERIA=[]))
-    with pytest.raises(ValueError, match="unique"):
-        criteria_of(types.SimpleNamespace(CRITERIA=[Criterion("a", evaluate=lambda table: table)] * 2))
+    assert Null(explains="tail", world=PermuteWithin(bucket_by="symbol"), evals=["a"]).evals == ("a",)  # type: ignore[arg-type]
+    feat = evals_of(types.SimpleNamespace(EVALS=[ic, Eval(ic, name="b", horizons=["8h"])]), "feat")
+    assert [(e.name, e.combine, e.horizons) for e in feat] == [("ic", "max", None), ("b", "max", ("8h",))]
+    data = evals_of(types.SimpleNamespace(EVALS=[ic]), "data")
+    assert [(e.name, e.on_fail) for e in data] == [("ic", "mask")]
+    with pytest.raises(ValueError, match="unique; give these a name=: ic"):
+        evals_of(types.SimpleNamespace(EVALS=[ic, ic]), "feat")
+    with pytest.raises(ValueError, match="sets on_fail, which only data.py reads"):
+        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, on_fail="ask")]), "feat")
+    with pytest.raises(ValueError, match="sets label, which only feat.py reads"):
+        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, label="carry")]), "data")
+    with pytest.raises(ValueError, match="EVALS must be a list"):
+        evals_of(types.SimpleNamespace(EVALS=ic), "data")

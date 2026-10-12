@@ -3,7 +3,7 @@
 import math
 from typing import Any
 
-from research_ci.render.common import adder, bp, check_line
+from research_ci.render.common import adder, bp, check_line, eval_line, failed_tests
 from research_ci.render.feat import calibration_lines
 
 
@@ -17,7 +17,7 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
     )
     add("source", *_source(spec["source"]))
-    add("checks", *[check_line(c) for c in spec["checks"]])
+    add("evals", *_evals(spec))
     rows = spec["treatments"]
     if rows:
         add("treatments", f"{'':<40}{'rows':>10}{'|Δ| bp':>10}{'MDE':>9}  at", *[_treatment(t) for t in rows])
@@ -26,9 +26,6 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
             add("", f"kept by a person: {', '.join(spec['kept'])}")
     else:
         add("treatments", "none needed")
-    for t in spec["tests"]:
-        mark = {"holds": "ok  ", "returned": "FAIL", "not calibrated": "[!] "}.get(t.get("status", ""), "--  ")
-        add("tests", f"{mark} {t['name']}: flagged {t['flagged']} rows · on fail {t['on_fail']}")
     if spec["power"]:
         add("power", f"{'H':<12}{'MDE before':>11}{'after':>8}", *[_power_row(p) for p in spec["power"]])
     cal = spec.get("calibration")
@@ -46,6 +43,18 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
         add("warnings", *[f"[!] {w}" for w in spec["warnings"]])
     out.append("-" * 100)
     return "\n".join(out)
+
+
+def _evals(spec: dict[str, Any]) -> list[str]:
+    """Every eval that ran, in order, with whose it is: the floor and default lists, then the idea's own, each with
+    its validation; under an invalid one, every other test it failed."""
+    rows = {r["name"]: r for r in spec.get("evals", [])}
+    out = []
+    for c in spec["checks"]:
+        out.append(eval_line(c))
+        row = rows.get(c["name"]) if c.get("by") in ("case", "library") else None
+        out += failed_tests(row["validation"]) if row else []
+    return out
 
 
 def _source(src: dict[str, Any]) -> list[str]:

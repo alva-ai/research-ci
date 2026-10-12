@@ -1,7 +1,7 @@
 """The feat layer on the toy: the decisive effect alone decides. A real spread passes and goes up for review, noise
 fails, a peek is tainted; diagnostics and alternatives without a world are shown, never deciding; the data check
-calibrates the gate, and a decisive target that cannot see a planted signal blocks the data, or, when anything the
-calibration rests on changed since, refuses the submission without a trial."""
+calibrates the decisive test, and a decisive target that cannot see a planted signal blocks the data, or, when
+anything the calibration rests on changed since, refuses the submission without a trial."""
 
 import json
 from dataclasses import replace
@@ -10,12 +10,14 @@ from pathlib import Path
 import pytest
 
 from research_ci.render.common import card_id
+from research_ci.runner import evals as ev
 from research_ci.runner import plugins
 from research_ci.runner.meter import HIGH_WATER, SAMPLED, Cost, measured
 from research_ci.runner.research import ResearchError
 from research_ci.stages import feat as fs
 from research_ci.stages.contract import Settings
 from research_ci.stages.feat import FeatError, FeatSettings
+from research_ci.stages.floor import feat as feat_floor
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
@@ -24,18 +26,20 @@ from toy import REGISTRY, Backwards, NeverRun, label_contract, strategy_contract
 FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
 
-CRITERIA = """
+EVALS = """
 import polars as pl
 
-from research_ci.api import Criterion
+from research_ci.api import Case, Eval
 from research_ci.eval.statistics.ic import rank_ic
+from research_ci.eval.synthetic import hand
 
 
 def backwards(table):
     return rank_ic(table.with_columns(-pl.col("score")))
 
 
-CRITERIA = [Criterion("ic of the reversed score", backwards)]
+CASES = [Case("the reverse order", backwards, -1.0, given=hand({"score": [1.0, 2.0, 3.0], "y": [0.1, 0.2, 0.3]}))]
+EVALS = [Eval(backwards, name="ic of the reversed score")]
 """
 
 NULLS = """
@@ -43,7 +47,7 @@ from research_ci.api import Null, PermuteWithin
 
 NULLS = [
     Null("tail", PermuteWithin("time", clusters="symbol", block="horizon"),
-         criteria=("rank ic without top symbol",), reps=60),
+         evals=("rank ic without top symbol",), reps=60),
 ]
 """
 
@@ -76,7 +80,7 @@ def features(fields, candidates):
 """
 
 
-def _idea(tmp_path: Path, contract: str | None = None, nulls: str = NULLS, criteria: str | None = CRITERIA) -> Idea:
+def _idea(tmp_path: Path, contract: str | None = None, nulls: str = NULLS, evals: str | None = EVALS) -> Idea:
     idea = Idea.init(tmp_path / "idea", settings=FAST, feat_settings=QUICK)
     (idea.root / "contract.py").write_text(contract or label_contract())
     for name, text in (("strategy.toml", "[s]\nk = 2\n"), ("live.toml", "[s]\nk = 2\n"), ("strategy.py", "K = 2\n")):
@@ -86,8 +90,8 @@ def _idea(tmp_path: Path, contract: str | None = None, nulls: str = NULLS, crite
     idea.check_data()
     idea.approve("data", approval=_relayed(idea, "data"))
     assert idea.status().stage("data").state is State.PASSED
-    if criteria is not None:
-        (idea.root / "feat.py").write_text(criteria)
+    if evals is not None:
+        (idea.root / "feat.py").write_text(evals)
     (idea.root / "nulls").mkdir()
     (idea.root / "nulls" / "feat.py").write_text(nulls)
     return idea
@@ -133,7 +137,7 @@ def test_the_decisive_effect_alone_decides_a_spread_passes_noise_fails_and_a_pee
 
     result, text, state = idea.submit_feat(_file(idea, "peek", PEEK))
     assert state is State.OPEN and result["verdict"]["status"] == "TAINTED", text
-    assert "criteria" not in result and "calibrate" not in text and _calibrations(idea) == []
+    assert "evals" not in result and "calibrate" not in text and _calibrations(idea) == []
 
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     assert state is State.REVIEW and result["verdict"]["status"] == "PASSED", text
@@ -154,25 +158,50 @@ def test_the_decisive_effect_alone_decides_a_spread_passes_noise_fails_and_a_pee
 
 
 def test_diagnostics_are_shown_and_never_decide(tmp_path: Path) -> None:
-    """The engine's defaults run next to the idea's criteria and judge the null worlds; one that fails every world
-    does not fail a submission whose decisive effect beats random."""
+    """The engine's defaults run next to the idea's evals and judge the null worlds; one that fails every world does
+    not fail a submission whose decisive effect beats random."""
     idea = _idea(tmp_path)
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     assert state is State.REVIEW, text
-    rows = {(r["criterion"], r["by"], r["world"]): r["passed"] for r in result["criteria"]}
-    assert {("rank ic", "engine", "floor"), ("rank ic without top symbol", "engine", "null 1")} <= set(rows)
-    assert ("top minus bottom fifth", "engine", "null 1") not in rows
-    assert rows[("ic of the reversed score", "idea", "floor")] is False
-    assert "[!]  ic of the reversed score (idea) vs floor" in text and "not deciding" in text
+    rows = {(r["eval"], r["by"], r["world"]): r["passed"] for r in result["evals"]}
+    assert {("rank ic", "default", "floor"), ("rank ic without top symbol", "default", "null 1")} <= set(rows)
+    assert ("top minus bottom fifth", "default", "null 1") not in rows
+    assert rows[("ic of the reversed score", "case", "floor")] is False
+    assert "case     [!]  ic of the reversed score (valid 1/1) vs floor" in text and "not deciding" in text
     assert "ok   alternatives covered: chance: floor · timing: floor · tail: null 1" in text
 
 
+def test_a_world_that_shuffles_like_the_floor_is_judged_once_and_the_card_says_how_many_shuffles(
+    tmp_path: Path, monkeypatch
+) -> None:
+    idea = _idea(tmp_path, nulls=NULLS.replace(", reps=60", "").replace('evals=("rank ic without top symbol",)', ""))
+    asked: list[tuple[int, int]] = []
+    judge_all = fs.judge_all
+
+    def counted(requests: list, workers: int) -> list:
+        asked.append((len(requests), len({id(r) for r in requests})))
+        return judge_all(requests, workers)
+
+    monkeypatch.setattr(fs, "judge_all", counted)
+    result, text, _ = idea.submit_feat(_file(idea, "spread", SPREAD))
+    rows = {(r["eval"], r["world"]): r for r in result["evals"]}
+    for name in ("rank ic", "rank ic without top symbol", "top minus bottom fifth", "ic of the reversed score"):
+        floor, null = rows[(name, "floor")], rows[(name, "null 1")]
+        assert floor["z"] == null["z"] and floor["shuffles"] == null["shuffles"] == QUICK.shown_reps
+    ((asked_for, judged),) = asked
+    assert judged == asked_for - 4
+    decisive = result["decisive"][0]
+    assert decisive["shuffles"] in (QUICK.floor_batch, QUICK.floor_reps)
+    assert f"z {decisive['z']:.4g} ≥ {result['need']:.2f} · {decisive['shuffles']} shuffles · PASSED" in text
+    assert f"best of 2 horizons · {QUICK.shown_reps} shuffles" in text
+
+
 def test_without_feat_py_or_a_world_for_an_alternative_a_submission_is_still_judged(tmp_path: Path) -> None:
-    idea = _idea(tmp_path, nulls="NULLS = []\n", criteria=None)
+    idea = _idea(tmp_path, nulls="NULLS = []\n", evals=None)
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     assert state is State.REVIEW, text
     assert result["coverage"]["status"] == "warn" and "no world answers tail" in text
-    assert {r["by"] for r in result["criteria"]} == {"engine"}
+    assert {r["by"] for r in result["evals"]} == {"default"}
     assert result["calibration"]["by"] == "check"
 
 
@@ -183,7 +212,7 @@ def test_a_null_world_that_cannot_run_is_refused_without_a_trial(tmp_path: Path)
     assert idea.status().stage("feat").trials == 0
 
 
-def test_a_gate_that_cannot_be_calibrated_blocks_the_data_check(tmp_path: Path, monkeypatch) -> None:
+def test_a_decisive_test_that_cannot_be_calibrated_blocks_the_data_check(tmp_path: Path, monkeypatch) -> None:
     """A decisive target that cannot see a planted signal is found at the data check, before any features exist: the
     data stays OPEN with the reason."""
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.backwards": Backwards})
@@ -194,13 +223,13 @@ def test_a_gate_that_cannot_be_calibrated_blocks_the_data_check(tmp_path: Path, 
     spec, text = idea.check_data()
     assert spec["verdict"]["status"] == "blocked" and "FAIL carry at 8h vs floor" in text
     assert spec["verdict"]["notes"][0].startswith(
-        "the gate cannot be calibrated on this data: carry in the floor world"
+        "the decisive test cannot be calibrated on this data (decisive test calibration, floor): carry in the floor"
     )
     (row,) = spec["calibration"]["rows"]
     assert (row["effect"], row["world"], row["ok"]) == ("carry", "floor", False) and row["planted_lives"] < 0.8
     assert idea.status().stage("data").state is State.OPEN
     reason = idea.next_actions()[0].reason
-    assert reason.startswith("blocked: the gate cannot be calibrated") and "`rci contract derive`" in reason
+    assert reason.startswith("blocked: the decisive test cannot be calibrated") and "`rci contract derive`" in reason
 
 
 def test_feat_calibrates_again_when_what_the_data_check_calibrated_changed(tmp_path: Path, monkeypatch) -> None:
@@ -226,10 +255,10 @@ def test_what_a_submission_used_is_recorded_and_checked_again_when_a_person_acce
     idea.submit_feat(_file(idea, "spread", SPREAD))
     deps = [r for r in idea.ledger.records() if r["kind"] == "submit"][-1]["payload"]["deps"]
     assert {"features", "feat_file", "nulls_file", "engine", "calibration", "plugin:ref.mean"} <= set(deps)
-    (idea.root / "feat.py").write_text(CRITERIA + "\n# changed\n")
+    (idea.root / "feat.py").write_text(EVALS + "\n# changed\n")
     with pytest.raises(WorkflowError, match="changed since submission 1: feat_file; submit again"):
         idea.approve("feat", approval=Approval(by="agent", channel="auto"))
-    (idea.root / "feat.py").write_text(CRITERIA)
+    (idea.root / "feat.py").write_text(EVALS)
     idea.approve("feat", approval=Approval(by="agent", channel="auto"))
     approval = list(idea.ledger.records())[-1]["payload"]
     assert approval["deps"]["features"] == deps["features"] and "feat_submission" in approval["deps"]
@@ -304,7 +333,7 @@ def test_what_features_cost_is_shown_and_never_judged(tmp_path: Path, monkeypatc
     assert cost["peak_bytes"] > 0 and "cost       full call " in card and ", peak memory " in card
     frozen = idea._frozen_feat(idea._approved_contract())
     plain = fs.submit(idea.root, frozen, path, 1, {}, QUICK)
-    monkeypatch.setattr(fs, "measured", _costly)
+    monkeypatch.setattr(feat_floor, "measured", _costly)
     costly = fs.submit(idea.root, frozen, path, 1, {}, QUICK)
     assert costly["cost"] == {
         "seconds": 4321.0,
@@ -337,9 +366,9 @@ def features(fields, candidates):
 def test_row_wise_code_runs_with_a_warning_on_the_explore_and_result_cards(tmp_path: Path) -> None:
     idea = _idea(tmp_path)
     row_wise = 'def backwards(table):\n    assert all(v == v for v in table["score"].to_list())\n'
-    (idea.root / "feat.py").write_text(CRITERIA.replace("def backwards(table):\n", row_wise))
+    (idea.root / "feat.py").write_text(EVALS.replace("def backwards(table):\n", row_wise))
     warning = (
-        "row-wise code: research/rows.py:7 iter_rows · feat.py:9 comprehension over table['score'].to_list() — "
+        "row-wise code: research/rows.py:7 iter_rows · feat.py:10 comprehension over table['score'].to_list() — "
         "polars expressions are usually much faster"
     )
     explored, card = idea.explore_feat(_file(idea, "rows", ROWS))
@@ -369,14 +398,161 @@ def test_what_is_refused_before_anything_runs_says_how_to_fix_it(tmp_path: Path)
     columns = refusals[2][1]
     with pytest.raises(FeatError, match=f"{columns}, without score; .*research/example.py shows one"):
         idea.submit_feat(refusals[2][0])
-    (idea.root / "feat.py").write_text("from research_ci.api import Criterion\n")
-    with pytest.raises(FeatError, match=r"feat.py: it defines no CRITERIA; feat.py defines CRITERIA = \[Criterion"):
+    (idea.root / "feat.py").write_text("from research_ci.api import Eval\n")
+    with pytest.raises(FeatError, match=r"feat.py: it defines no EVALS; feat.py defines EVALS = \[fn, Eval"):
         idea.submit_feat(spread)
-    (idea.root / "feat.py").write_text("CRITERIA = [\n")
+    (idea.root / "feat.py").write_text("EVALS = [\n")
     with pytest.raises(ResearchError, match=r"feat.py:1: .*fix the file"):
         idea.submit_feat(spread)
-    (idea.root / "feat.py").write_text(CRITERIA)
+    (idea.root / "feat.py").write_text(EVALS)
     (idea.root / "nulls" / "feat.py").write_text(NULLS.replace('"time", clusters', '"venue", clusters'))
     with pytest.raises(FeatError, match=r"no column venue; its columns are .*symbol, t, venue_pair, y, y_flow"):
         idea.submit_feat(spread)
     assert idea.status().stage("feat").trials == 0 and _calibrations(idea) == []
+
+
+SPREADS = """
+import polars as pl
+
+from research_ci.api import Case
+from research_ci.eval.statistics.spread import quantile_spread
+from research_ci.eval.synthetic import hand
+
+SIX = hand({"score": [6.0, 5.0, 4.0, 3.0, 2.0, 1.0], "y": [0.6, 0.5, 0.4, 0.3, 0.2, 0.1]})
+
+
+def thirds(table):
+    return quantile_spread(table, share=1 / 3)
+
+
+def halves(table):
+    return quantile_spread(table, share=0.5)
+
+
+def untested(table):
+    return quantile_spread(table, share=0.25)
+
+
+CASES = [
+    Case("the top two of six less the bottom two", thirds, 0.4, given=SIX),
+    Case("reversed scores turn it around", thirds, -0.4, given=SIX.with_columns(-pl.col("score"))),
+    Case("the top half less the bottom half", halves, 0.4, given=SIX),
+]
+"""
+CASE_EVALS = """
+from research_ci.api import Eval
+from evals.spreads import halves, thirds
+
+EVALS = [thirds, Eval(halves, horizons=("24h",))]
+"""
+
+
+def _case_evals(idea: Idea, feat: str = CASE_EVALS, module: str = SPREADS) -> None:
+    (idea.root / "evals").mkdir(exist_ok=True)
+    (idea.root / "evals" / "spreads.py").write_text(module)
+    (idea.root / "feat.py").write_text(feat)
+
+
+def test_a_case_eval_runs_only_when_its_tests_pass_and_an_invalid_one_shows_why(tmp_path: Path, monkeypatch) -> None:
+    """A valid case eval is judged like any diagnostic, and says it is valid; an invalid one is shown with the test it
+    failed, what it expected and got, and how to fix it, with no numbers, and decides nothing. The validation is kept
+    for the next submission; the module is recorded, and changing it refuses the approval."""
+    idea = _idea(tmp_path, evals=None)
+    _case_evals(idea)
+    ran: list[str] = []
+    real = ev.run_tests
+    monkeypatch.setattr(ev, "run_tests", lambda name, cases, props: ran.append(name) or real(name, cases, props))
+    result, text, state = idea.submit_feat(_file(idea, "noise", NOISE))
+    assert state is State.OPEN and result["verdict"]["status"] == "FAILED", text
+    rows = {(r["eval"], r.get("world")): r for r in result["evals"]}
+    thirds = rows[("thirds", "floor")]
+    assert thirds["by"] == "case" and thirds["validation"]["summary"] == "valid 2/2" and "z" in thirds
+    halves = rows[("halves", None)]
+    assert halves["invalid"] and "z" not in halves and "horizons" not in halves
+    assert halves["validation"]["summary"] == (
+        "invalid 0/1: case 'the top half less the bottom half': expected 0.4, got 0.3"
+    )
+    assert "case     [!]  thirds (valid 2/2) vs floor (chance, timing): z " in text
+    assert (
+        "case     FAIL halves: invalid 0/1: case 'the top half less the bottom half': expected 0.4, got 0.3; not "
+        "judged, so no numbers; fix the eval or its CASES in evals/spreads.py; `rci eval check evals/spreads.py` runs "
+        "them for free"
+    ) in text
+    assert sorted(ran) == ["halves", "thirds"]
+    _, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
+    assert state is State.REVIEW and "case     FAIL halves: invalid 0/1" in text, text
+    assert sorted(ran) == ["halves", "thirds"], "kept, not run again"
+    deps = [r for r in idea.ledger.records() if r["kind"] == "submit"][-1]["payload"]["deps"]
+    assert "eval:evals/spreads.py" in deps
+    (idea.root / "evals" / "spreads.py").write_text(SPREADS + "\n# changed\n")
+    with pytest.raises(WorkflowError, match="changed since submission 2: eval:evals/spreads.py"):
+        idea.approve("feat", approval=Approval(by="agent", channel="auto"))
+
+
+def test_a_case_eval_without_tests_is_refused_without_a_trial(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, evals=None)
+    _case_evals(idea, "from evals.spreads import untested\nEVALS = [untested]\n")
+    with pytest.raises(FeatError) as refused:
+        idea.submit_feat(_file(idea, "spread", SPREAD))
+    said = str(refused.value)
+    assert "feat.py: the case eval 'untested' has no tests, so it cannot run: write CASES in evals/spreads.py" in said
+    assert said.endswith("no submission was spent") and idea.status().stage("feat").trials == 0
+
+
+PARTIAL = """
+import polars as pl
+
+
+def features(fields, candidates):
+    score = pl.when(pl.col("symbol") != "Z").then(pl.col("spread_h"))
+    return candidates.select("t", "entity", score.alias("score"))
+"""
+SCORED_Y = """
+import polars as pl
+
+from research_ci.api import Case
+from research_ci.eval.synthetic import hand
+
+
+def scored_y(table):
+    return table.filter(pl.col("score").is_not_null()).group_by("t").agg(pl.col("y").mean().alias("value"))
+
+
+CASES = [Case("the mean label of the scored rows", scored_y, 0.2, given=hand({"score": [1.0, None, 2.0],
+                                                                                "y": [0.1, 0.9, 0.3]}))]
+EVALS = [scored_y]
+"""
+
+
+def test_candidates_without_a_score_are_left_out_of_every_world_alike(tmp_path: Path) -> None:
+    """Features that score only some candidates: the rows without a score are left out of the real world and of
+    every null world, so an eval that reads only which rows hold a score gives the same number in every world."""
+    idea = _idea(tmp_path, evals=SCORED_Y)
+    result, text, _ = idea.submit_feat(_file(idea, "partial", PARTIAL))
+    assert 0.5 < result["scores"]["share"] < 0.9, text
+    rows = [r for r in result["evals"] if r["eval"] == "scored_y"]
+    assert {r["world"] for r in rows} == {"floor", "null 1"} or {r["world"] for r in rows} == {"floor"}
+    for r in rows:
+        for h in r["horizons"]:
+            assert h["null_mean"] == pytest.approx(h["real"], abs=1e-12) and h["null_sd"] == pytest.approx(0, abs=1e-12)
+
+
+HALF_NOISE = """
+import polars as pl
+
+
+def features(fields, candidates):
+    noise = pl.struct("t", "entity").hash(7) / 2.0**64
+    half = pl.struct("t", "entity").hash(3) % 2 == 0
+    return candidates.select("t", "entity", pl.when(half).then(noise).alias("score"))
+"""
+
+
+def test_random_scores_on_half_the_candidates_do_not_beat_random(tmp_path: Path) -> None:
+    """When a candidate without a score took a NaN in the null worlds, the top third of a null world filled with them
+    and random scores on half the candidates beat random with z near 4; judged on the scored candidates alone, they
+    do not."""
+    idea = _idea(tmp_path, evals=None)
+    result, text, _ = idea.submit_feat(_file(idea, "half", HALF_NOISE))
+    assert 0.4 < result["scores"]["share"] < 0.6
+    assert result["verdict"]["status"] == "FAILED" and result["decisive"][0]["z"] < 2.0, text

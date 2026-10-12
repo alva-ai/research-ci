@@ -8,9 +8,12 @@ import typer
 
 from research_ci import __version__
 from research_ci.cli import common
+from research_ci.cli.catalog import collect
 from research_ci.cli.contract import contract_app
 from research_ci.cli.data import data_app
+from research_ci.cli.eval import eval_app
 from research_ci.cli.feat import feat_app
+from research_ci.render.catalog import FILE, markdown
 from research_ci.render.common import card_id
 from research_ci.runner import catalog
 from research_ci.workflow.base import CONTRACT_FILE, Approval, find_ideas
@@ -27,6 +30,7 @@ app = typer.Typer(
 app.add_typer(contract_app, name="contract")
 app.add_typer(data_app, name="data")
 app.add_typer(feat_app, name="feat")
+app.add_typer(eval_app, name="eval")
 
 
 @app.callback()
@@ -107,13 +111,22 @@ def _declared(p: dict[str, Any]) -> list[str]:
 
 
 @app.command()
-def methods(as_json: common.AsJson = False) -> None:
-    """The eval methods a criterion, a data test, or a pit can call, and the worked examples that back each; then how
-    a null world is written."""
+def methods(
+    as_json: common.AsJson = False,
+    as_markdown: Annotated[
+        bool, typer.Option("--markdown", help=f"The catalog of every stage and the whole eval library, as {FILE}.")
+    ] = False,
+) -> None:
+    """The general evals of the engine's library an idea's EVALS can list or its case evals can call, with the worked
+    examples that back each; how a case eval and its tests are written; then how a null world is written."""
+    if as_markdown:
+        typer.echo(markdown(collect()))
+        return
     found = catalog.methods()
+    cases = catalog.case_evals()
     worlds = catalog.nulls()
     if as_json:
-        typer.echo(json.dumps(found + worlds, indent=2))
+        typer.echo(json.dumps(found + cases + worlds, indent=2))
         return
     formats = catalog.formats()
     shown = ""
@@ -126,6 +139,12 @@ def methods(as_json: common.AsJson = False) -> None:
         if m["doc"]:
             typer.echo(f"    {m['doc']}")
         typer.echo(f"    backed by {_count(m['examples'], 'worked example')} · {_count(m['properties'], 'property')}")
+    typer.echo(f"case eval: {catalog.CASE_EVAL}")
+    typer.echo(f"  from research_ci.api import {', '.join(c['name'] for c in cases)}")
+    for c in cases:
+        typer.echo(f"    {c['name']}{c['signature']}")
+        typer.echo(f"      {c['doc']}")
+    typer.echo(f"  for example: {catalog.CASE_EXAMPLE}")
     typer.echo(f"null world: {catalog.NULLS_FORMAT}")
     typer.echo(f"  from research_ci.api import {', '.join(w['name'] for w in worlds)}")
     for w in worlds:

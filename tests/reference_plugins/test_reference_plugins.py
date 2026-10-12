@@ -2,7 +2,9 @@ import pandas as pd
 import polars as pl
 import pytest
 
+from research_ci.api.methods import Source
 from research_ci.eval import protocol as pr
+from research_ci.eval.synthetic import START_NS, source
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME, to_ns
@@ -99,3 +101,22 @@ def test_cluster_mean_with_top_counts_only_the_highest_scores() -> None:
 def test_flat_costs_charge_every_leg_of_every_weight_change() -> None:
     trades = pl.DataFrame({"t": [T0, T0], "entity": ["p", "q"], "from_weight": [0.0, 0.5], "to_weight": [0.25, 0.0]})
     assert FlatCosts(5, 5, legs=2).fees(trades) == pytest.approx((0.25 + 0.5) * 2 * 0.001)
+
+
+def test_pair_carry_gives_every_horizon_at_once_as_it_gives_each_alone() -> None:
+    """``values_each`` shares the levels and running flows at ``t`` between horizons and changes no number."""
+
+    def pairs(fields: pl.DataFrame, every: int) -> pl.DataFrame:
+        names = sorted(fields["entity"].unique().to_list())
+        rows = [(START_NS + h * 3_600 * 10**9, f"{a}>{b}", a, b) for h in range(5, 200, every) for a, b in [names[:2]]]
+        frame = pl.DataFrame(rows, schema=["t", "entity", "long", "short"], orient="row")
+        return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))
+
+    horizons = [4 * H, 24 * H, 72 * H]
+    for seed, flow in ((0, "flow"), (1, None)):
+        fields = source(Source(entities=4, hours=240, lag=1, revised=0.3), seed)
+        label, cands = PairCarry("price", flow), pairs(fields, 3 + seed)
+        each = list(label.values_each(fields, cands, horizons))
+        assert len(each) == 3 and all(
+            e.equals(label.values(fields, cands, h)) for e, h in zip(each, horizons, strict=True)
+        )

@@ -10,7 +10,9 @@ from research_ci.api.contract import (
     Usage,
     Use,
 )
-from research_ci.api.data import DataTest, Hedge, Levels, OnFail, Pit
+from research_ci.api.data import Hedge, Levels, OnFail, Pit
+from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
+from research_ci.api.methods import Case, Market, Power, Recovers, Size, Source
 from research_ci.api.nulls import Null, PermuteWithin, nulls_of
 from research_ci.api.plugins import (
     ENTRY_POINTS,
@@ -29,7 +31,6 @@ from research_ci.api.plugins import (
     Timing,
     UniversePlugin,
 )
-from research_ci.api.study import TABLE_KEYS, Criterion, criteria_of
 
 __all__ = [
     "ENTRY_POINTS",
@@ -38,15 +39,15 @@ __all__ = [
     "TABLE_KEYS",
     "UNIVERSE_COLUMNS",
     "Alternative",
+    "Case",
     "ConsumerPlugin",
     "ConsumerResult",
     "Contract",
     "ContractError",
     "CostModel",
-    "Criterion",
     "DataPlugin",
-    "DataTest",
     "Effect",
+    "Eval",
     "Execution",
     "Forward",
     "Hedge",
@@ -54,18 +55,23 @@ __all__ = [
     "LabelCase",
     "LabelPlugin",
     "Levels",
+    "Market",
     "Null",
     "OnFail",
     "PermuteWithin",
     "Pit",
+    "Power",
+    "Recovers",
     "Reference",
     "ReferenceSource",
+    "Size",
+    "Source",
     "TargetPlugin",
     "Timing",
     "Universe",
     "UniversePlugin",
     "Usage",
     "Use",
-    "criteria_of",
+    "evals_of",
     "nulls_of",
 ]

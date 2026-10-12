@@ -245,9 +245,9 @@ class IdeaBase:
         """A stage's own card and pins, from the module of the stage that has them."""
         return None
 
-    def _gate_key(self, frozen: Frozen) -> dict[str, str]:
-        """What the calibration of the gate, the contract's decisive effect in the floor world, rests on: the contract,
-        the engine, the treated data, the code of the plugins feat runs, and the calibration settings."""
+    def _calibration_key(self, frozen: Frozen) -> dict[str, str]:
+        """What the calibration of the decisive test, the contract's decisive effect in the floor world, rests on: the
+        contract, the engine, the treated data, the code of the plugins feat runs, and the calibration settings."""
         return self.deps(CONTRACT) | judging_deps() | calibration_key(frozen, self.feat_settings)
 
     def _allowed(self, stage: str, command: Command, ready: bool = False) -> StageStatus:

@@ -28,6 +28,20 @@ def check_line(c: dict[str, Any]) -> str:
     return f"{MARK[c['status']]:<4} {c['name']}: {c['detail']}"
 
 
+def eval_line(c: dict[str, Any]) -> str:
+    """A check with whose eval it is: the stage's ``floor`` or ``default`` list, or the idea's ``library`` or ``case``
+    eval."""
+    return f"{c.get('by') or 'floor':<8} {check_line(c)}"
+
+
+def failed_tests(validation: dict[str, Any] | None) -> list[str]:
+    """The tests an invalid eval failed after the first, which its line already shows, one line each."""
+    if not validation or validation.get("status") != "invalid":
+        return []
+    failed = [t for t in validation.get("tests", []) if t["status"] == "fail"][1:]
+    return [f"{'':<14}also failed {t['name']}: {t['detail']}" for t in failed]
+
+
 def bp(x: float | None) -> str:
     return "n/a" if x is None or not math.isfinite(x) else f"{x * 1e4:.1f}"
 

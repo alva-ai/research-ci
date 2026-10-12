@@ -12,8 +12,8 @@ SPAN_SCHEMA = {"entity": pl.String, "start": TIME, "end": TIME}
 
 
 def short_lived(fields: pl.DataFrame, horizon_ns: int) -> pl.DataFrame:
-    """Entities whose events, of every field, span less than ``horizon_ns``: ``entity``, ``start`` and ``end``, the
-    first and last event."""
+    """Entities whose events span less than ``horizon_ns``. Events of every field count; the columns are ``entity``,
+    ``start`` and ``end``, the first and last event."""
     spans = fields.group_by("entity").agg(
         pl.col("event_time").min().alias("start"), pl.col("event_time").max().alias("end")
     )
@@ -22,7 +22,7 @@ def short_lived(fields: pl.DataFrame, horizon_ns: int) -> pl.DataFrame:
 
 
 def thin(candidates: pl.DataFrame, floor: int) -> pl.DataFrame:
-    """Decision times with candidates, but fewer than ``floor``: ``t`` and ``n``."""
+    """Decision times with some candidates but fewer than ``floor``. Columns: ``t`` and ``n``."""
     per_t = candidates.group_by("t").agg(pl.len().cast(pl.Int64).alias("n"))
     return per_t.filter(pl.col("n") < floor).sort("t")
 

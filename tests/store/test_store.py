@@ -100,7 +100,14 @@ def test_tree_hash_sees_content_and_names_but_not_listing_order(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
-    "left_out", ["render/contract.py", "cli/main.py", "stages/defaults/feat.py", "stages/defaults/data.py"]
+    "left_out",
+    [
+        "render/contract.py",
+        "cli/main.py",
+        "stages/defaults/contract.py",
+        "stages/defaults/feat.py",
+        "stages/defaults/data.py",
+    ],
 )
 def test_rewording_a_card_or_a_command_or_changing_a_default_list_keeps_the_engine_hash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, left_out: str
@@ -112,10 +119,17 @@ def test_rewording_a_card_or_a_command_or_changing_a_default_list_keeps_the_engi
     with (package / left_out).open("a") as handle:
         handle.write("\n# reworded\n")
     assert judging_deps()["engine"] == first
-    for judged in ("stages/data.py", "stages/feat.py"):
+    for judged in (
+        "stages/data.py",
+        "stages/feat.py",
+        "stages/floor/data.py",
+        "stages/floor/feat.py",
+        "stages/steps.py",
+    ):
+        before = judging_deps()["engine"]
         with (package / judged).open("a") as handle:
             handle.write("\n# changed\n")
-        assert judging_deps()["engine"] != first
+        assert judging_deps()["engine"] != before, judged
 
 
 def _anchored(tmp_path: Path) -> Ledger:

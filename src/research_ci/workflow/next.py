@@ -20,8 +20,9 @@ AGENT: dict[str, tuple[str, str, str]] = {
     "data": (
         "check",
         "rci data check",
-        "check the data against the contract; tests for risks the default checks miss go in data.py "
-        "(`rci methods` lists what they can call)",
+        "check the data against the contract; for a risk the default checks miss, list an eval in EVALS in data.py: "
+        "one of the engine's library, or a case eval of your own in evals/<name>.py with its CASES, which "
+        "`rci eval check <file>` runs for free (`rci methods` lists both)",
     ),
     "feat": (
         "submit",
@@ -29,14 +30,15 @@ AGENT: dict[str, tuple[str, str, str]] = {
         "write research/<name>.py from research/example.py (polars expressions; row loops run with a warning), try "
         "it with `rci feat explore <file>`, then submit it; give each alternative of contract.py a world in "
         'nulls/feat.py, such as NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", '
-        'block="horizon"))], or the ResultCard marks it uncovered; diagnostics in feat.py are optional; '
-        "`rci methods` lists what diagnostics can call and the fields of a null world",
+        'block="horizon"))], or the ResultCard marks it uncovered; evals in feat.py (EVALS) are optional, the '
+        "engine's library or case evals of your own in evals/<name>.py with their CASES (`rci eval check <file>`); "
+        "`rci methods` lists the library, how a case eval is written, and the fields of a null world",
     ),
 }
 BUILT = frozenset({"contract", "data", "feat"})
 AGAIN: dict[str, str] = {
     "contract": "fix contract.py and derive it again",
-    "data": "fix what it names and check again",
+    "data": "fix what it names and check again (`rci eval check <file>` runs a case eval's tests for free)",
     "feat": "write a new features file in research/ and submit it",
 }
 CALIBRATION = "derive the changed contract with `rci contract derive`, then check the data again"

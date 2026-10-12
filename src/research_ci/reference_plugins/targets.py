@@ -2,6 +2,7 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.plugins import CostModel
+from research_ci.eval.statistics.shuffled import TopClusterMean
 
 
 class ClusterMean:
@@ -25,3 +26,7 @@ class ClusterMean:
         value = pl.col("value") - pl.Series(costs.round_trip(labels)) if self.net else pl.col("value")
         per = labels.with_columns(value.alias("_v")).group_by("t", self.cluster).agg(pl.col("_v").mean())
         return per.group_by("t").agg(pl.col("_v").mean().alias("value")).sort("t")
+
+    def batched(self, horizon: pd.Timedelta, costs: CostModel) -> TopClusterMean | None:
+        """``reduce`` on many shuffles of the scores at once, when it reads them (with ``top``)."""
+        return None if self.top is None else TopClusterMean(self.top, self.cluster, self.net, costs)

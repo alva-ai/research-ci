@@ -15,7 +15,8 @@ NS = pl.Duration("ns")
 
 
 def target(fields: pl.DataFrame, field: str, rng: np.random.Generator, exclude: str | None = None) -> str:
-    """An entity with at least 20 rows of ``field`` and more than two distinct values."""
+    """An entity whose ``field`` has enough rows for a pit. It has at least 20 rows of ``field`` and more than two
+    distinct values."""
     stats = fields.filter(pl.col("field") == field).group_by("entity").agg(pl.len(), pl.col("value").n_unique())
     other = pl.col("entity").ne_missing(pl.lit(exclude, dtype=pl.String))
     names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2) & other)["entity"].sort()
@@ -38,17 +39,17 @@ def _scale(fields: pl.DataFrame, field: str, rng: np.random.Generator, k: float,
 
 
 def unit(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A unit error: one entity's field a thousand times larger throughout."""
+    """A unit error: one entity's field a thousand times larger. It holds throughout."""
     return _scale(fields, field, rng, 1000.0, after=False)
 
 
 def level_break(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A level break: one entity's field half again as large from a random time on."""
+    """A level break: one entity's field half again as large. It holds from a random time on."""
     return _scale(fields, field, rng, 1.5, after=True)
 
 
 def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A gap: ten of one entity's usual spacings of the field missing from a random time."""
+    """A gap: ten usual spacings missing from a random time. The spacings are one entity's, of the field."""
     e = target(fields, field, rng)
     ev = events(fields.filter(_rows(fields, e, field)))
     spacing = int(ev["spacing"].drop_nulls()[0])
@@ -61,7 +62,7 @@ def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFr
 
 
 def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A duplicate: one of an entity's events of the field repeated a millisecond later."""
+    """A duplicate: one event repeated a millisecond later. The event is one of an entity's events of the field."""
     e = target(fields, field, rng)
     rows = fields.filter(_rows(fields, e, field))
     copy = rows.sample(1, seed=int(rng.integers(2**31))).with_columns(
@@ -71,7 +72,7 @@ def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.
 
 
 def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A shift: one entity's events of the field stamped one usual spacing late."""
+    """A shift: one entity's events stamped one usual spacing late. The events are those of the field."""
     e = target(fields, field, rng)
     spacing = int(events(fields.filter(_rows(fields, e, field)))["spacing"].drop_nulls()[0])
     hit = _rows(fields, e, field)
@@ -83,7 +84,7 @@ def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.Data
 
 
 def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A leak: each of one entity's events of the field carries the value of the event after it."""
+    """A leak: each event carries the value of the next. The events are one entity's, of the field."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     rows = fields.filter(hit).sort("event_time").with_columns(pl.col("value").shift(-1)).drop_nulls("value")
@@ -91,7 +92,7 @@ def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataF
 
 
 def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A spike: one event of one entity's field ten times its value."""
+    """A spike: one event of one entity's field, ten times larger."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     times = fields.filter(hit)["event_time"].sort()
@@ -102,8 +103,8 @@ def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.Data
 
 
 def swap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """One entity's series replaced by another entity's at the same times, rescaled to start at the same level: a
-    ticker reused for a different asset, which a check on levels alone will not see."""
+    """A swap: one entity's series replaced by another entity's. The other's series is taken at the same times, rescaled
+    to start at the same level: a ticker reused for a different asset, which a check on levels alone will not see."""
     a = target(fields, field, rng)
     b = target(fields, field, rng, exclude=a)
     mine = fields.filter(_rows(fields, a, field))

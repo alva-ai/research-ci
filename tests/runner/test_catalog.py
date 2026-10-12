@@ -32,17 +32,17 @@ def test_every_plugin_with_its_kind_options_and_declarations() -> None:
 def test_every_method_with_its_import_signature_and_backing() -> None:
     found = {(m["module"].rsplit(".", 1)[-1], m["name"]): m for m in catalog.methods()}
     ic = found[("ic", "rank_ic")]
-    assert ic["use"] == "criterion" and ic["import"] == "from research_ci.eval.statistics.ic import rank_ic"
+    assert ic["use"] == "feat eval" and ic["import"] == "from research_ci.eval.statistics.ic import rank_ic"
     assert ic["signature"] == "(table: pl.DataFrame, label: str = 'y') -> pl.DataFrame"
     assert (ic["examples"], ic["properties"]) == (3, 3)
     assert (found[("spread", "quantile_spread")]["examples"], found[("spread", "quantile_spread")]["properties"]) == (
         3,
         2,
     )
-    assert found[("sanity", "spikes")]["use"] == "data test" and found[("sanity", "spikes")]["examples"] == 5
+    assert found[("sanity", "spikes")]["use"] == "data eval" and found[("sanity", "spikes")]["examples"] == 5
     assert found[("pits", "spike")]["use"] == "pit"
     assert all(m["doc"] and m["examples"] >= 1 for m in found.values()), "every listed method says what it does"
-    assert set(catalog.formats()) == {"criterion", "data test", "pit"}
+    assert set(catalog.formats()) == {"feat eval", "data eval", "pit"}
 
 
 def test_null_worlds_list_every_field_of_null_and_permute_within() -> None:

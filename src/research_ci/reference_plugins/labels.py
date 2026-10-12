@@ -1,6 +1,6 @@
 """Reference label plugins. They get no privileges: the engine checks them exactly like a lab's labels."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -60,26 +60,41 @@ class PairCarry:
 
     ``price``: the long leg's return minus the short leg's. ``flow`` (optional): the flow on the short leg minus the
     flow on the long leg, over events that became known in ``(t, t + h]``, as when shorts receive a positive funding
-    rate. Candidates name their legs in columns ``long`` and ``short``."""
+    rate. Candidates name their legs in columns ``long`` and ``short``. ``values_each`` gives every horizon from one
+    pass over what does not depend on the horizon: the levels and running flows at ``t``."""
 
     def __init__(self, price: str = "close", flow: str | None = None) -> None:
         self.price, self.flow = price, flow
 
     def values(self, fields: pl.DataFrame, candidates: pl.DataFrame, horizon: pd.Timedelta) -> pl.DataFrame:
+        return next(self.values_each(fields, candidates, [horizon]))
+
+    def values_each(
+        self, fields: pl.DataFrame, candidates: pl.DataFrame, horizons: Sequence[pd.Timedelta]
+    ) -> Iterator[pl.DataFrame]:
         prices = _known(fields, self.price)
-        rows = candidates.select(pl.col("t").cast(TIME), "entity", "long", "short")
-        rows = rows.with_columns(end=pl.col("t") + pl.duration(nanoseconds=int(horizon.value)))
+        start = candidates.select(pl.col("t").cast(TIME), "entity", "long", "short")
         for leg in ("long", "short"):
-            rows = _level(rows, prices, leg, "t", f"p_{leg}0")
+            start = _level(start, prices, leg, "t", f"p_{leg}0")
+        flows = None if self.flow is None else _cumulative(fields, self.flow)
+        if flows is not None:
+            for leg in ("long", "short"):
+                start = _running(start, flows, leg, "t", f"c_{leg}0")
+        return (self._held(start, prices, flows, h) for h in horizons)
+
+    @staticmethod
+    def _held(
+        start: pl.DataFrame, prices: pl.DataFrame, flows: pl.DataFrame | None, horizon: pd.Timedelta
+    ) -> pl.DataFrame:
+        rows = start.with_columns(end=pl.col("t") + pl.duration(nanoseconds=int(horizon.value)))
+        for leg in ("long", "short"):
             rows = _level(rows, prices, leg, "end", f"p_{leg}1")
         rows = rows.drop_nulls(["p_long0", "p_long1", "p_short0", "p_short1"])
         price = (pl.col("p_long1") / pl.col("p_long0")) - (pl.col("p_short1") / pl.col("p_short0"))
         rows = rows.with_columns(price.alias("price"))
         parts = ["price"]
-        if self.flow is not None:
-            flows = _cumulative(fields, self.flow)
+        if flows is not None:
             for leg in ("long", "short"):
-                rows = _running(rows, flows, leg, "t", f"c_{leg}0")
                 rows = _running(rows, flows, leg, "end", f"c_{leg}1")
             flow = (pl.col("c_short1") - pl.col("c_short0")) - (pl.col("c_long1") - pl.col("c_long0"))
             rows = rows.with_columns(flow.alias("flow"))

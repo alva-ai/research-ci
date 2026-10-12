@@ -203,9 +203,12 @@ def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_p
         "pandas is fine for dates",
         "time and peak memory",
         '--relayed "<their words>" --card <id>',
+        "EVALS = [...]",
+        "CASES = [Case(",
+        "rci eval check evals/<name>.py",
     ):
         assert needed in start, needed
-    assert len(start.splitlines()) <= 30
+    assert len(start.splitlines()) <= 40
     example = (idea / "research" / "example.py").read_text()
     assert example.startswith("# rci:example") and "TODO" in example and "join_asof" in example
     assert "fields: pl.DataFrame" in example and "fields.lazy()" in example and ".collect()" in example
@@ -230,16 +233,21 @@ def test_plugins_lists_every_installed_plugin_with_options_and_declarations() ->
 
 def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
     text = runner.invoke(app, ["methods"]).stdout
-    assert text.startswith("criterion: feat.py: CRITERIA = [Criterion(name, evaluate)]")
+    assert text.startswith("feat eval: feat.py defines EVALS = [fn, Eval(fn, label=..., horizons=(...)")
     assert (
         "  from research_ci.eval.statistics.ic import rank_ic\n    rank_ic(table: pl.DataFrame, label: str = 'y')"
         in text
     )
     assert "backed by 3 worked examples · 3 properties" in text and "backed by 1 worked example · 0 properties" in text
     assert (
-        "data test: data.py: TESTS = [DataTest(name, check, covers, on_fail)]" in text and "pit: nulls/data.py" in text
+        "data eval: data.py defines EVALS = [fn, Eval(fn, on_fail=..., covers=" in text and "pit: nulls/data.py" in text
     )
     for needed in (
+        "case eval: a function of the idea's own, in a module such as `evals/<name>.py`",
+        "  from research_ci.api import Eval, Case, Size, Power, Recovers, Market, Source",
+        "    Case(name, run, expect, tol=1e-09, given=None)",
+        "    Eval(of, name='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')",
+        '  for example: CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)]',
         "null world: nulls/feat.py: NULLS = [Null(explains, world)]; give each alternative of the contract one",
         "  from research_ci.api import Null, PermuteWithin\n    Null(explains: str, world: PermuteWithin, keeps: ",
         "      explains  the id of the contract's alternative this world answers",
@@ -250,6 +258,7 @@ def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
     listed = json.loads(runner.invoke(app, ["methods", "--json"]).stdout)
     assert {"use", "import", "signature", "doc", "examples", "properties"} <= set(listed[0])
     assert [m["name"] for m in listed if m["use"] == "null world"] == ["Null", "PermuteWithin"]
+    assert [m["name"] for m in listed if m["use"] == "case eval"][:2] == ["Eval", "Case"]
 
 
 def test_an_idea_named_from_inside_itself_says_to_drop_the_path(

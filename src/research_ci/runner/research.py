@@ -94,22 +94,40 @@ def findings(paths: Iterable[Path], idea: Path, registry: Registry | None = None
     not parse is refused."""
     lab = _Lab.installed(registry)
     idea = Path(idea).resolve()
+    out: list[Finding] = []
+    for path, tree in _walked(paths, idea, lab):
+        out += _Scan(tree).run(path, _shown(path, idea, lab))
+    return out
+
+
+def reached(paths: Iterable[Path], idea: Path, registry: Registry | None = None) -> dict[str, Path]:
+    """The files themselves and the modules of the idea and of installed labs they import, as the cards name them,
+    found without running anything. A file that does not parse is refused."""
+    lab = _Lab.installed(registry)
+    idea = Path(idea).resolve()
+    return {_shown(path, idea, lab): path for path, _ in _walked(paths, idea, lab)}
+
+
+def shown(path: Path, idea: Path, registry: Registry | None = None) -> str:
+    """A file as the cards name it: from the idea's directory, or from an installed lab's top package."""
+    return _shown(Path(path).resolve(), Path(idea).resolve(), _Lab.installed(registry))
+
+
+def _walked(paths: Iterable[Path], idea: Path, lab: "_Lab") -> Iterable[tuple[Path, ast.Module]]:
     queue = [Path(p).resolve() for p in paths if Path(p).is_file()]
     seen: set[Path] = set()
-    out: list[Finding] = []
     while queue:
         path = queue.pop(0)
         if path in seen:
             continue
         seen.add(path)
-        shown = _shown(path, idea, lab)
         try:
             tree = ast.parse(path.read_text(), filename=str(path))
         except SyntaxError as exc:
-            raise ResearchError(f"{shown}:{exc.lineno}: {exc.msg}; fix the file and run the command again") from exc
-        out += _Scan(tree).run(path, shown)
+            where = _shown(path, idea, lab)
+            raise ResearchError(f"{where}:{exc.lineno}: {exc.msg}; fix the file and run the command again") from exc
+        yield path, tree
         queue += [p for p in _imported(tree, path, idea, lab) if p not in seen]
-    return out
 
 
 @dataclass(frozen=True)

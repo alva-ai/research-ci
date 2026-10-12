@@ -27,9 +27,9 @@ REQUEST_SCHEMA = {
 def requests(
     full: pl.DataFrame, anomalies: pl.DataFrame, per_field: int, max_anomalies: int, tol_ns: int, seed: int
 ) -> pl.DataFrame:
-    """Point requests around ``per_field`` random rows of every field, and window requests for anomalies: inside a
-    gap (where the source should have nothing), around near-duplicate events and level shifts (where it should have
-    what we have)."""
+    """Point requests for random rows, and window requests for anomalies. Point requests go around ``per_field`` random
+    rows of every field; window requests go inside a gap (where the source should have nothing), around near-duplicate
+    events and level shifts (where it should have what we have)."""
     tol = pl.duration(nanoseconds=tol_ns, time_unit="ns")
     draw = pl.int_range(pl.len(), dtype=pl.UInt32).shuffle(seed=seed).over("field")
     picked = (
@@ -117,7 +117,7 @@ def compare(
 
 
 def summarize(results: list[dict[str, Any]], fields: list[str]) -> tuple[Check, dict[str, str], dict[str, Any]]:
-    """The check, each field's grade, and counts per field and per anomaly kind."""
+    """The check, each field's grade, and counts. The counts are per field and per anomaly kind."""
     schema = {"kind": pl.String, "field": pl.String, "status": pl.String, "entity": pl.String, "detail": pl.String}
     frame = pl.DataFrame(results, schema=schema) if results else pl.DataFrame(schema=schema)
     frame = frame.with_columns(group=pl.when(pl.col("kind") == "sample").then("field").otherwise("kind"))

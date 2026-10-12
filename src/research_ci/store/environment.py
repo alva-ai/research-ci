@@ -15,7 +15,8 @@ def judging_deps() -> dict[str, str]:
     """What the verdict machinery depends on: engine source, interpreter, and the engine's own dependencies. The
     engine source leaves out ``render`` and ``cli``, which shape what is shown, not what is judged, the files
     ``rci init`` writes (``workflow/templates.py``), and the default lists in ``stages/defaults``: feat's diagnostics,
-    which never decide, and the data layer's checks, whose result the data freeze pins by content."""
+    which never decide, the data layer's checks, whose result the data freeze pins by content, and derive's, which
+    the contract's approval pins. The floor lists in ``stages/floor`` are part of it."""
     return {
         "engine": hash_tree(Path(research_ci.__file__).parent, leave_out=LEFT_OUT),
         "python": f"{platform.python_implementation()} {platform.python_version()}",
