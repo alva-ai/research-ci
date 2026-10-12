@@ -22,11 +22,12 @@ class FeatCommands(IdeaBase):
         """Judge one file of features against the floor world and record the verdict, one trial. The data check
         calibrated the decisive effect, and submissions reuse it; when anything it rests on changed since, the first
         submission calibrates it again, and a failed calibration refuses the submission without spending a trial. So do
-        repeated scores, and a features file that is still the example, before anything runs; row-by-row code is a
-        warning on the card."""
+        repeated scores, and, before anything heavy runs, a features file that is still the example, a ``feat.py``
+        without a valid lab eval, and an alternative without a null world; row-by-row code is a warning on the card."""
         current = self._allowed(FEAT, Command.SUBMIT)
         fs.screen(self.root, Path(path), self.registry)
         contract = self._approved_contract()
+        fs.ready(self.root, contract, self.registry)
         frozen = self._frozen_feat(contract)
         calibration = self._calibration(frozen)
         earlier = [r["payload"]["result"] for r in self._submissions()]

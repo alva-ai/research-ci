@@ -1,5 +1,5 @@
 """`rci eval check <file>` runs the tests of every eval in a module any time, for free: it says how each stands and
-why, and records nothing."""
+why, how the idea's data.py and feat.py list it and what the engine would refuse there, and records nothing."""
 
 from pathlib import Path
 
@@ -60,7 +60,9 @@ def test_valid_evals_say_so_with_each_test(tmp_path: Path) -> None:
         "  thirds  valid 2/2\n    ok   case 'the top two of six less the bottom two': as worked by hand"
         in result.output
     )
-    assert "pits that a data eval claims in covers are planted by `rci data check`" in result.output
+    assert (
+        "pits that a data eval claims in covers, built in or in PITS, are planted by `rci data check`" in result.output
+    )
     assert not (tmp_path / "idea" / ".rci").exists(), "nothing is recorded"
 
 
@@ -83,7 +85,33 @@ def test_a_module_without_cases_is_an_error_that_says_how_tests_are_written(tmp_
     path = _write(tmp_path, "def lonely(table):\n    return table\n")
     result = runner.invoke(app, ["eval", "check", str(path), "-i", str(tmp_path / "idea")])
     assert result.exit_code == 1
-    assert "evals/spread.py defines no CASES; a case eval's module holds its tests next to it" in result.output
+    assert "evals/spread.py defines no CASES; a lab eval's module holds its tests next to it" in result.output
     broken = _write(tmp_path / "other", "import nowhere\n")
     result = runner.invoke(app, ["eval", "check", str(broken)])
     assert result.exit_code == 1 and "failed to load: ModuleNotFoundError: No module named 'nowhere'" in result.output
+
+
+def test_it_says_how_the_layer_files_list_the_evals_and_refuses_a_lab_eval_without_h0(tmp_path: Path) -> None:
+    path = _write(tmp_path, GOOD)
+    (tmp_path / "idea" / "contract.py").write_text("")
+    feat = tmp_path / "idea" / "feat.py"
+    feat.write_text(
+        "from research_ci.api import Eval\nfrom evals.spread import thirds\nEVALS = [Eval(thirds, h0='none')]\n"
+    )
+    result = runner.invoke(app, ["eval", "check", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "  feat.py lists 'thirds' · H0: none" in result.output
+    feat.write_text("from evals.spread import thirds\nEVALS = [thirds]\n")
+    result = runner.invoke(app, ["eval", "check", str(path)])
+    assert result.exit_code == 1 and "  thirds  valid 2/2" in result.output
+    assert (
+        "error: refused: feat.py: the lab eval 'thirds' names no h0: a lab eval tests the claim and can veto it, so "
+        "it names in one sentence the H0 it rejects; write Eval(thirds, h0='<the H0>', ...) in EVALS"
+    ) in result.output
+
+
+def test_the_lab_eval_skeleton_is_refused_until_it_is_rewritten(tmp_path: Path) -> None:
+    idea = tmp_path / "tox"
+    assert runner.invoke(app, ["init", str(idea)]).exit_code == 0
+    result = runner.invoke(app, ["eval", "check", str(idea / "evals" / "example.py")])
+    assert result.exit_code == 1 and "evals/example.py is still the example; write your own" in result.output

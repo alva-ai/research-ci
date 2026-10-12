@@ -9,11 +9,12 @@ the noise rests on one cluster. They read only the FieldTable, what the plugins 
 the contract; none needs reference data or knows an asset class. Each is a step (``stages/skeleton.py``) that reads the
 data check's context (``Seen`` in ``stages/data/floor.py``) and returns lines for the DataCard, warnings, treatments,
 and items a person must decide. The data layer applies the treatments by default and weighs each by its influence on
-the decisive number; a check sees the data with the treatments before it applied (``Seen.prior``). An idea's own
-evals (``EVALS`` in ``data.py``) run after these, once validated; the built-in pits of the categories in ``PITS``, with
-the idea's own (``PITS`` in ``nulls/data.py``), test the ones that claim to cover them. Tools that need knowledge of a
-case, such as adjusting stock prices for splits or rolling futures, are not defaults: they are evals an idea lists on
-purpose, from the engine's library or its own case evals.
+the decisive number; a check sees the data with the treatments before it applied (``Seen.prior``). This list is slot 2
+of the data layer, with the library evals an idea lists; the idea's lab evals (``EVALS`` in ``data.py``, slot 3) run
+after these, once validated; the built-in pits of the categories in ``PITS``, with those of an eval's own module
+(``PITS`` next to its ``CASES``), test the ones that claim to cover them. Tools that need knowledge of a case, such as
+adjusting stock prices for splits or rolling futures, are not defaults: they are evals an idea lists on purpose, from
+the engine's library or its own lab evals.
 
 The engine hash leaves ``stages/data/defaults.py`` out: the data freeze pins the treated data by content, so a changed
 list cannot change a frozen result; it shows at the next ``rci data check``.

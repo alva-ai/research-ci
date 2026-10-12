@@ -1,12 +1,13 @@
 """The files ``rci init`` writes into a new idea: the contract skeleton, ``START.md`` for an agent that knows nothing
-else, and ``research/example.py``, which the engine refuses to run until it is rewritten. They shape only what is
-read, so the engine hash leaves this file out."""
+else, ``research/example.py`` and ``evals/example.py``, which the engine refuses to run until they are rewritten. They
+shape only what is read, so the engine hash leaves this file out."""
 
 from research_ci.runner.research import EXAMPLE_MARKER
 
 CONTRACT_FILE = "contract.py"
 START_FILE = "START.md"
 EXAMPLE_FILE = "research/example.py"
+EVALS_EXAMPLE_FILE = "evals/example.py"
 
 SKELETON = """from research_ci.api import Alternative, Contract, Effect, Execution, Forward, Label, Universe, Usage, Use
 
@@ -38,31 +39,32 @@ write, and the helper commands.
    cost models, with their options and fields. If you looked at the data or at results for this idea (plugin data,
    notebooks, backtests), declare it in `used`; `used=()` only if nothing was seen. Run `rci contract derive`; a
    person approves the ContractCard before any other work starts.
-2. Data, your loop: run `rci data check`. For a risk the default checks miss, add an eval to `EVALS` in `data.py`
-   (see Evals below).
-3. Feat, your loop: copy `research/example.py` to `research/<name>.py` and write your features there. Try a file with
-   `rci feat explore <file>` (free), then judge it with `rci feat submit <file>` (one trial of the budget). Give each
-   alternative of the contract a world in `nulls/feat.py`, or the ResultCard marks it uncovered: import `Null` and
-   `PermuteWithin` from `research_ci.api`, then
-   `NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"))]`. Optional
-   diagnostics are evals in `EVALS` in `feat.py`; `rci methods` lists every field of a null world.
+2. Data, your loop: list at least one lab eval in `EVALS` in `data.py` (Lab evals, below); run `rci data check`.
+3. Feat, your loop: list at least one lab eval in `EVALS` in `feat.py`, and give each alternative of the contract a
+   null world in `nulls/feat.py`: `NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>",
+   block="horizon"), evals=("<eval>",))]` (`from research_ci.api import Null, PermuteWithin`); a world judges the evals
+   it names, or the decisive effect when it names none. Copy `research/example.py` to `research/<name>.py` and write
+   your features there; try a file with `rci feat explore <file>` (free), then judge it with `rci feat submit <file>`
+   (one trial of the budget).
 4. A person reviews each result after your loop and approves it; then the next stage opens.
 
-Evals: `EVALS = [...]` in `data.py` or `feat.py` lists general evals of the engine's library (`rci methods` lists
-them; they are trusted) and case evals of your own. A case eval is a polars function in a module of the idea, such as
-`evals/<name>.py`, imported into `EVALS` (`from evals.<name> import <eval>`), with its tests in the same module:
-`CASES = [Case("<what it shows>", <eval>, <expected frame or number>, given=<input frame>)]`, required, and
-`PROPERTIES`, optional. The engine runs those tests before it runs the eval: one without tests is refused, and one
-that fails a test does not run and is shown with the test, what it expected, and what it got. Run
-`rci eval check evals/<name>.py` any time; it is free. Wrap an eval in `Eval(fn, ...)` when its layer needs more:
-`on_fail` and `covers` in `data.py`, `label`, `horizons`, and `combine` in `feat.py`.
+Lab evals: your tests of the claim; every layer with `EVALS` needs at least one, and each can veto. A lab eval is a
+polars function in `evals/<name>.py` (copy `evals/example.py`) with its tests in the same module:
+`CASES = [Case("<what it shows>", <eval>, <expected frame or number>, given=<input frame>)]`, required; `PROPERTIES`
+and, for a data eval, `PITS`, optional. List it with the H0 it rejects, in one sentence: `from evals.<name> import
+<eval>`, then `EVALS = [Eval(<eval>, h0="<the H0>")]`. In feat it, and each null world, must reach z ≥ 2 at every
+horizon it covers, or the claim fails there; it never passes what the decisive test failed. In data, `on_fail` says
+what is done with the rows it flags: `mask`, `drop_entities`, `ask`, or `block` (any row it flags, after the
+treatments before it, blocks the data). The
+engine runs the tests before anything heavy and refuses a layer with a lab eval that fails them; run
+`rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's library (`rci methods`):
+shown, never vetoing, with no `h0`.
 
 Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with
 `fields.lazy() ... .collect()` for a longer pipeline; pandas is fine for dates; any library runs. Row-by-row code
-(`iter_rows`, `.rows()`, `map_elements`, `.apply()`, `iterrows`, loops over data) runs too, with a warning on the card
-that names each line; polars expressions (`over`, `rolling_*_by`, `join_asof`) are usually much faster. The card also
-shows the time and peak memory the features took.
+(`iter_rows`, `.rows()`, `map_elements`, loops over data) runs too, with a warning on the card that names each line.
+The card also shows the time and peak memory the features took.
 
 Approvals: show the person the whole card, then relay their words with
 `rci approve --stage <stage> --relayed "<their words>" --card <id>`, where the id is the one printed as `card <id>`
@@ -110,4 +112,47 @@ def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
     # expressions like these are usually much faster than going row by row, which runs too, with a warning on the card;
     # the card also shows the time and peak memory the features took.
     return scored.select("t", "entity", pl.col("value").alias("score")).collect()
+'''
+
+EVALS_EXAMPLE = f'''# {EXAMPLE_MARKER} -- the engine refuses a lab eval from this file while this line is in it. Copy
+# it to evals/<name>.py, delete this line in the copy, and replace every TODO with your own eval and its tests.
+"""TODO: one sentence on what this idea needs tested that a generic eval cannot tell: the H0 the eval rejects."""
+
+from datetime import UTC, datetime
+
+import polars as pl
+
+from research_ci.api import Case
+
+T = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def ranks_label(table: pl.DataFrame) -> pl.DataFrame:
+    """A feat eval. table: the evaluation table of one horizon (t, entity, score, y, the label's parts y_<part>, and
+    the candidate columns). It returns one value per decision time (t, value); here the rank correlation of score and
+    label. TODO: what yours measures, such as the score against one part of the label, y_<part>."""
+    return table.group_by("t").agg(pl.corr("score", "y", method="spearman").alias("value")).sort("t")
+
+
+def flags(fields: pl.DataFrame) -> pl.DataFrame:
+    """A data eval. fields: the explore data (entity, field, event_time, available_at, value, vintage, source). It
+    returns the rows it flags (entity, event_time, optionally field); none means it found nothing. TODO: what yours
+    catches; here a value of FIELD at zero or below."""
+    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+
+
+FIELD = "TODO"
+FOUR = pl.DataFrame({{"t": [T] * 4, "entity": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]}})
+ROWS = pl.DataFrame({{"entity": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]}})
+
+# The tests the engine runs before the eval judges anything, worked by hand; a failed one refuses the layer.
+CASES = [
+    Case("TODO: one swap in four: 1 - 6·2/(4·15)", ranks_label, 0.8, given=FOUR),
+    Case("TODO: the value at zero is flagged", flags, 1, given=ROWS),
+]
+
+# feat.py: from evals.<name> import ranks_label
+#          EVALS = [Eval(ranks_label, h0="TODO: the H0 it rejects, such as: the scores do not rank the label")]
+# data.py: from evals.<name> import flags
+#          EVALS = [Eval(flags, h0="TODO: such as: every value of the field is above zero", on_fail="block")]
 '''

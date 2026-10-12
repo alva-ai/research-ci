@@ -1,5 +1,5 @@
-"""Case evals: the engine finds an eval's own tests in its module, runs only those, keeps the result until the module
-or what it imports changes, and refuses an eval without tests. A library eval is trusted."""
+"""Lab evals: the engine finds an eval's own tests in its module, runs only those, keeps the result until the module
+or what it imports changes, and refuses an eval without tests or still the example. A library eval is trusted."""
 
 import sys
 from pathlib import Path
@@ -66,7 +66,7 @@ def test_an_evals_tests_are_the_cases_of_its_module_that_run_it(tmp_path: Path) 
     assert [c.name for c in cases] == ["the frame itself", "through a helper", "through a partial", "held in a closure"]
     assert properties == []
     assert [c.name for c in ev.tests_of(_load(root, "other"))[0]] == ["another eval"]
-    assert ev.source_of(rank_ic) == "library" and ev.source_of(_load(root)) == "case"
+    assert ev.source_of(rank_ic) == "library" and ev.source_of(_load(root)) == "lab"
     assert "helpers" not in sys.modules and "scale" not in sys.modules, "the idea's modules are forgotten"
 
 
@@ -75,7 +75,7 @@ def test_a_case_eval_without_tests_is_refused_saying_where_they_go(tmp_path: Pat
     with pytest.raises(ev.EvalsError) as refused:
         ev.refuse_untested([Eval(_load(root, "other"))], root, "feat.py", "; no submission was spent")
     said = str(refused.value)
-    assert "feat.py: the case eval 'other' has no tests, so it cannot run: write CASES in evals/scale.py" in said
+    assert "feat.py: the lab eval 'other' has no tests, so it cannot run: write CASES in evals/scale.py" in said
     assert "`rci eval check evals/scale.py`" in said and said.endswith("no submission was spent")
     ev.refuse_untested([Eval(_load(root)), Eval(rank_ic)], root, "feat.py")
 
@@ -116,3 +116,29 @@ def test_a_case_eval_module_with_malformed_tests_says_how_they_are_written(tmp_p
     root = _idea(tmp_path, MODULE + "\nPROPERTIES = [1]\n")
     with pytest.raises(ev.EvalsError, match=r"PROPERTIES in scale.py must be a list of Size, Power, or Recovers"):
         ev.tests_of(_load(root))
+
+
+def test_a_lab_eval_from_the_example_module_is_refused_until_it_is_rewritten(tmp_path: Path) -> None:
+    """The lab eval skeleton ``rci init`` writes passes its own tests, so only its marker keeps it from being used as
+    it is; without the marker, it runs."""
+    from research_ci.workflow.templates import EVALS_EXAMPLE
+
+    root = _idea(tmp_path, EVALS_EXAMPLE)
+    with pytest.raises(ev.EvalsError, match="comes from evals/scale.py, which is still the example; write your own"):
+        ev.refuse_untested([Eval(_load(root, "ranks_label"))], root, "feat.py")
+    with pytest.raises(ev.EvalsError, match="evals/scale.py is still the example"):
+        ev.checked_file(root / "evals" / "scale.py", root)
+    copied = "\n".join(EVALS_EXAMPLE.splitlines()[2:])
+    root = _idea(tmp_path / "copy", copied)
+    ev.refuse_untested([Eval(_load(root, "ranks_label")), Eval(_load(root, "flags"))], root, "feat.py")
+    found, problem = ev.checked_file(root / "evals" / "scale.py", root)
+    assert not problem and [(name, v.status) for name, v in found] == [("flags", "valid"), ("ranks_label", "valid")]
+
+
+def test_a_data_eval_module_lists_its_own_pits(tmp_path: Path) -> None:
+    pits = "\nfrom research_ci.api import Pit\nPITS = [Pit('drift', lambda fields, field, rng: fields, 'nothing')]\n"
+    root = _idea(tmp_path, MODULE + pits)
+    assert [p.category for p in ev.pits_of(_load(root))] == ["drift"]
+    root = _idea(tmp_path / "bad", MODULE + "\nPITS = [1]\n")
+    with pytest.raises(ev.EvalsError, match=r"PITS in scale.py must be a list of Pit"):
+        ev.pits_of(_load(root))

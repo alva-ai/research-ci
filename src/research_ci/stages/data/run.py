@@ -2,11 +2,12 @@
 
 The source must pass admission (fidelity: the rows are what the venue reported, ``stages/data/source.py``), which runs
 once per source and is approved with the first idea's data, and the decisive number may read only fields an independent
-source verified, or the history is explore-grade. The data check builds what its steps read, then runs its floor list
-(``stages/data/floor.py``) with its default list (``stages/data/defaults.py``; fitness: whether faithful rows can be
-used for research) where the floor marks it: first the steps that find treatments, then, on the data with every
-treatment found, the steps that weigh them, and last, once nothing blocks, the calibration of the decisive test on the
-treated data.
+source verified, or the history is explore-grade. Before anything heavy runs, the data check refuses a ``data.py``
+without a lab eval, or with one whose tests fail (``stages/lab.py``). It then builds what its steps read and runs its
+floor list (``stages/data/floor.py``) with its default list (``stages/data/defaults.py``; fitness: whether faithful
+rows can be used for research) where the floor marks it: first the steps that find treatments, the default list, the
+pits the evals cover, the library evals and the lab evals, then, on the data with every treatment found, the steps
+that weigh them, and last, once nothing blocks, the calibration of the decisive test on the treated data.
 """
 
 import time
@@ -19,7 +20,6 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import Contract, Use, as_use, span
-from research_ci.api.data import pits_of
 from research_ci.api.evals import evals_of
 from research_ci.api.plugins import CostModel
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
@@ -29,7 +29,7 @@ from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner import research
 from research_ci.runner.plugins import Registry, code_hash, load
-from research_ci.stages import skeleton
+from research_ci.stages import lab, skeleton
 from research_ci.stages.common import iso, norm_candidates, target_use
 from research_ci.stages.contract.run import use_named
 from research_ci.stages.data import defaults, floor
@@ -42,12 +42,8 @@ from research_ci.store.sources import Sources, source_key
 from research_ci.validation import load as ev
 
 EVALS_FILE = "data.py"
-PITS_FILE = Path("nulls") / "data.py"
 EVALS_FORMAT = floor.EVALS_FORMAT
-PITS_FORMAT = (
-    "nulls/data.py defines PITS = [Pit(category, plant), ...], where plant(fields, field, rng) returns a copy of the "
-    "data with the pit planted in one entity; `rci methods` lists the built-in pits"
-)
+NOTHING = "; nothing was recorded"
 Key = Callable[[fs.Frozen], dict[str, str]]
 
 
@@ -128,14 +124,18 @@ class _DataCheck:
 
     def _seen(self) -> floor.Seen:
         """What the steps read: the idea's files, the explore data, the source's admission, the candidates, and the
-        decisive numbers."""
-        warning = research.warning([self.root / EVALS_FILE, self.root / PITS_FILE], self.root, self.registry)
+        decisive numbers. A ``data.py`` without a valid lab eval is refused first, before the data is fetched."""
+        warning = research.warning([self.root / EVALS_FILE], self.root, self.registry)
         evals = _layer_file(self.root, EVALS_FILE, "EVALS", lambda m: evals_of(m, "data"), EVALS_FORMAT)
-        pits = _layer_file(self.root, PITS_FILE, "PITS", pits_of, PITS_FORMAT)
         try:
-            ev.refuse_untested(evals, self.root, EVALS_FILE, "; nothing was recorded")
+            ev.refuse_untested(evals, self.root, EVALS_FILE, NOTHING)
+            validated = ev.validate(evals, self.root, self.registry)
         except ev.EvalsError as exc:
-            raise DataError(str(exc)) from exc
+            raise DataError(f"{str(exc).removesuffix(NOTHING)}{NOTHING}") from exc
+        ready = lab.Lab("data", EVALS_FILE, (self.root / EVALS_FILE).is_file(), tuple(evals), validated)
+        refused = lab.refusal(ready)
+        if refused:
+            raise DataError(f"{refused}{NOTHING}")
         use = as_use(self.c.data)
         plugin = self._plugin(use)
         everything = field_table(plugin.fetch())
@@ -160,7 +160,7 @@ class _DataCheck:
             root=self.root,
             registry=self.registry,
             evals=tuple(evals),
-            pits=tuple(pits),
+            validated=validated,
             builtin=tuple(defaults.PITS),
             numbers=numbers,
         )
@@ -276,9 +276,8 @@ class _DataCheck:
         fixes = {row["name"]: row for row in self.spec["evals"]}
         for c in failed:
             row = fixes.get(c.name)
-            if row is not None and c.by in ("case", "library"):
-                v = row["validation"]
-                notes.append(f"{c.name} ({c.by} eval) is invalid: {v['summary']}; {v['fix']}")
+            if row is not None and c.by in ("lab", "library"):
+                notes.append(_eval_note(row))
             else:
                 notes.append(f"{c.name} ({c.by or 'floor'}) failed: {c.detail}; fix what it names and check again")
         for t in self.spec["treatments"]:
@@ -308,6 +307,20 @@ class _DataCheck:
                 f"{why}; change the target or the contract"
             )
             self.spec["verdict"] = {"status": "blocked", "notes": [note]}
+
+
+def _eval_note(row: dict[str, Any]) -> str:
+    """Why an eval of ``data.py`` blocks the check: a lab eval's veto, or an eval that missed a pit it covers."""
+    if row.get("examples"):
+        return (
+            f"lab eval {row['name']!r} (slot 3) vetoes the data: H0: {row['h0']}; it flagged {row['flagged']:,} rows "
+            f"that the treatments before it left, such as {', '.join(row['examples'])}; with on_fail='block' any "
+            "flagged row blocks the check: fix the data or the data plugin and check again; if the eval is wrong, fix "
+            "it and its CASES"
+        )
+    v = row["validation"]
+    slot = "slot 4, tests of lab evals" if row["by"] == "lab" else "slot 2, its pits"
+    return f"{row['by']} eval {row['name']!r} ({slot}) is invalid: {v['summary']}; {v['fix']}"
 
 
 def _exclusions(cands: pl.DataFrame | None, ts: list[tr.Treatment]) -> pl.DataFrame:

@@ -1,14 +1,18 @@
-"""The steps the data check takes on every idea's data, around its default list (``stages/data/defaults.py``).
+"""The steps the data check takes on every idea's data, around its default list (``stages/data/defaults.py``), slot
+by slot.
 
-``FIND`` finds what to treat: the warning the idea's research files gave, the default list, then the idea's own evals
-(``EVALS`` in ``data.py``), each validated before it runs: a case eval by its tests, and every eval that claims to
-cover a kind of problem by the pits of that kind it must catch; an invalid one does not run and blocks the check.
-Every problem they find becomes a treatment that is applied by default, or an item a person decides. ``WEIGH`` works on
-the data with every treatment found: the field grades, each treatment's influence on the contract's decisive number in
-units of the smallest effect the data can detect (MDE), and the power before and after. Below the threshold a
-treatment is applied and logged. A treatment that changes identities (a split) is weighed against the untreated data,
-and every other one on top of the splits that are applied. Only differences are reported, never the level of the
-number. ``LAST`` runs once nothing blocks: the decisive test, calibrated on the treated data.
+Before the data is fetched, the checks of the lab's evals (``stages/lab.py``) refuse a ``data.py`` without a lab eval
+(slot 3) or with one that fails its ``CASES`` or ``PROPERTIES`` (slot 4). ``FIND`` finds what to treat: the warning
+the idea's research files gave, the default list (slot 2), the pits each eval that claims to cover a kind of problem
+must catch (slot 4; an eval that misses one does not run and blocks the check), then the library evals ``data.py``
+lists (slot 2) and its lab evals (slot 3). What slot 2 and the lab evals find becomes a treatment that is applied by
+default, or an item a person decides; a lab eval with ``on_fail="block"`` that flags any row is a veto, and the check
+is BLOCKED. ``WEIGH`` works on the data with every treatment found (slot 1): the field grades, each treatment's
+influence on the contract's decisive number in units of the smallest effect the data can detect (MDE), and the power
+before and after. Below the threshold a treatment is applied and logged. A treatment that changes identities (a split)
+is weighed against the untreated data, and every other one on top of the splits that are applied. Only differences are
+reported, never the level of the number. ``LAST`` runs once nothing blocks: the decisive test, calibrated on the
+treated data.
 """
 
 import math
@@ -21,14 +25,14 @@ import numpy as np
 import polars as pl
 
 from research_ci.api.contract import Contract, ContractError, span
-from research_ci.api.data import Pit
-from research_ci.api.evals import FORMAT, Eval
+from research_ci.api.evals import FORMAT, Eval, source_of
 from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import span_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner.plugins import Registry
+from research_ci.stages import lab
 from research_ci.stages.data import treatments as tr
 from research_ci.stages.data.source import SourceSettings
 from research_ci.stages.feat.floor import FeatSettings, Frozen, calibration
@@ -40,6 +44,7 @@ SPLITS = "splits applied"
 RAW = ""
 EVALS_FORMAT = FORMAT["data"]
 FLAGS = ("entity", "event_time")
+EXAMPLES = 3
 
 
 class DataError(ContractError):
@@ -69,10 +74,10 @@ class Seen:
     numbers (``None`` without a universe), and the treatments the checks before it found that will be applied.
 
     The floor's steps read more: the settings; the warning the idea's research files gave when they were read; the
-    idea's directory, its evals and pits, and the categories of the built-in pits; what the steps before showed
-    (``earlier``); the decisive numbers as the floor weighs them; every treatment found, kept ones too, and the treated
-    data, once every treatment is found; and how to read the treated data as feat does, and what a calibration of the
-    decisive test on it rests on."""
+    idea's directory, its evals and their validations by their tests, and the categories of the built-in pits; what
+    the steps before showed (``earlier``); the decisive numbers as the floor weighs them; every treatment found, kept
+    ones too, and the treated data, once every treatment is found; and how to read the treated data as feat does, and
+    what a calibration of the decisive test on it rests on."""
 
     contract: Contract
     fields: pl.DataFrame
@@ -89,7 +94,7 @@ class Seen:
     root: Path | None = None
     registry: Registry | None = None
     evals: tuple[Eval, ...] = ()
-    pits: tuple[Pit, ...] = ()
+    validated: Mapping[str, ev.Validation] = field(default_factory=dict)
     builtin: tuple[str, ...] = ()
     earlier: Mapping[str, Any] = field(default_factory=dict)
     numbers: tr.Numbers | None = None
@@ -101,25 +106,19 @@ class Seen:
 
 
 def row_loops(seen: Seen) -> Found:
-    """The warning the idea's ``data.py`` and ``nulls/data.py``, and the research modules they import, gave when the
-    data check read them, before anything else ran: every place they go row by row, with its file and line."""
+    """The warning the idea's ``data.py``, and the research modules it imports, gave when the data check read them,
+    before anything else ran: every place they go row by row, with its file and line."""
     return Found(warnings=[seen.research] if seen.research else [])
 
 
-def validated(seen: Seen) -> Found:
-    """Each of the idea's ``EVALS`` before it runs: an eval of the engine's library is trusted; a case eval runs its
-    tests, the cases and properties of its module that run it (kept by the hash of its files, so an unchanged one is
-    not run again). An eval that claims to cover a kind of problem in a field (``covers``) must flag every pit of that
-    kind, built in (the categories ``PITS`` in ``stages/data/defaults.py`` lists) or from the idea's own ``PITS``,
-    planted in a clean copy of the data, that moves the decisive number by the materiality threshold; the pits are
-    tests of the eval too. An eval that fails a test is invalid: it does not run, and the check is blocked."""
-    if not seen.evals:
-        return Found(shown={"validated": {}})
-    assert seen.root is not None
-    try:
-        found = ev.validate(seen.evals, seen.root, seen.registry)
-    except ev.EvalsError as exc:
-        raise DataError(f"{exc}; nothing was recorded") from exc
+def pits_caught(seen: Seen) -> Found:
+    """Each eval of ``data.py`` that claims to cover a kind of problem flags the pits of that kind. An eval that
+    covers one in a field (``covers``) must flag every pit of that kind, built in (the categories ``PITS`` in
+    ``stages/data/defaults.py`` lists) or from the ``PITS`` of its own module, planted in a clean copy of the data,
+    that moves the decisive number by the materiality threshold; the pits are tests of the eval too, run on the data,
+    after its ``CASES`` and ``PROPERTIES`` passed before the data was fetched. An eval that misses one is invalid: it
+    does not run, and the check is blocked."""
+    found = dict(seen.validated)
     covering = [e for e in seen.evals if e.covers]
     numbers = seen.numbers
     if covering and numbers is not None:
@@ -131,25 +130,46 @@ def validated(seen: Seen) -> Found:
     return Found(shown={"validated": found})
 
 
-def idea_evals(seen: Seen) -> Found:
-    """Each of the idea's ``EVALS`` that its validation let through, on the explore data: the rows it flags are
-    masked, their entities dropped, or a person asked, as its ``on_fail`` says. An invalid one is a failed check that
-    says which test failed, what it expected and got, and how to fix it; it flags nothing."""
-    validations: Mapping[str, ev.Validation] = seen.earlier.get("validated", {})
-    found = Found(shown={"evals": []})
+def library_evals(seen: Seen) -> Found:
+    """Each library eval ``data.py`` lists, on the explore data, like a check of the default list: the rows it flags
+    are masked, their entities dropped, or a person asked, as its ``on_fail`` says."""
+    return _evals(seen, "library")
+
+
+def lab_evals(seen: Seen) -> Found:
+    """Each lab eval ``data.py`` lists, a test of the claim's data, on the explore data: the rows it flags are masked,
+    their entities dropped, or a person asked, as its ``on_fail`` says. One with ``on_fail="block"`` judges the data
+    after the treatments found before it (``Seen.prior``), so it vetoes only a problem they leave: any row it flags
+    there is a veto, and the check is BLOCKED with the eval, its H0, how many rows, and a few of them. One that missed
+    a pit it covers is a failed check that says which pit, and how to fix it; it flags nothing."""
+    return _evals(seen, "lab")
+
+
+def _evals(seen: Seen, by: str) -> Found:
+    validations: Mapping[str, ev.Validation] = seen.earlier.get("validated", seen.validated)
+    found = Found(shown={"evals": list(seen.earlier.get("evals", []))})
+    treated: list[pl.DataFrame] = []
     for e in seen.evals:
-        v, by = validations[e.name], ev.source_of(e.of)
+        if source_of(e.of) != by:
+            continue
+        v = validations.get(e.name, ev.Validation("trusted"))
         row: dict[str, Any] = {"name": e.name, "by": by, "covers": [list(c) for c in e.covers], "on_fail": e.on_fail}
-        row |= {"validation": v.record(), "flagged": None, "note": e.note}
+        row |= {"h0": e.h0, "validation": v.record(), "flagged": None, "note": e.note}
         found.shown["evals"].append(row)
         if v.status == "invalid":
             found.checks.append(Check(e.name, "fail", f"{v.summary()}; it did not run; {v.fix()}", by))
             continue
-        flagged = _flagged(e, seen.fields)
+        blocks = e.on_fail == "block"
+        if blocks and not treated:
+            treated.append(tr.apply_all(seen.prior, seen.fields))
+        flagged = _flagged(e, treated[0] if blocks else seen.fields)
         row["flagged"] = flagged.height
-        detail = f"{v.summary()} · flagged {flagged.height:,} rows"
+        detail = f"{v.summary()} · flagged {flagged.height:,} rows{_after(seen.prior) if blocks else ''}"
         if not flagged.height:
             found.checks.append(Check(e.name, "pass", detail, by))
+        elif e.on_fail == "block":
+            row["examples"] = _examples(flagged)
+            found.checks.append(Check(e.name, "fail", f"{detail}; on_fail=block: a veto", by))
         elif e.on_fail == "mask":
             reason = f"{flagged.height:,} rows flagged"
             found.treatments.append(tr.mask_rows(f"eval {e.name}: mask", reason, flagged, seen.fields))
@@ -164,6 +184,22 @@ def idea_evals(seen: Seen) -> Found:
             found.decide.append(f"eval {e.name} flagged {flagged.height:,} rows")
             found.checks.append(Check(e.name, "warn", f"{detail}; a person decides", by))
     return found
+
+
+def _after(prior: Sequence[tr.Treatment]) -> str:
+    """The data a blocking eval judged: after the treatments found before it, or as it came."""
+    names = [t.name for t in prior if t.on == "fields"]
+    return f" of the data after the treatments before it ({', '.join(names)})" if names else " of the data as it came"
+
+
+def _examples(flagged: pl.DataFrame) -> list[str]:
+    """A few flagged rows as the card shows them: entity, field when given, and event time."""
+    columns = [c for c in ("entity", "field") if c in flagged.columns]
+    first = flagged.sort([*columns, "event_time"]).head(EXAMPLES)
+    at = pl.col("event_time")
+    when = at.dt.strftime("%Y-%m-%dT%H:%MZ") if isinstance(first.schema["event_time"], pl.Datetime) else at
+    shown = first.select(pl.concat_str([*columns, when.cast(pl.String)], separator=" ").alias("row"))
+    return shown["row"].to_list()
 
 
 def _flagged(e: Eval, fields: pl.DataFrame) -> pl.DataFrame:
@@ -279,10 +315,11 @@ def decisive_calibration(seen: Seen) -> Found:
 
 
 FIND = (
-    Step("row-by-row code", "warns", row_loops, "Row-by-row code in the idea's data files", "data.py, nulls/data.py"),
+    Step("row-by-row code", "warns", row_loops, "Row-by-row code in the idea's data files", "data.py"),
     DEFAULTS,
-    Step("eval validation", "blocks", validated, "Case evals pass their tests; covered pits are caught", "data.py"),
-    Step("the idea's evals", "treats", idea_evals, "Masks, drops, or asks about what a valid eval flags", "data.py"),
+    Step("pits caught", "blocks", pits_caught, "Each eval flags the pits it covers", "data.py", slot=4),
+    Step("library evals", "treats", library_evals, "Masks, drops, or asks about what one flags", "data.py", slot=2),
+    Step("lab evals", "vetoes", lab_evals, "Treats what one flags; on_fail=block vetoes", "data.py", slot=3),
 )
 WEIGH = (
     Step("field grades", "warns", field_grades, "The decisive number reads only verified fields"),
@@ -290,7 +327,7 @@ WEIGH = (
     Step("power", "shown", power, "MDE per horizon, before and after the treatments"),
 )
 LAST = (Step("decisive test calibration", "blocks", decisive_calibration, "Stand-ins die and planted signals live"),)
-STEPS = (*FIND, *WEIGH, *LAST)
+STEPS = (*lab.READY, *FIND, *WEIGH, *LAST)
 
 
 def _pit_resolution(numbers: tr.Numbers, fields: pl.DataFrame, prior: Sequence[tr.Treatment]) -> dict[str, float]:
@@ -306,6 +343,10 @@ def _pit_resolution(numbers: tr.Numbers, fields: pl.DataFrame, prior: Sequence[t
 def _pits(seen: Seen, numbers: tr.Numbers, e: Eval, mde: dict[str, float]) -> list[Check]:
     """Every pit of the kinds ``e`` covers, planted in a copy of the data without the entities it flags, with two seeds
     (``seeds``): each must be flagged, unless it moves the decisive number by less than the threshold."""
+    try:
+        own = ev.pits_of(e.of)
+    except ev.EvalsError as exc:
+        raise DataError(f"{exc}; nothing was recorded") from exc
     flagged = set(_flagged(e, seen.fields)["entity"].unique().to_list())
     clean = seen.fields.filter(~pl.col("entity").is_in(sorted(flagged)))
     base = numbers.recompute(clean)
@@ -315,14 +356,16 @@ def _pits(seen: Seen, numbers: tr.Numbers, e: Eval, mde: dict[str, float]) -> li
         plants = [(f"built-in {category}", BUILTIN[category])] if category in seen.builtin else []
         plants += [
             (f"pit {p.category}: {p.note}" if p.note else f"pit {p.category}", p.plant)
-            for p in seen.pits
+            for p in own
             if p.category == category
         ]
         if not plants:
             kinds = ", ".join(seen.builtin) or "none"
+            where = ev.file_of(e.of)
+            module = where.name if where is not None else "the eval's module"
             detail = (
                 f"no pit plants {category}, so the claim cannot be checked; the built-in kinds are {kinds}; add a "
-                f"Pit({category!r}, plant) to PITS in nulls/data.py, or drop the claim from covers"
+                f"Pit({category!r}, plant) to PITS in {module}, next to its CASES, or drop the claim from covers"
             )
             out.append(Check(f"pits: {category} in {name}", "fail", detail))
             continue

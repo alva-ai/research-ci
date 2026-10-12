@@ -73,10 +73,12 @@ class Lane:
 
 @dataclass(frozen=True)
 class Sequential:
-    """Shuffles ``batch`` at a time, up to the request's ``reps``, until the decision against ``need`` is settled."""
+    """Shuffles ``batch`` at a time, up to the request's ``reps``, until the decision against ``need`` is settled:
+    the family's, or with ``horizons`` every counted horizon's."""
 
     batch: int
     need: float
+    horizons: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,7 +223,8 @@ class _Taken:
             self.finish()
             return
         reals, nulls = self.values()
-        if settled(summary(reals, nulls, r.min_blocks, r.combine), reals, nulls, r.combine, r.sequential.need):
+        rule = r.sequential
+        if settled(summary(reals, nulls, r.min_blocks, r.combine), reals, nulls, r.combine, rule.need, rule.horizons):
             self.finish()
         else:
             self.target = min(r.reps, self.drawn + r.sequential.batch)
@@ -244,7 +247,8 @@ class _Taken:
 def summary(
     reals: Mapping[str, tuple[float, float, int]], nulls: Mapping[str, np.ndarray], min_blocks: int, combine: str
 ) -> dict[str, Any]:
-    """The judgement from each horizon's real value (``blocks``) and null values: z per horizon, and the family's."""
+    """The judgement from each horizon's real value (``blocks``) and null values: z per horizon, the family's, and
+    each counted horizon's z against the null the family's uses (``adjusted``, ``sequential.horizon_z``)."""
     rows, standard = [], []
     for h, (real, se, n) in reals.items():
         null = nulls[h]
@@ -265,18 +269,25 @@ def settled(
     nulls: Mapping[str, np.ndarray],
     combine: str,
     need: float,
+    horizons: bool = False,
 ) -> bool:
-    """Whether more shuffles could still change ``result``'s decision against ``need`` (``sequential.py``)."""
-    counted = [r["h"] for r in result["horizons"] if r["counted"]]
+    """Whether more shuffles could still change ``result``'s decision against ``need``, or with ``horizons`` that of
+    any counted horizon (``sequential.py``)."""
+    counted = [r for r in result["horizons"] if r["counted"]]
     if not counted:
         return sequential.settled(result["z"], math.nan, need)
-    real = np.array([reals[h][0] for h in counted])
-    se = sequential.standard_error(real, np.column_stack([nulls[h] for h in counted]), combine)
-    return sequential.settled(result["z"], se, need)
+    real = np.array([reals[r["h"]][0] for r in counted])
+    shuffled = np.column_stack([nulls[r["h"]] for r in counted])
+    if not horizons:
+        return sequential.settled(result["z"], sequential.standard_error(real, shuffled, combine), need)
+    ses = sequential.standard_errors(real, shuffled, combine)
+    return all(sequential.settled(r["adjusted"], se, need) for r, se in zip(counted, ses, strict=True))
 
 
 def _combined(rows: list[dict[str, Any]], nulls: list[np.ndarray], min_blocks: int, combine: str) -> dict[str, Any]:
     counted = [r for r in rows if r["counted"]]
+    for r in rows:
+        r["adjusted"] = r["z"] if r["counted"] else math.nan
     if not counted:
         return {"z": math.nan, "best": None, "horizons": rows, "note": f"fewer than {min_blocks} blocks everywhere"}
     if combine == "each":
@@ -286,9 +297,10 @@ def _combined(rows: list[dict[str, Any]], nulls: list[np.ndarray], min_blocks: i
     if len(counted) == 1:
         return {"z": best["z"], "best": best["h"], "horizons": rows, "note": "one horizon"}
     top = np.nanmax(np.vstack(nulls), axis=0)
-    sd = float(np.nanstd(top, ddof=1))
-    z = (best["z"] - float(np.nanmean(top))) / sd if sd > 0 else math.nan
-    return {"z": z, "best": best["h"], "horizons": rows, "note": f"best of {len(counted)} horizons"}
+    sd, mean = float(np.nanstd(top, ddof=1)), float(np.nanmean(top))
+    for r in counted:
+        r["adjusted"] = (r["z"] - mean) / sd if sd > 0 else math.nan
+    return {"z": best["adjusted"], "best": best["h"], "horizons": rows, "note": f"best of {len(counted)} horizons"}
 
 
 @dataclass(eq=False)

@@ -101,3 +101,19 @@ def test_the_judge_stops_where_the_rule_says_on_the_same_shuffles() -> None:
 
 def _shuffle(table: pl.DataFrame, h_ns: int):  # noqa: ANN202
     return lambda: Permutation(table, None, "cluster", h_ns).index
+
+
+def test_a_rule_that_decides_horizon_by_horizon_waits_until_every_horizon_is_settled() -> None:
+    """The family's z is far above the bar, so the family's decision is settled; another horizon sits at the bar
+    against the family's null, so whether it passes is not, and a rule horizon by horizon draws on."""
+    rng = np.random.default_rng(0)
+    nulls = {"1h": rng.standard_normal(BATCH), "4h": rng.standard_normal(BATCH)}
+    mu, sd = {h: float(v.mean()) for h, v in nulls.items()}, {h: float(v.std(ddof=1)) for h, v in nulls.items()}
+    top = np.maximum(*[(v - mu[h]) / sd[h] for h, v in nulls.items()])
+    at_bar = mu["4h"] + sd["4h"] * (float(top.mean()) + Z_BASE * float(top.std(ddof=1)))
+    reals = {"1h": (mu["1h"] + 10 * sd["1h"], 0.1, 20), "4h": (at_bar, 0.1, 20)}
+    result = summary(reals, nulls, MIN_BLOCKS, "max")
+    near = next(r for r in result["horizons"] if r["h"] == "4h")
+    assert abs(near["adjusted"] - Z_BASE) < 0.5 < result["z"] - Z_BASE
+    assert settled(result, reals, nulls, "max", Z_BASE)
+    assert not settled(result, reals, nulls, "max", Z_BASE, horizons=True)

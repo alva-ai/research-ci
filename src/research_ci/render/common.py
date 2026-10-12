@@ -29,7 +29,7 @@ def check_line(c: dict[str, Any]) -> str:
 
 
 def eval_line(c: dict[str, Any]) -> str:
-    """A check with whose eval it is: the stage's ``floor`` or ``default`` list, or the idea's ``library`` or ``case``
+    """A check with whose eval it is: the stage's ``floor`` or ``default`` list, or the idea's ``library`` or ``lab``
     eval."""
     return f"{c.get('by') or 'floor':<8} {check_line(c)}"
 

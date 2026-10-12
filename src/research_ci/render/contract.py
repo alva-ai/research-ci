@@ -36,7 +36,11 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
     for d in spec["decisive"]:
         add("power", f"{d['on']}: the smallest gain over random the data can detect (MDE)", *_label_table(d))
     alts = spec["alternatives"]
-    add("alts", " · ".join(a["id"] for a in alts["idea"]) + f"  (engine floor: {', '.join(alts['floor'])})")
+    add(
+        "alts",
+        " · ".join(a["id"] for a in alts["idea"]) + f"  (engine floor: {', '.join(alts['floor'])})",
+        "each needs a null world in nulls/feat.py, or feat refuses a submission before it is counted; a world can veto",
+    )
     used = [
         f"{u['start'][:10]} → {u['end'][:10]}: {u['what']} (affects {', '.join(u['affects'])})" for u in spec["used"]
     ]

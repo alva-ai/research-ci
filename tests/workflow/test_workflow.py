@@ -10,7 +10,7 @@ from research_ci.store.workspace import Workspace, rci_home
 from research_ci.workflow.base import LEDGER_FILE, Approval, find_ideas
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, Verdict, WorkflowError
-from toy import label_contract
+from toy import lab, label_contract
 
 S = State
 V = Verdict
@@ -21,6 +21,7 @@ def _idea(tmp_path: Path, budget: int = 3) -> Idea:
     (idea.root / "contract.py").write_text(label_contract(budget))
     idea.derive_contract()
     idea.approve("contract")
+    lab(idea.root)
     return idea
 
 

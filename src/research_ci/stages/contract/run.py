@@ -246,7 +246,10 @@ def _verdict(decisive: list[dict[str, Any]], failed: list[tuple[str, str]]) -> d
     for d in decisive:
         measured = [r["horizon"] for r in d["horizons"] if math.isfinite(r["mde"])]
         if measured:
-            notes.append(f"{d['on']}: noise measured at {', '.join(measured)}; feat passes it when it beats random")
+            notes.append(
+                f"{d['on']}: noise measured at {', '.join(measured)}; feat passes it where it beats random and no lab "
+                "eval or null world rejects it"
+            )
         else:
             notes.append(
                 f"{d['on']}: too few blocks on every horizon to measure the noise; give the contract a longer explore "

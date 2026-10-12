@@ -1,6 +1,7 @@
 """Null worlds, declared rather than run. Each keeps one alternative explanation and destroys the claimed information.
 
-The challenger writes them into ``nulls/<layer>.py`` as ``NULLS = [Null(...), ...]``; the engine runs them.
+The lab writes them into ``nulls/feat.py`` as ``NULLS = [Null(...), ...]``, one for every alternative explanation in the
+contract; the engine runs them, and each can veto the claim where what it judges does not reach ``z ≥ 2``.
 """
 
 from dataclasses import dataclass
@@ -27,18 +28,18 @@ class Null:
     """One alternative explanation ("it is only X") and the world that keeps X.
 
     ``explains`` is the id of an alternative in the contract. ``keeps`` names the column X lives in (``"time"``: only
-    when a decision happens), the world's own bucket unless told otherwise. In feat a world judges the layer's evals,
-    which are shown next to the decisive effect and do not decide; ``evals`` limits it to some of them by name, and
-    empty means every eval of the layer, the engine's default diagnostics included. ``reps`` shuffles judge each eval:
-    50 tell a diagnostic's z to about a tenth of itself (the decisive test draws up to 200, until its decision is
-    settled).
+    when a decision happens), the world's own bucket unless told otherwise. In feat a world judges the evals it names
+    in ``evals``, any eval of the layer (a lab eval, a library eval, or a default diagnostic), or, when it names none,
+    the decisive effect itself; what it judges must reach ``z ≥ 2`` at every horizon, or the submission fails there.
+    It draws its shuffles a batch at a time, up to ``reps``, until each of its votes is settled, as the decisive test
+    does.
     """
 
     explains: str
     world: PermuteWithin
     keeps: str | None = None
     evals: tuple[str, ...] = ()
-    reps: int = 50
+    reps: int = 200
     note: str = ""
 
     def __post_init__(self) -> None:

@@ -68,13 +68,13 @@ def methods(
         bool, typer.Option("--markdown", help=f"The catalog of every stage and the whole eval library, as {FILE}.")
     ] = False,
 ) -> None:
-    """The general evals of the engine's library an idea's EVALS can list or its case evals can call, with the worked
-    examples that back each; how a case eval and its tests are written; then how a null world is written."""
+    """The general evals of the engine's library an idea's EVALS can list or its lab evals can call, with the worked
+    examples that back each; how a lab eval and its tests are written; then how a null world is written."""
     if as_markdown:
         typer.echo(markdown(collect()))
         return
     found = listing.methods()
-    cases = listing.case_evals()
+    cases = listing.lab_evals()
     worlds = listing.nulls()
     if as_json:
         typer.echo(json.dumps(found + cases + worlds, indent=2))
@@ -90,7 +90,7 @@ def methods(
         if m["doc"]:
             typer.echo(f"    {m['doc']}")
         typer.echo(f"    backed by {_count(m['examples'], 'worked example')} · {_count(m['properties'], 'property')}")
-    typer.echo(f"case eval: {listing.CASE_EVAL}")
+    typer.echo(f"lab eval: {listing.LAB_EVAL}")
     typer.echo(f"  from research_ci.api import {', '.join(c['name'] for c in cases)}")
     for c in cases:
         typer.echo(f"    {c['name']}{c['signature']}")

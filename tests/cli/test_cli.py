@@ -10,7 +10,7 @@ from research_ci.cli.main import app
 from research_ci.render.common import card_id
 from research_ci.store.ledger import Ledger
 from research_ci.workflow.idea import Idea
-from toy import label_contract
+from toy import lab, label_contract
 
 CONTRACT = label_contract(budget=20)
 runner = CliRunner()
@@ -21,6 +21,7 @@ def _derived(tmp_path: Path, name: str = "tox") -> Path:
     assert runner.invoke(app, ["init", str(idea)]).exit_code == 0
     (idea / "contract.py").write_text(CONTRACT)
     assert runner.invoke(app, ["contract", "derive", "-i", str(idea)]).exit_code == 0
+    lab(idea)
     return idea
 
 
@@ -203,7 +204,15 @@ def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_p
         "pandas is fine for dates",
         "time and peak memory",
         '--relayed "<their words>" --card <id>',
-        "EVALS = [...]",
+        "list at least one lab eval in `EVALS` in `data.py`",
+        "list at least one lab eval in `EVALS` in `feat.py`",
+        "every layer with `EVALS` needs at least one, and each can veto",
+        "`evals/<name>.py` (copy `evals/example.py`)",
+        'EVALS = [Eval(<eval>, h0="<the H0>")]',
+        "must reach z ≥ 2 at every",
+        "it never passes what the decisive test failed",
+        "`block` (any row it flags, after the",
+        "null world in `nulls/feat.py`",
         "CASES = [Case(",
         "rci eval check evals/<name>.py",
     ):
@@ -212,6 +221,9 @@ def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_p
     example = (idea / "research" / "example.py").read_text()
     assert example.startswith("# rci:example") and "TODO" in example and "join_asof" in example
     assert "fields: pl.DataFrame" in example and "fields.lazy()" in example and ".collect()" in example
+    evals = (idea / "evals" / "example.py").read_text()
+    assert evals.startswith("# rci:example") and "CASES = [" in evals and "h0=" in evals and "TODO" in evals
+    assert f"lab evals start from {idea / 'evals' / 'example.py'}" in printed
 
 
 def test_plugins_lists_every_installed_plugin_with_options_and_declarations() -> None:
@@ -233,32 +245,36 @@ def test_plugins_lists_every_installed_plugin_with_options_and_declarations() ->
 
 def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
     text = runner.invoke(app, ["methods"]).stdout
-    assert text.startswith("feat eval: feat.py defines EVALS = [fn, Eval(fn, label=..., horizons=(...)")
+    assert text.startswith(
+        "feat eval: feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=("
+    )
     assert (
         "  from research_ci.eval.statistics.ic import rank_ic\n    rank_ic(table: pl.DataFrame, label: str = 'y')"
         in text
     )
     assert "backed by 3 worked examples · 3 properties" in text and "backed by 1 worked example · 0 properties" in text
-    assert (
-        "data eval: data.py defines EVALS = [fn, Eval(fn, on_fail=..., covers=" in text and "pit: nulls/data.py" in text
-    )
+    assert "data eval: data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=" in text
+    assert "pit: a data eval's module: PITS = [Pit(category, plant)] next to its CASES" in text
     for needed in (
-        "case eval: a function of the idea's own, in a module such as `evals/<name>.py`",
-        "  from research_ci.api import Eval, Case, Size, Power, Recovers, Market, Source",
+        "lab eval: a function of the idea's own, in a module such as `evals/<name>.py`",
+        "every layer with EVALS needs at least one, its h0 is required",
+        "it and each null world must reach z ≥ 2.00 at every horizon it covers",
+        "  from research_ci.api import Eval, Case, Size, Power, Recovers, Market, Source, Pit",
         "    Case(name, run, expect, tol=1e-09, given=None)",
-        "    Eval(of, name='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')",
+        "    Eval(of, name='', h0='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')",
         '  for example: CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)]',
-        "null world: nulls/feat.py: NULLS = [Null(explains, world)]; give each alternative of the contract one",
+        "null world: nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every alternative of the contract",
         "  from research_ci.api import Null, PermuteWithin\n    Null(explains: str, world: PermuteWithin, keeps: ",
         "      explains  the id of the contract's alternative this world answers",
         "    PermuteWithin(bucket_by: str, clusters: str | None = None, block: str | None = None)",
-        '  for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"))]',
+        '  for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), '
+        'evals=("<eval>",))]',
     ):
         assert needed in text, needed
     listed = json.loads(runner.invoke(app, ["methods", "--json"]).stdout)
     assert {"use", "import", "signature", "doc", "examples", "properties"} <= set(listed[0])
     assert [m["name"] for m in listed if m["use"] == "null world"] == ["Null", "PermuteWithin"]
-    assert [m["name"] for m in listed if m["use"] == "case eval"][:2] == ["Eval", "Case"]
+    assert [m["name"] for m in listed if m["use"] == "lab eval"][:2] == ["Eval", "Case"]
 
 
 def test_an_idea_named_from_inside_itself_says_to_drop_the_path(
@@ -322,7 +338,7 @@ def test_next_names_the_file_to_write_and_the_helpers_at_every_step(tmp_path: Pa
     shown = runner.invoke(app, ["contract", "show", "-i", str(idea)]).stdout
     assert shown.startswith("ContractCard") and shown.rstrip().endswith(f"card {_card(idea, 'contract')}")
     assert runner.invoke(app, ["approve", "--stage", "contract", "-i", str(idea), "--auto"]).exit_code == 0
-    assert all(x in reason() for x in ("data.py", "`rci methods`"))
+    assert all(x in reason() for x in ("data.py", "`rci methods`", "lab eval", "h0=", "evals/example.py"))
 
 
 SPREAD = """

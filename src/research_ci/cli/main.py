@@ -16,7 +16,7 @@ from research_ci.render.common import card_id
 from research_ci.workflow.base import CONTRACT_FILE, Approval, find_ideas
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import WorkflowError
-from research_ci.workflow.templates import EXAMPLE_FILE, START_FILE
+from research_ci.workflow.templates import EVALS_EXAMPLE_FILE, EXAMPLE_FILE, START_FILE
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -44,12 +44,14 @@ def version() -> None:
 def init(
     idea: Annotated[Path, typer.Argument(help="Directory of the new idea.")],
 ) -> None:
-    """Start an idea: write START.md, a contract skeleton, and research/example.py, and open its ledger."""
+    """Start an idea: write START.md, a contract skeleton, research/example.py and evals/example.py, and open its
+    ledger."""
     with common.errors():
         Idea.init(idea)
     typer.echo(f"created {idea}; read {idea / START_FILE} first: it says how the work goes")
     typer.echo(f"then fill in {idea / CONTRACT_FILE} and run `rci contract derive -i {idea}`")
-    typer.echo(f"features start from {idea / EXAMPLE_FILE}; `rci next -i {idea}` says what to do after every step")
+    typer.echo(f"lab evals start from {idea / EVALS_EXAMPLE_FILE}, features from {idea / EXAMPLE_FILE}")
+    typer.echo(f"`rci next -i {idea}` says what to do after every step")
 
 
 app.command()(catalog.plugins)

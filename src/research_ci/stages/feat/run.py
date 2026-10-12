@@ -1,12 +1,14 @@
 """The feat layer: features judged on the frozen data by a rule fixed before any is seen.
 
 Each submission names its own file of features: the engine reads it, and the idea's evals and null worlds, for
-row-by-row code, which the card shows as a warning, validates the idea's case evals by their tests, hands ``features``
-the frozen data and the candidates as polars DataFrames, and runs its floor list (``stages/feat/floor.py``) with the
-default diagnostics (``stages/feat/defaults.py``) where the floor marks them: the screen, the floors on the scores,
-then the decisive test, which alone decides, next to the diagnostics and the idea's evals, which are shown. Only the
-candidates the features scored, with a finite score, are judged, in the real world and in every null world alike.
-What the calls cost, their wall time and the peak memory of the full one, is shown, never judged.
+row-by-row code, which the card shows as a warning; refuses, before the submission is counted, a ``feat.py`` without a
+lab eval or with one that fails its tests, and a contract alternative without a null world; hands ``features`` the
+frozen data and the candidates as polars DataFrames, and runs its floor list (``stages/feat/floor.py``) with the
+default diagnostics (``stages/feat/defaults.py``) where the floor marks them: the floors on the scores, then the
+decisive test (slot 1), the diagnostics and library evals, which are shown (slot 2), and the lab evals and null worlds,
+which can veto (slot 3). The verdict is horizon by horizon (``kernel/verdict/rule.py``). Only the candidates the
+features scored, with a finite score, are judged, in the real world and in every null world alike. What the calls
+cost, their wall time and the peak memory of the full one, is shown, never judged.
 """
 
 import math
@@ -21,16 +23,16 @@ import polars as pl
 
 from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, Use, as_use, span
 from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
-from research_ci.api.nulls import nulls_of
+from research_ci.api.nulls import Null, nulls_of
 from research_ci.api.plugins import LabelPlugin
 from research_ci.kernel.hashing import hash_frame, hash_obj
 from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict import rule
 from research_ci.kernel.verdict.judge import judge_all
-from research_ci.kernel.verdict.worlds import World
+from research_ci.kernel.verdict.worlds import World, floor_world
 from research_ci.runner.plugins import Registry, code_hash, load
-from research_ci.stages import skeleton
+from research_ci.stages import lab, skeleton
 from research_ci.stages.common import label_values, norm_candidates, target_use
 from research_ci.stages.contract.run import use_named
 from research_ci.stages.feat import defaults, floor
@@ -50,11 +52,11 @@ from research_ci.store import vault
 from research_ci.store.workspace import hash_file
 from research_ci.validation import load as ev
 
-JUDGED = ("decisive", "evals")
+JUDGED = ("decisive", "shown", "vetoes")
 NULLS_FORMAT = (
-    "nulls/feat.py defines NULLS = [Null(alternative, PermuteWithin(column, clusters=..., block='horizon')), ...], "
-    "one world for an alternative explanation in the contract; the world shuffles the scores within the buckets of a "
-    "column of the evaluation table"
+    "nulls/feat.py defines NULLS = [Null(alternative, PermuteWithin(column, clusters=..., block='horizon'), "
+    "evals=(...)), ...], one world for every alternative explanation in the contract; the world shuffles the scores "
+    "within the buckets of a column of the evaluation table and judges the evals it names, or the decisive effect"
 )
 EVAL_FILES = "eval:"
 
@@ -148,8 +150,8 @@ def files(root: Path) -> dict[str, str]:
 
 
 def eval_files(root: Path, result: dict[str, Any]) -> dict[str, str]:
-    """The module of every case eval a submission ran, as it is now, by its file in the idea: ``missing`` when gone."""
-    names = {r["validation"]["file"] for r in result.get("evals", []) if r.get("by") == "case" and "validation" in r}
+    """The module of every lab eval a submission ran, as it is now, by its file in the idea: ``missing`` when gone."""
+    names = {r["validation"]["file"] for r in result.get("tests", [])}
     out = {}
     for name in sorted(n for n in names if n and n != FEAT_FILE):
         path = Path(name) if Path(name).is_absolute() else Path(root) / name
@@ -167,24 +169,25 @@ def submit(
 ) -> dict[str, Any]:
     """Judge one file of features as the ``n``-th submission of the layer. ``earlier`` maps the scores of earlier
     submissions (by hash) to their number; the same scores again are refused, since they are not a new trial, and so
-    is a null world that cannot run."""
+    are, before anything runs, a ``feat.py`` without a valid lab eval, an alternative of the contract without a null
+    world, and a null world that cannot run."""
     s = settings or FeatSettings()
     started = time.monotonic()
     seen = floor.Seen(frozen, s, Path(root), Path(path))
     warnings = _run(floor.SCREEN, seen).warnings
-    evals = _evals(Path(root), frozen.registry)
+    evals, validated = _lab_ready(Path(root), frozen.registry)
     named = [(step.name.format(clusters=seen.clusters), step) for step in defaults.CHECKS]
     names = {name for name, _ in named} | {e.name for e in evals}
     worlds = [floor.floor_world(frozen, s)] + _worlds(Path(root), frozen, names)
+    seen = replace(seen, worlds=tuple(worlds), validated=validated)
+    covered = _covered(_run(floor.COVERED, seen))
     features = _features_of(Path(root), path, NO_TRIAL)
-    validated = _validated(Path(root), evals, frozen.registry)
     scores, cost = floor.computed(features, frozen, Path(path), after=NO_TRIAL)
     digest = hash_frame(scores)
     if digest in earlier:
         raise FeatError(f"the same scores as submission {earlier[digest]}; they would not be a new trial{NO_TRIAL}")
     need = pw.z_need(n, s.z_base)
-    seen = replace(seen, features=features, scores=scores, cost=cost, need=need, worlds=tuple(worlds))
-    seen = replace(seen, validated=validated)
+    seen = replace(seen, features=features, scores=scores, cost=cost, need=need)
     floors, shown = _run(floor.FLOORS, seen), _run(floor.SHOWN, seen)
     out: dict[str, Any] = {
         "n": n,
@@ -195,7 +198,12 @@ def submit(
         "need": need,
         "stride": frozen.stride,
         "worlds": [asdict(w) for w in worlds],
-        "coverage": shown.shown["coverage"],
+        "coverage": covered.shown["coverage"],
+        "tests": [
+            {"name": e.name, "file": validated[e.name].file, "h0": e.h0, "validation": validated[e.name].record()}
+            for e in evals
+            if e.name in validated and validated[e.name].status != "trusted"
+        ],
         "warnings": warnings,
     }
     failed = {c.name: c for c in floors.checks if c.status == "fail"}
@@ -210,11 +218,39 @@ def submit(
         out["verdict"] = rule.verdict("FAILED", [f"{note}; give two or more candidates distinct scores at each time"])
         return out | {"seconds": round(time.monotonic() - started, 1)}
     judged = _judge(seen, named, evals)
-    out["decisive"] = judged.shown["decisive"]
-    out["evals"] = judged.shown["evals"]
-    out["verdict"] = rule.combine(out["decisive"], need)
+    out |= {key: judged.shown.get(key, []) for key in JUDGED}
+    out["verdict"] = rule.combine(out["decisive"], out["vetoes"], need)
     out["seconds"] = round(time.monotonic() - started, 1)
     return out
+
+
+def ready(root: Path, contract: Contract, registry: Registry | None = None) -> None:
+    """Refuses, before anything heavy runs and before a submission is counted, a ``feat.py`` without a lab eval or
+    with one that fails its tests, and an alternative of the contract without a null world."""
+    _lab_ready(Path(root), registry)
+    nulls = _layer_file(root, root / NULLS_FILE, _declared("NULLS", nulls_of), required=False, fmt=NULLS_FORMAT)
+    unknown = _unknown(nulls, contract)
+    if unknown:
+        raise FeatError(f"{NULLS_FILE}: {'; '.join(unknown)}{NO_TRIAL}")
+    clusters = contract.universe.clusters if contract.universe is not None else "entity"
+    worlds = [floor_world(clusters, 0)] + [_world(i, n) for i, n in enumerate(nulls, start=1)]
+    _covered(skeleton.Found([floor.coverage(contract, worlds)]))
+
+
+def _lab_ready(root: Path, registry: Registry | None) -> tuple[list[Eval], dict[str, ev.Validation]]:
+    evals = _evals(root, registry)
+    validated = _validated(root, evals, registry)
+    refused = lab.refusal(lab.Lab("feat", FEAT_FILE, (root / FEAT_FILE).is_file(), tuple(evals), validated))
+    if refused:
+        raise FeatError(f"{refused}{NO_TRIAL}")
+    return evals, validated
+
+
+def _covered(found: skeleton.Found) -> skeleton.Found:
+    failed = [c.detail for c in found.checks if c.status == "fail"]
+    if failed:
+        raise FeatError(f"{'; '.join(failed)}{NO_TRIAL}")
+    return found
 
 
 def explore(root: Path, frozen: Frozen, path: Path, settings: FeatSettings | None = None) -> dict[str, Any]:
@@ -240,10 +276,10 @@ def _run(listed: Sequence[skeleton.Step[floor.Seen]], seen: floor.Seen) -> skele
 
 
 def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]], evals: list[Eval]) -> skeleton.Found:
-    """The decisive test and the evals side by side: each step says what it needs judged, and all of it is judged
-    together, every shuffle once for each eval and world that reads it. An idea eval named like a default diagnostic
-    is judged in its place. Only the candidates the features scored are judged: the rows of the evaluation tables
-    without a finite score are left out, so they are left out in every world alike."""
+    """The decisive test, the evals and the null worlds side by side: each step says what it needs judged, and all of
+    it is judged together, every shuffle once for each eval and world that reads it. An idea eval named like a default
+    diagnostic is judged in its place. Only the candidates the features scored are judged: the rows of the evaluation
+    tables without a finite score are left out, so they are left out in every world alike."""
     scores = seen.scores
     assert scores is not None
     scored = scores.filter(pl.col("score").is_finite())
@@ -270,7 +306,7 @@ def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]],
     for f in found:
         f.shown |= {key: [row for p in f.shown[key] for row in rows[id(p)]] for key in JUDGED if key in f.shown}
     out = skeleton.combined(found)
-    out.shown["evals"] = [r for f in found for r in f.shown.get("evals", [])]
+    out.shown |= {key: [r for f in found for r in f.shown.get(key, [])] for key in JUDGED}
     return out
 
 
@@ -281,7 +317,8 @@ def _default(seen: floor.Seen, name: str, step: skeleton.Step[floor.Seen], idea:
 
 
 def _evals(root: Path, registry: Registry | None) -> list[Eval]:
-    """The idea's ``EVALS`` in ``feat.py``, none without the file; a case eval with no tests is refused."""
+    """The idea's ``EVALS`` in ``feat.py``, none without the file; a lab eval with no h0, no tests, or still the example
+    is refused."""
     found = _layer_file(root, root / FEAT_FILE, _declared("EVALS", lambda m: evals_of(m, "feat")), False, EVALS_FORMAT)
     try:
         ev.refuse_untested(found, root, FEAT_FILE, NO_TRIAL)
@@ -310,14 +347,9 @@ def _declared(name: str, read: Callable[[Any], list[Any]]) -> Callable[[Any], li
 
 def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
     nulls = _layer_file(root, root / NULLS_FILE, _declared("NULLS", nulls_of), required=False, fmt=NULLS_FORMAT)
-    ids = {a.id for a in frozen.contract.alternatives} | set(FLOOR_ALTERNATIVES)
     columns = set(next(iter(next(iter(frozen.tables.values())).values()))[0].columns) | {"score"}
-    out, problems = [], []
+    out, problems = [], _unknown(nulls, frozen.contract)
     for i, n in enumerate(nulls, start=1):
-        if n.explains not in ids:
-            problems.append(
-                f"null {i}: {n.explains!r} is not an alternative of the contract ({', '.join(sorted(ids))})"
-            )
         w = n.world
         bucket = None if w.bucket_by == "time" else w.bucket_by
         keeps = None if n.keeps in (None, "time") else n.keeps
@@ -330,23 +362,36 @@ def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
         unknown = [name for name in n.evals if name not in names]
         if unknown:
             problems.append(f"null {i}: no eval named {', '.join(unknown)}; the evals are {', '.join(sorted(names))}")
-        out.append(
-            World(
-                name=f"null {i}",
-                explains=(n.explains,),
-                bucket=bucket,
-                clusters=w.clusters,
-                block=w.block,
-                keeps=keeps,
-                evals=tuple(n.evals),
-                reps=n.reps,
-                by="idea",
-                note=n.note,
-            )
-        )
+        out.append(_world(i, n))
     if problems:
         raise FeatError(f"{NULLS_FILE}: {'; '.join(problems)}{NO_TRIAL}")
     return out
+
+
+def _unknown(nulls: list[Null], contract: Contract) -> list[str]:
+    """The worlds that name an alternative the contract does not have."""
+    ids = {a.id for a in contract.alternatives} | set(FLOOR_ALTERNATIVES)
+    return [
+        f"null {i}: {n.explains!r} is not an alternative of the contract ({', '.join(sorted(ids))})"
+        for i, n in enumerate(nulls, start=1)
+        if n.explains not in ids
+    ]
+
+
+def _world(i: int, n: Null) -> World:
+    w = n.world
+    return World(
+        name=f"null {i}",
+        explains=(n.explains,),
+        bucket=None if w.bucket_by == "time" else w.bucket_by,
+        clusters=w.clusters,
+        block=w.block,
+        keeps=None if n.keeps in (None, "time") else n.keeps,
+        evals=tuple(n.evals),
+        reps=n.reps,
+        by="idea",
+        note=n.note,
+    )
 
 
 def _features_of(root: Path, path: Path, after: str) -> floor.Features:
@@ -381,7 +426,7 @@ def _named(path: Path, root: Path) -> str:
 
 
 def current_deps(contract: Contract, root: Path, recorded: dict[str, str], registry: Registry | None) -> dict:
-    """A submission's plugin code, the idea's evals and nulls files, and its case evals' modules as they are now,
+    """A submission's plugin code, the idea's evals and nulls files, and its lab evals' modules as they are now,
     keyed like the recorded ones."""
     now: dict[str, str] = {}
     for key in recorded:

@@ -1,14 +1,18 @@
-"""The steps a feat submission takes, around its default list (``stages/feat/defaults.py``).
+"""The steps a feat submission takes, around its default list (``stages/feat/defaults.py``), slot by slot.
 
-``SCREEN`` refuses a features file that cannot be a trial before anything runs. ``FLOORS`` checks the scores: they
-must rank the candidates and read nothing ahead of their time; a submission that fails one is TAINTED or FAILED and
-nothing is judged. ``JUDGE`` holds the decisive test, the one bar, fixed by the contract: the contract's decisive
-effect, computed with the submitted scores, must beat the engine's floor world (chance and timing: scores shuffled
-across clusters at each decision time, the same way within a horizon) with ``z ≥ z_need``, which rises with the
-submission count. Next to it the diagnostics, the default list and the idea's ``EVALS`` (``feat.py``; a case eval
-only when its tests pass, an invalid one is shown as invalid and not judged), are judged against the floor world and
-the idea's ``NULLS`` (``nulls/feat.py``) and shown, never deciding. Only the candidates the features gave a finite score
-are judged, in every world alike. ``SHOWN`` says which world answers which alternative, and what the features cost.
+Before anything runs, and before the submission is counted: ``SCREEN`` refuses a features file that cannot be a trial;
+the checks of the lab's evals (``stages/lab.py``) refuse a ``feat.py`` without a lab eval (slot 3) or with one that
+fails its tests (slot 4); ``COVERED`` refuses a contract alternative without a null world (slot 3). ``FLOORS`` checks
+the scores, the premises of slot 1: they must rank the candidates and read nothing ahead of their time; a submission
+that fails one is TAINTED or FAILED and nothing is judged. ``JUDGE`` holds the decisive test, the one bar, fixed by the
+contract (slot 1): the contract's decisive effect, computed with the submitted scores, must beat the engine's floor
+world (chance and timing: scores shuffled across clusters at each decision time, the same way within a horizon) with
+``z ≥ z_need``, which rises with the submission count; it passes at the horizons whose z against the family's null
+reaches the bar. Next to it slot 2, the default diagnostics and the library evals ``feat.py`` lists, judged in the
+floor world and shown, never deciding; and slot 3, the lab evals of ``feat.py``, judged in the floor world, and the
+null worlds of ``nulls/feat.py``, each judging the evals it names or, naming none, the decisive effect: each must reach
+``z ≥ 2`` (``VETO_Z``) at every horizon it covers, or the submission fails there (``kernel/verdict/rule.py``). Only the
+candidates the features gave a finite score are judged, in every world alike. ``SHOWN`` says what the features cost.
 Before the first submission is judged, the data check calibrates the decisive test in the floor world
 (``calibration``).
 """
@@ -16,7 +20,7 @@ Before the first submission is judged, the data check calibrates the decisive te
 import math
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from functools import partial
@@ -27,12 +31,12 @@ import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, ContractError, Effect, Use, as_use, span
-from research_ci.api.evals import FORMAT, Eval
+from research_ci.api.evals import FORMAT, Eval, source_of
 from research_ci.api.plugins import CostModel, TargetPlugin
 from research_ci.eval import protocol as pr
 from research_ci.kernel.time.clock import TIME, lit_time
 from research_ci.kernel.verdict import power as pw
-from research_ci.kernel.verdict import worlds
+from research_ci.kernel.verdict import rule, worlds
 from research_ci.kernel.verdict.judge import (
     Batched,
     EvalError,
@@ -47,6 +51,7 @@ from research_ci.kernel.verdict.worlds import World, lanes
 from research_ci.runner import research
 from research_ci.runner.meter import Cost, measured
 from research_ci.runner.plugins import Registry, load
+from research_ci.stages import lab
 from research_ci.stages.common import default_workers, iso, owner, quantile_times, target_use, units
 from research_ci.stages.skeleton import DEFAULTS, Found, Step
 from research_ci.validation import load as ev
@@ -76,8 +81,9 @@ class FeatSettings:
     """The evaluation tables keep at most ``max_times`` decision times (every k-th when there are more). Calibrating
     the decisive effect runs on ``calibration_times`` of them: ``calibration_reps`` stand-ins and planted outputs, each
     against ``calibration_nulls`` shuffles. ``cuts`` decision times check that features read nothing ahead. The
-    decisive test draws its shuffles ``floor_batch`` at a time, up to ``floor_reps``, until its decision is settled;
-    a diagnostic takes ``shown_reps`` in the floor world, and as many as each null world of the idea says."""
+    decisive test, and every lab eval in the floor world, draws its shuffles ``floor_batch`` at a time, up to
+    ``floor_reps``, until its decision is settled, and a null world of the idea up to as many as it says; a diagnostic
+    of slot 2 takes ``shown_reps`` in the floor world."""
 
     workers: int = field(default_factory=lambda: int(os.environ.get("RCI_WORKERS", default_workers())))
     max_times: int = 1000
@@ -126,8 +132,8 @@ class Frozen:
 class Seen:
     """What a feat step reads: the frozen data, the settings, the idea's directory, the features file, and what a
     refusal says was not spent. Once the features ran: their function, their scores, and what the full call cost.
-    For judging: the bar, the worlds, the evaluation tables with the scores, the idea's evals and their validations,
-    and the name a default diagnostic is judged under."""
+    For judging: the bar, the worlds, the evaluation tables with the scores, the idea's evals not judged in place of a
+    default diagnostic and their validations, and the name a default diagnostic is judged under."""
 
     frozen: Frozen
     settings: FeatSettings
@@ -214,53 +220,93 @@ def nothing_ahead(seen: Seen) -> Found:
 
 def decisive_test(seen: Seen) -> Found:
     """The decisive effect, with the submitted scores, against the floor world: the family's z over the horizons must
-    reach the bar. Shuffles are drawn a batch at a time until the decision is settled (``kernel/verdict/sequential.py``)
-    or all are drawn. The effect shown is the gain over random, the target with these scores less its mean in the
-    floor world, at the best counted horizon."""
+    reach the bar, and it passes at each horizon whose z against the same null (the best of each shuffle's
+    standardized horizons) does. Shuffles are drawn a batch at a time until every horizon's decision is settled
+    (``kernel/verdict/sequential.py``) or all are drawn. The effect shown is the gain over random, the target with
+    these scores less its mean in the floor world, at the best counted horizon."""
     s = seen.settings
     floor = floor_world(seen.frozen, s)
     found = Found(shown={"decisive": []})
     for effect in seen.frozen.contract.decisive:
         evaluate, use, head = target(effect, seen.frozen)
-        rule = Sequential(s.floor_batch, seen.need)
-        request = Request(evaluate, lanes(seen.scored[effect.on], floor), s.floor_reps, s.min_blocks, "max", rule)
+        settle = Sequential(s.floor_batch, seen.need, horizons=True)
+        request = Request(evaluate, lanes(seen.scored[effect.on], floor), s.floor_reps, s.min_blocks, "max", settle)
         found.shown["decisive"].append(Pending(request, partial(_decided, use, head, seen.need)))
     return found
 
 
-def idea_evals(seen: Seen) -> Found:
-    """The idea's ``EVALS``, judged like the diagnostics of the default list; one named like a default diagnostic is
-    judged in its place instead. A case eval runs only when it passed its tests: an invalid one is shown with the test
-    it failed, what it expected and got, and how to fix it, and with no numbers."""
-    found = Found(shown={"evals": []})
+def library_evals(seen: Seen) -> Found:
+    """The library evals ``feat.py`` lists, judged in the floor world like the default diagnostics and shown, never
+    deciding; a null world that names one judges it too, and can veto."""
+    found = Found(shown={"shown": [], "vetoes": []})
     for e in seen.evals:
-        found.shown["evals"] += idea_eval(seen, e).shown["evals"]
+        if source_of(e.of) == "library":
+            found = _joined(found, idea_eval(seen, e))
+    return found
+
+
+def lab_evals(seen: Seen) -> Found:
+    """Each lab eval ``feat.py`` lists, a test of the claim: judged in the floor world, and in every null world that
+    names it, it must reach ``z ≥ 2`` at every horizon it covers, or the submission fails there. One named like a
+    default diagnostic is judged in its place instead."""
+    found = Found(shown={"shown": [], "vetoes": []})
+    for e in seen.evals:
+        if source_of(e.of) == "lab":
+            found = _joined(found, idea_eval(seen, e))
+    return found
+
+
+def null_worlds(seen: Seen) -> Found:
+    """Each null world of ``nulls/feat.py`` that names no eval judges the decisive effect itself, with the submitted
+    scores shuffled its way: it must reach ``z ≥ 2`` at every horizon of the effect's label, or the submission fails
+    there. A world that names evals judges them where they are judged."""
+    s = seen.settings
+    found = Found(shown={"vetoes": []})
+    for w in seen.worlds:
+        if w.by == "engine" or w.evals:
+            continue
+        for effect in seen.frozen.contract.decisive:
+            evaluate, _, head = target(effect, seen.frozen)
+            veto = Sequential(s.floor_batch, rule.VETO_Z, horizons=True)
+            request = Request(evaluate, lanes(seen.scored[effect.on], w), w.reps, s.min_blocks, "each", veto)
+            found.shown["vetoes"].append(Pending(request, partial(_world_row, effect, head, w, seen)))
     return found
 
 
 def idea_eval(seen: Seen, e: Eval) -> Found:
-    by = ev.source_of(e.of)
-    v = seen.validated.get(e.name, ev.Validation("trusted"))
-    if v.status != "invalid":
-        return judged(seen, e, by, v)
-    row = {"eval": e.name, "by": by, "validation": v.record(), "invalid": True, "fix": v.fix(), "passed": False}
-    return Found(shown={"evals": [Pending(None, lambda _: [row])]})
+    """An eval of the idea judged: a lab eval in slot 3, with its validation; a library eval in slot 2."""
+    by = source_of(e.of)
+    return judged(seen, e, by, seen.validated.get(e.name) if by == "lab" else None)
 
 
 def alternatives(seen: Seen) -> Found:
-    """Which world answers which alternative. One that no world answers is a warning, not a failure: only the
-    decisive test decides, and the worlds of the idea judge only diagnostics."""
-    c = seen.frozen.contract
+    """Which world answers which alternative: every alternative of the contract needs a null world in
+    ``nulls/feat.py``, or the submission is refused before it is counted; the floor world answers chance and
+    timing."""
+    check = coverage(seen.frozen.contract, seen.worlds)
+    return Found([check], shown={"coverage": asdict(check)})
+
+
+def coverage(c: Contract, judging: Sequence[World]) -> pr.Check:
+    """Which of ``judging`` answers each alternative of the contract, and the engine's; failed, with what to write,
+    when one has none."""
     lines, missing = [], []
     for alt in [*FLOOR_ALTERNATIVES, *(a.id for a in c.alternatives)]:
-        kept_by = [w.name for w in seen.worlds if alt in w.explains]
+        kept_by = [w.name for w in judging if alt in w.explains]
         lines.append(f"{alt}: {', '.join(kept_by) or 'none'}")
         missing += [] if kept_by else [alt]
-    if missing:
-        check = pr.Check("alternatives covered", "warn", f"{' · '.join(lines)}; no world answers {', '.join(missing)}")
-    else:
-        check = pr.Check("alternatives covered", "pass", " · ".join(lines))
-    return Found(shown={"coverage": asdict(check)})
+    if not missing:
+        return pr.Check("alternatives covered", "pass", " · ".join(lines))
+    texts = {a.id: a.text for a in c.alternatives}
+    named = "; ".join(f"{alt} ({texts.get(alt, '')})" for alt in missing)
+    clusters = c.universe.clusters if c.universe is not None else "<cluster column>"
+    detail = (
+        f"slot 3, null worlds: no world answers {named}: every alternative explanation of the contract needs one "
+        f'in {NULLS_FILE}, such as NULLS = [Null("{missing[0]}", PermuteWithin("time", clusters="{clusters}", '
+        'block="horizon"), evals=("<an eval it judges>",))], which keeps what the alternative says and shuffles '
+        "the rest; it judges the evals it names, or the decisive effect when it names none"
+    )
+    return pr.Check("alternatives covered", "fail", detail)
 
 
 def cost(seen: Seen) -> Found:
@@ -271,6 +317,16 @@ def cost(seen: Seen) -> Found:
 
 
 SCREEN = (Step("screen", "blocks", screen_file, "Refuses a missing, example, or unparsable file"),)
+COVERED = (
+    Step(
+        "alternatives covered",
+        "blocks",
+        alternatives,
+        "Every alternative of the contract has a null world",
+        "nulls/feat.py",
+        slot=3,
+    ),
+)
 FLOORS = (
     Step("scores rank candidates", "blocks", ranks, "Scores rank candidates at half the times"),
     Step("scores read nothing ahead", "blocks", nothing_ahead, "Same scores with the data cut early"),
@@ -278,13 +334,12 @@ FLOORS = (
 JUDGE = (
     Step("decisive test", "decides", decisive_test, "The decisive effect beats the floor world: z ≥ z_need"),
     DEFAULTS,
-    Step("the idea's evals", "shown", idea_evals, "Each valid idea eval, judged like a diagnostic", "feat.py"),
+    Step("library evals", "shown", library_evals, "Each library eval feat.py lists, vs the floor", "feat.py", slot=2),
+    Step("lab evals", "vetoes", lab_evals, "Each lab eval reaches z ≥ 2 where it covers", "feat.py", slot=3),
+    Step("null worlds", "vetoes", null_worlds, "Each world's judgement reaches z ≥ 2", "nulls/feat.py", slot=3),
 )
-SHOWN = (
-    Step("alternatives covered", "warns", alternatives, "Every alternative of the contract has a world"),
-    Step("cost", "shown", cost, "Wall time and peak memory of the features call"),
-)
-STEPS = (*SCREEN, *FLOORS, *JUDGE, *SHOWN)
+SHOWN = (Step("cost", "shown", cost, "Wall time and peak memory of the features call"),)
+STEPS = (*SCREEN, *lab.READY, *COVERED, *FLOORS, *JUDGE, *SHOWN)
 
 
 def screen(root: Path, path: Path, registry: Registry | None = None, after: str = NO_TRIAL) -> list[str]:
@@ -305,19 +360,28 @@ def screen(root: Path, path: Path, registry: Registry | None = None, after: str 
 
 
 def judged(seen: Seen, e: Eval, by: str, validation: "ev.Validation | None" = None) -> Found:
-    """An eval judged in the floor world and in every null world that judges it; shown, never deciding. Worlds that
-    shuffle alike are judged once and shown under each name."""
+    """An eval judged in the floor world and in every null world that names it. A lab eval, and any eval in a world of
+    the idea, can veto (slot 3): it draws its shuffles until its votes against ``VETO_Z`` are settled. A default
+    diagnostic or a library eval in the floor world is shown (slot 2), on ``shown_reps`` shuffles. Worlds that shuffle
+    alike are judged once and shown under each name."""
+    s = seen.settings
     label = label_of(e, seen.frozen)
     tables = {h: seen.scored[label][h] for h in horizons_of(e, seen.frozen)}
+    combine = e.combine or "max"
     alike: dict[tuple[Any, ...], Request] = {}
-    found = Found(shown={"evals": []})
+    found = Found(shown={"shown": [], "vetoes": []})
     for w in seen.worlds:
-        if w.evals and e.name not in w.evals:
+        floor = w.by == "engine"
+        if not floor and e.name not in w.evals:
             continue
-        key = (w.bucket, w.clusters, w.block, w.reps)
+        veto = by == "lab" or not floor
+        reps = (s.floor_reps if floor else w.reps) if veto else s.shown_reps
+        settle = Sequential(s.floor_batch, rule.VETO_Z, horizons=combine == "each") if veto else None
+        key = (w.bucket, w.clusters, w.block, reps, veto)
         if key not in alike:
-            alike[key] = Request(e.of, lanes(tables, w), w.reps, seen.settings.min_blocks, e.combine or "max")
-        found.shown["evals"].append(Pending(alike[key], partial(_shown_row, e, by, validation, w, seen.need)))
+            alike[key] = Request(e.of, lanes(tables, w), reps, s.min_blocks, combine, settle)
+        row = partial(_eval_row, e, by, validation, w, seen, label, veto)
+        found.shown["vetoes" if veto else "shown"].append(Pending(alike[key], row))
     return found
 
 
@@ -427,7 +491,9 @@ def _decided(
 
 
 def _outcome(use: Use, head: dict[str, Any], result: dict[str, Any], need: float) -> dict[str, Any]:
-    rows = [r | {"gain": r["real"] - r["null_mean"]} for r in result["horizons"]]
+    rows = _horizons(result, need)
+    for r in rows:
+        r["passed"] = bool(r["counted"]) and math.isfinite(r["adjusted"]) and r["adjusted"] >= need
     best = next((r for r in rows if r["h"] == result["best"]), None)
     z = result["z"]
     return head | {
@@ -438,27 +504,71 @@ def _outcome(use: Use, head: dict[str, Any], result: dict[str, Any], need: float
         "z": z,
         "best": result["best"],
         "horizons": rows,
+        "passing": [r["h"] for r in rows if r["passed"]],
         "shuffles": result["shuffles"],
         "outcome": "passed" if math.isfinite(z) and z >= need else "failed",
     }
 
 
-def _shown_row(
+def _horizons(result: dict[str, Any], bar: float) -> list[dict[str, Any]]:
+    """Each horizon of a judgement with its gain over the null and its MDE at ``bar``, from the shuffles drawn."""
+    return [r | {"gain": r["real"] - r["null_mean"], "mde": pw.mde(r["null_sd"], bar)} for r in result["horizons"]]
+
+
+def _failed(name: str, by: str, result: Exception) -> FeatError:
+    what = str(result) if isinstance(result, EvalError) else f"{type(result).__name__}: {result}"
+    tested = "; it passed its tests, so add a case like this table to them" if by == "lab" else ""
+    return FeatError(f"eval {name!r} failed: {what}{tested}; {EVALS_FORMAT}{NO_TRIAL}")
+
+
+def _eval_row(
     e: Eval,
     by: str,
     validation: "ev.Validation | None",
     w: World,
-    need: float,
+    seen: Seen,
+    label: str,
+    veto: bool,
     result: dict[str, Any] | Exception | None,
 ) -> list[dict[str, Any]]:
     assert result is not None
     if isinstance(result, Exception):
-        what = str(result) if isinstance(result, EvalError) else f"{type(result).__name__}: {result}"
-        tested = "; it passed its tests, so add a case like this table to them" if by == "case" else ""
-        raise FeatError(f"eval {e.name!r} failed: {what}{tested}; {EVALS_FORMAT}{NO_TRIAL}") from result
-    passed = math.isfinite(result.get("z", math.nan)) and result["z"] >= need
-    row = {"eval": e.name, "by": by, "world": w.name, "explains": list(w.explains), **result, "passed": passed}
-    return [row | ({"validation": validation.record()} if validation is not None and by != "default" else {})]
+        raise _failed(e.name, by, result) from result
+    bar = rule.VETO_Z if veto else seen.need
+    row: dict[str, Any] = {"name": e.name, "by": by, "h0": e.h0, "label": label, "combine": e.combine or "max"}
+    row |= _world(w, seen) | result | {"horizons": _horizons(result, bar), "slot": 3 if veto else 2}
+    if veto:
+        row["votes"] = rule.votes(row)
+        row["passed"] = all(row["votes"].values())
+    else:
+        row["passed"] = math.isfinite(result.get("z", math.nan)) and result["z"] >= seen.need
+    return [row | ({"validation": validation.record()} if validation is not None else {})]
+
+
+def _world_row(
+    effect: Effect, head: dict[str, Any], w: World, seen: Seen, result: dict[str, Any] | Exception | None
+) -> list[dict[str, Any]]:
+    assert result is not None
+    if isinstance(result, Exception):
+        raise _failed(f"the decisive effect on {effect.on}", "decisive", result) from result
+    row: dict[str, Any] = {"name": effect.on, "by": "decisive", "h0": "", "label": effect.on, "combine": "each"}
+    row |= head | _world(w, seen) | result | {"horizons": _horizons(result, rule.VETO_Z), "slot": 3}
+    row["votes"] = rule.votes(row)
+    row["passed"] = all(row["votes"].values())
+    return [row]
+
+
+def _world(w: World, seen: Seen) -> dict[str, Any]:
+    """Which world judged, the alternatives it answers, and what the alternative of an idea's world says."""
+    texts = {a.id: a.text for a in seen.frozen.contract.alternatives}
+    alternative = "; ".join(texts.get(x, "") for x in w.explains) if w.by != "engine" else ""
+    return {"world": w.name, "explains": list(w.explains), "alternative": alternative}
+
+
+def _joined(a: Found, b: Found) -> Found:
+    for key, rows in b.shown.items():
+        a.shown[key] = a.shown.get(key, []) + rows
+    return a
 
 
 def _calibrate(frozen: Frozen, s: FeatSettings) -> list[dict[str, Any]]:

@@ -77,6 +77,7 @@ def mask_rows(name: str, reason: str, flagged: pl.DataFrame, fields: pl.DataFram
 
 
 def drop_entities(name: str, reason: str, entities: Sequence[str], fields: pl.DataFrame) -> Treatment:
+    """Drop every row of the named entities."""
     names = pl.Series(sorted(set(entities)), dtype=pl.String).implode()
     gone = pl.col("entity").is_in(names)
     return _dropping(name, "fields", reason, fields, lambda f: f.filter(~gone), lambda f: f.filter(gone))
@@ -140,6 +141,7 @@ def apply_all(treatments: Sequence[Treatment], fields: pl.DataFrame) -> pl.DataF
 
 
 def apply_candidates(treatments: Sequence[Treatment], cands: pl.DataFrame) -> pl.DataFrame:
+    """The candidates after every candidate treatment."""
     return reduce(lambda c, t: t.apply(c), [t for t in treatments if t.on == "candidates"], cands)
 
 
