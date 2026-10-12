@@ -32,7 +32,7 @@ def decision_grid(every_ns: int, offset_ns: int, start_ns: int, end_ns: int) -> 
 
 
 def block_means(values: pl.DataFrame, h_ns: int) -> pl.DataFrame:
-    """Mean of ``value`` per block of length ``h`` counted from the first ``t``; overlapping labels share a block."""
+    """Mean of ``value`` per block of length ``h`` counted from the first ``t``; overlapping outcomes share a block."""
     t0 = values.select(pl.col("t").min().dt.epoch("ns")).item()
     block = (pl.col("t").dt.epoch("ns") - t0) // h_ns
     return values.group_by(block.alias("block")).agg(pl.col("value").mean()).sort("block")

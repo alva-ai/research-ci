@@ -13,11 +13,11 @@ from research_ci.api.contract import span
 @dataclass(frozen=True)
 class PermuteWithin:
     """Shuffle scores across insts inside each bucket of ``bucket_by`` at each decision time (``"time"``: one
-    bucket per decision time); the labels stay.
+    bucket per decision time); the outcomes stay.
 
     ``clusters`` names a column whose members move together, so dependence inside a cluster survives. ``block``
-    repeats the same shuffle for every decision time inside a block, which keeps overlapping label windows honest;
-    ``"horizon"`` uses each label horizon as its own block length.
+    repeats the same shuffle for every decision time inside a block, which keeps overlapping outcome windows honest;
+    ``"horizon"`` uses each horizon as its own block length.
     """
 
     bucket_by: str
@@ -28,12 +28,12 @@ class PermuteWithin:
 @dataclass(frozen=True)
 class ShiftInTime:
     """Shift every inst's scores along its own decision times, circularly, by one offset per shuffle, the same for
-    every inst; the labels stay. The scores' own autocorrelation and what they share across insts survive; only
-    their alignment with the labels goes. H0: the scores carry no timing information.
+    every inst; the outcomes stay. The scores' own autocorrelation and what they share across insts survive; only
+    their alignment with the outcomes goes. H0: the scores carry no timing information.
 
     The offset is at least ``min_shift`` and at most the length less ``min_shift``, so a shifted score never lands
-    within ``min_shift`` of where it was, either way round; ``"horizon"`` uses each label horizon, so a score's own
-    label window never overlaps the one it is judged against. With fewer distinct offsets than shuffles asked for,
+    within ``min_shift`` of where it was, either way round; ``"horizon"`` uses each horizon, so a score's own
+    outcome window never overlaps the one it is judged against. With fewer distinct offsets than shuffles asked for,
     each is drawn once and the card says so.
     """
 

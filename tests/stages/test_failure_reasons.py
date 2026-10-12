@@ -17,41 +17,42 @@ from research_ci.stages.feat.run import FeatSettings
 from research_ci.stages.skeleton import Found, Step
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
-from toy import REGISTRY, Backwards, ToyHindsight, lab, label_contract
+from toy import REGISTRY, Backwards, ToyHindsight, carry_contract, lab
 
-FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
+FAST = Settings(workers=2, universe_cuts=2, outcome_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
 FLAGS = """
 import polars as pl
 
 from research_ci.api import Case
 
-ROWS = pl.DataFrame({"inst": ["a", "a"], "field": ["close", "close"], "event_time": [1, 2], "value": [1.0, 0.0]})
+ROWS = {"candles": pl.DataFrame({"inst": ["a", "a"], "event_time": [1, 2], "close": [1.0, 0.0]})}
 
 
-def zeros(fields):
-    return fields.filter(pl.col("value") == 0).select("inst", "event_time")
+def zeros(sources):
+    found = sources["candles"].filter(pl.col("close") == 0)
+    return found.select(pl.lit("candles").alias("source"), "inst", "event_time")
 
 
-def broken(fields):
-    return fields.select("inst", "event_time").head(1)
+def broken(sources):
+    return sources["candles"].select(pl.lit("candles").alias("source"), "inst", "event_time").head(1)
 
 
-def wrong_shape(fields):
-    return fields.select("value")
+def wrong_shape(sources):
+    return sources["candles"].select("close")
 
 
-def fails(fields):
-    if fields.height:
-        raise RuntimeError("cannot read this field table")
-    return fields.select("inst", "event_time")
+def fails(sources):
+    if sources["candles"].height:
+        raise RuntimeError("cannot read these sources")
+    return sources["candles"].select(pl.lit("candles").alias("source"), "inst", "event_time")
 
 
 CASES = [
     Case("the zero is flagged", zeros, 1, given=ROWS),
     Case("only the zero is flagged", broken, 0, given=ROWS),
-    Case("no rows, no flags", wrong_shape, 0, given=ROWS.head(0)),
-    Case("an empty table", fails, 0, given=ROWS.head(0)),
+    Case("no rows, no flags", wrong_shape, 0, given={"candles": ROWS["candles"].head(0)}),
+    Case("an empty table", fails, 0, given={"candles": ROWS["candles"].head(0)}),
 ]
 H0 = "no value is zero"
 """
@@ -59,7 +60,7 @@ H0 = "no value is zero"
 
 def _idea(tmp_path: Path, contract: str | None = None) -> Idea:
     idea = Idea.init(tmp_path / "idea", settings=FAST, feat_settings=QUICK)
-    (idea.root / "contract.py").write_text(contract or label_contract())
+    (idea.root / "contract.py").write_text(contract or carry_contract())
     idea.derive_contract()
     idea.approve("contract")
     lab(idea.root)
@@ -84,7 +85,7 @@ def _passed_data(idea: Idea) -> Idea:
 def _features(idea: Idea, name: str, body: str) -> Path:
     path = idea.root / "research" / f"{name}.py"
     path.parent.mkdir(exist_ok=True)
-    path.write_text(f"import polars as pl\n\n\ndef features(fields, candidates):\n    return {body}\n")
+    path.write_text(f"import polars as pl\n\n\ndef features(wide, candidates):\n    return {body}\n")
     return path
 
 
@@ -126,12 +127,12 @@ def test_datacard_a_failed_step_says_whose_it_is_why_and_what_to_do(tmp_path: Pa
 
 def test_datacard_a_decisive_test_that_cannot_be_calibrated_says_why(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.backwards": Backwards})
-    idea = _idea(tmp_path, label_contract().replace("'ref.mean'", "'toy.backwards'"))
+    idea = _idea(tmp_path, carry_contract().replace("'ref.mean'", "'toy.backwards'"))
     _, card = idea.check_data()
-    assert "calibrate  FAIL carry at 8h vs floor: stand-ins die " in card and "needs ≥ 80%" in card
+    assert "calibrate  FAIL toy.backwards at 8h vs floor: stand-ins die " in card and "needs ≥ 80%" in card
     assert (
-        "the decisive test cannot be calibrated on this data (decisive test calibration, floor): carry in the floor "
-        "world at 8h: a planted signal lived"
+        "the decisive test cannot be calibrated on this data (decisive test calibration, floor): toy.backwards in the "
+        "floor world at 8h: a planted signal lived"
     ) in card and "change the target or the contract" in card
 
 
@@ -142,7 +143,7 @@ def test_a_data_eval_that_breaks_on_the_data_or_returns_no_rows_is_refused_sayin
         idea.check_data()
     assert "it passed its tests, so add a case like this data to them and fix it" in str(e.value)
     _data(idea, "[wrong_shape]")
-    with pytest.raises(DataError, match="eval 'wrong_shape' returned value, not the rows it flags; data.py defines"):
+    with pytest.raises(DataError, match="eval 'wrong_shape' returned close, not the rows it flags; data.py defines"):
         idea.check_data()
     assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
 
@@ -154,11 +155,11 @@ def test_resultcard_failed_says_the_z_against_the_bar_and_the_effect(tmp_path: P
     assert result["verdict"]["status"] == "FAILED"
     (note,) = result["verdict"]["notes"]
     assert (
-        note.startswith("carry: does not beat random, z ")
+        note.startswith("ref.mean: does not beat random, z ")
         and " < 2.00 (decisive test, slot 1): gain over random " in note
     )
     assert "bp per entry ± " in note and note in text
-    assert "decisive   carry: gain over random " in text and " < 2.00 · " in text and "· FAILED" in text
+    assert "decisive   ref.mean: gain over random " in text and " < 2.00 · " in text and "· FAILED" in text
     assert result["verdict"]["slots"] == [1] and "verdict    FAILED\n" in text
     shown = [line for line in text.splitlines() if "[!]" in line and " vs floor" in line]
     assert shown and all(" < 2.00" in line for line in shown), "a diagnostic below the bar says so"
@@ -178,8 +179,8 @@ def test_resultcard_scores_that_do_not_rank_say_how_often_they_do_and_what_is_ne
 def test_resultcard_tainted_says_where_the_cut_was_and_what_changed(tmp_path: Path) -> None:
     idea = _passed_data(_idea(tmp_path))
     peek = (
-        'candidates.join(fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg('
-        'pl.col("value").mean()).rename({"inst": "short"}), on="short").select("t", "inst", score="value")'
+        'candidates.join(wide.group_by("inst").agg(pl.col("funding_rate").mean()).rename({"inst": "short"}), '
+        'on="short").select("t", "inst", score="funding_rate")'
     )
     result, text, _ = idea.submit_feat(_features(idea, "peek", peek))
     assert result["verdict"]["status"] == "TAINTED"

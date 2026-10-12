@@ -3,7 +3,7 @@
 Each submission names its own file of features: the engine reads it, and the idea's evals and null worlds, for
 row-by-row code, which the card shows as a warning; refuses, before the submission is counted, a ``feat.py`` without a
 lab eval or with one that fails its tests, and a contract alternative without a null world; hands ``features`` the
-frozen data and the candidates as polars DataFrames, and runs its floor list (``stages/feat/floor.py``) with the
+frozen ``wide`` and the candidates as polars DataFrames, and runs its floor list (``stages/feat/floor.py``) with the
 default diagnostics (``stages/feat/defaults.py``) where the floor marks them: the floors on the scores, then the
 decisive test (slot 1), the diagnostics and library evals, which are shown (slot 2), and the lab evals and null worlds,
 which can veto (slot 3). The verdict is horizon by horizon (``kernel/verdict/rule.py``). Only the candidates the
@@ -23,19 +23,20 @@ from typing import Any
 import pandas as pd
 import polars as pl
 
-from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, Use, as_use, span
+from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, Use, as_use, horizons_of, span
 from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
 from research_ci.api.nulls import Null, PermuteWithin, nulls_of
-from research_ci.api.plugins import LabelPlugin
+from research_ci.api.plugins import OutcomePlugin
+from research_ci.eval.data.baseline import rows
 from research_ci.kernel.hashing import hash_frame, hash_obj
-from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_ns
+from research_ci.kernel.time.clock import lit_time, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict import rule
 from research_ci.kernel.verdict.judge import judge_all
 from research_ci.kernel.verdict.worlds import World, floor_world
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages import lab, skeleton
-from research_ci.stages.common import label_values, norm_candidates, target_use
+from research_ci.stages.common import cadence, norm_candidates, outcome_values, parts, target_use
 from research_ci.stages.contract.run import use_named
 from research_ci.stages.feat import defaults, floor
 from research_ci.stages.feat.floor import (
@@ -66,17 +67,21 @@ EVAL_FILES = "eval:"
 
 def frozen(
     contract: Contract,
-    panel: str,
+    treated: str,
+    wide: str,
     exclusions: str,
     registry: Registry | None = None,
     settings: FeatSettings | None = None,
 ) -> Frozen:
+    """What feat reads, from what the data freeze pinned: the treated sources, ``wide`` built on them, and the
+    candidate rows the treatments exclude; with the evaluation tables, one per horizon."""
     s = settings or FeatSettings()
-    if contract.universe is None:
-        raise FeatError("feat judges scores per candidate; the contract names no universe")
+    if contract.universe is None or contract.outcome is None:
+        raise FeatError("feat judges scores per candidate; the contract names no universe or no outcome")
     name = as_use(contract.data).name
-    fields = vault.get(f"{name}.panel", panel)
-    excluded = vault.get(f"{name}.exclusions", exclusions)
+    sources = vault.get(f"{name}.treated", treated)
+    table = vault.get(f"{name}.wide", wide)["wide"]
+    excluded = vault.get(f"{name}.exclusions", exclusions)["exclusions"]
     deps: dict[str, str] = {}
 
     def plugin(use: Use) -> Any:
@@ -84,21 +89,16 @@ def frozen(
         deps[f"plugin:{use.name}"] = code_hash(found)
         return found
 
-    start = int(fields.select(pl.col("available_at").min().dt.epoch("ns")).item())
-    latest = int(fields.select(pl.col("available_at").max().dt.epoch("ns")).item())
+    known = rows(sources).select(pl.col("available_at").dt.epoch("ns"))["available_at"]
+    start, latest = int(known.min()), int(known.max())  # type: ignore[arg-type]
     end = latest if contract.explore_end == "latest" else to_ns(pd.Timestamp(contract.explore_end))
-    if contract.consumer is not None:
-        timing = plugin(as_use(contract.consumer)).timing()
-        every, offset = timing.every, timing.offset
-    else:
-        assert contract.execution is not None
-        every, offset = contract.execution.every, contract.execution.offset
-    times = pw.decision_grid(span_ns(span(every)), span_ns(span(offset)), start, end)
+    timing, _ = cadence(contract, plugin)
+    times = sorted(int(t) for t in table.select(pl.col("t").dt.epoch("ns").unique())["t"])
     universe = plugin(as_use(contract.universe.use))
     for effect in contract.decisive:
         plugin(target_use(effect, contract))
     plugin(as_use(contract.costs))
-    cands = norm_candidates(universe.candidates(fields, [from_ns(t) for t in times]))
+    cands = norm_candidates(universe.candidates(table, sources))
     cands = cands.join(excluded.select("t", "inst"), on=["t", "inst"], how="anti").sort("t", "inst")
     present = sorted(int(t) for t in cands.select(pl.col("t").dt.epoch("ns").unique())["t"])
     stride = max(1, math.ceil(len(present) / s.max_times))
@@ -107,26 +107,32 @@ def frozen(
     extra = [c for c in cands.columns if c not in ("t", "inst")]
     renamed = {c: f"{c}_candidate" for c in extra if c in TABLE_KEYS or c.startswith("y_")}
     columns = sampled.rename(renamed)
+    outcome: OutcomePlugin = plugin(as_use(contract.outcome))
+    horizons = horizons_of(contract, timing.every)
     tables: floor.Tables = {}
-    components: dict[str, list[str]] = {}
-    for label in contract.labels:
-        values: LabelPlugin = plugin(as_use(label.use))
-        tables[label.name] = {}
-        found = label_values(values, fields, sampled, [span(h) for h in label.horizons])
-        for h, out in zip(label.horizons, found, strict=True):
-            h_ns = span_ns(span(h))
-            parts = [c for c in out.columns if c not in ("t", "inst", "value")]
-            components[label.name] = parts
-            out = out.filter(pl.col("t") <= lit_time(end - h_ns))
-            y = out.select(
-                pl.col("t").cast(TIME),
-                pl.col("inst").cast(pl.String),
-                pl.col("value").cast(pl.Float64).alias("y"),
-                *[pl.col(c).cast(pl.Float64).alias(f"y_{c}") for c in parts],
-            )
-            table = y.join(columns, on=["t", "inst"], how="inner").sort("t", "inst")
-            tables[label.name][h] = (table, h_ns)
-    return Frozen(contract, fields, cands, tables, components, start, end, stride, deps, registry, panel, exclusions)
+    found: list[str] = []
+    for h, out in zip(horizons, outcome_values(outcome, sources, sampled, [span(h) for h in horizons]), strict=True):
+        h_ns = span_ns(span(h))
+        found = parts(out.columns)
+        out = out.filter(pl.col("t") <= lit_time(end - h_ns))
+        tables[h] = (out.join(columns, on=["t", "inst"], how="inner").sort("t", "inst"), h_ns)
+    return Frozen(
+        contract,
+        sources,
+        table,
+        cands,
+        times,
+        tables,
+        found,
+        start,
+        end,
+        stride,
+        deps,
+        registry,
+        treated,
+        wide,
+        exclusions,
+    )
 
 
 def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, Any]:
@@ -139,7 +145,7 @@ def calibration_key(frozen: Frozen, settings: FeatSettings | None = None) -> dic
     """What a calibration rests on beyond the contract and the engine: the treated data, the code of every plugin feat
     runs, and the calibration settings. A calibration is reused while these are unchanged."""
     s = settings or FeatSettings()
-    data = {"panel": frozen.panel, "exclusions": frozen.exclusions}
+    data = {"treated": frozen.treated, "wide": frozen.wide_hash, "exclusions": frozen.exclusions}
     return frozen.deps | data | {"settings": hash_obj(asdict(s) | {"workers": None})}
 
 
@@ -297,10 +303,7 @@ def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]],
     assert scores is not None
     scored = scores.filter(pl.col("score").is_finite())
     events = seen.shape == "events"
-    tables = {
-        label: {h: (_scored(table, scored, events), h_ns) for h, (table, h_ns) in by_h.items()}
-        for label, by_h in seen.frozen.tables.items()
-    }
+    tables = {h: (_scored(table, scored, events), h_ns) for h, (table, h_ns) in seen.frozen.tables.items()}
     idea = {e.name: e for e in evals}
     rest = tuple(e for e in evals if e.name not in {name for name, _ in named})
     judging = replace(seen, scored=tables, evals=rest)
@@ -366,7 +369,7 @@ def _declared(name: str, read: Callable[[Any], list[Any]]) -> Callable[[Any], li
 
 def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
     nulls = _layer_file(root, root / NULLS_FILE, _declared("NULLS", nulls_of), required=False, fmt=NULLS_FORMAT)
-    columns = set(next(iter(next(iter(frozen.tables.values())).values()))[0].columns) | {"score"}
+    columns = set(next(iter(frozen.tables.values()))[0].columns) | {"score"}
     out, problems = [], _unknown(nulls, frozen.contract)
     for i, n in enumerate(nulls, start=1):
         world = _world(i, n)

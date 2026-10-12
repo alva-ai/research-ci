@@ -10,7 +10,7 @@ from research_ci.store.workspace import Workspace, rci_home
 from research_ci.workflow.base import LEDGER_FILE, Approval, find_ideas
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, Verdict, WorkflowError
-from toy import lab, label_contract
+from toy import carry_contract, lab
 
 S = State
 V = Verdict
@@ -18,7 +18,7 @@ V = Verdict
 
 def _idea(tmp_path: Path, budget: int = 3) -> Idea:
     idea = Idea.init(tmp_path / "tox")
-    (idea.root / "contract.py").write_text(label_contract(budget))
+    (idea.root / "contract.py").write_text(carry_contract(budget))
     idea.derive_contract()
     idea.approve("contract")
     lab(idea.root)
@@ -55,7 +55,7 @@ def test_init_writes_a_contract_skeleton_and_every_idea_runs_the_one_pipeline(tm
     assert [s.stage for s in idea.status().stages] == [
         "contract", "data", "feat", "signal", "algo", "seal", "forward", "capital", "monitor",
     ]  # fmt: skip
-    assert next(idea.ledger.records())["payload"] == {"format": 2}
+    assert next(idea.ledger.records())["payload"] == {"format": 3}
     with pytest.raises(WorkflowError, match="already"):
         Idea.init(tmp_path / "tox")
 
@@ -69,7 +69,7 @@ def test_the_skeleton_contract_is_rejected_until_the_claim_is_written(tmp_path: 
 @pytest.mark.parametrize("field", ["template='factor'", "skip=('signal',)", "deadline='180 days'"])
 def test_a_contract_naming_a_template_a_skip_or_a_deadline_does_not_load(tmp_path: Path, field: str) -> None:
     idea = Idea.init(tmp_path / "tox")
-    source = label_contract().replace("CONTRACT = Contract(", f"CONTRACT = Contract({field}, ")
+    source = carry_contract().replace("CONTRACT = Contract(", f"CONTRACT = Contract({field}, ")
     (idea.root / "contract.py").write_text(source)
     with pytest.raises(ContractError, match="unexpected keyword"):
         idea.derive_contract()
@@ -86,7 +86,7 @@ def test_a_ledger_of_the_old_lifecycle_is_refused_with_a_way_out(tmp_path: Path)
 
 def test_the_contract_is_derived_by_the_agent_and_approved_by_a_person(tmp_path: Path) -> None:
     idea = Idea.init(tmp_path / "tox")
-    (idea.root / "contract.py").write_text(label_contract())
+    (idea.root / "contract.py").write_text(carry_contract())
     with pytest.raises(WorkflowError, match="cannot approve"):
         idea.approve("contract")
     idea.derive_contract()
@@ -253,16 +253,16 @@ def test_judging_dependencies_are_frozen_and_the_research_environment_is_only_re
 def test_a_contract_edited_after_derive_cannot_be_approved(tmp_path: Path) -> None:
     idea = Idea.init(tmp_path / "tox")
     contract = idea.root / "contract.py"
-    contract.write_text(label_contract())
+    contract.write_text(carry_contract())
     idea.derive_contract()
-    contract.write_text(label_contract(budget=5))
+    contract.write_text(carry_contract(budget=5))
     with pytest.raises(WorkflowError, match="derive"):
         idea.approve("contract")
 
 
 def test_approval_trusts_the_ledger_not_the_copies_under_rci(tmp_path: Path) -> None:
     idea = Idea.init(tmp_path / "tox")
-    (idea.root / "contract.py").write_text(label_contract(budget=3))
+    (idea.root / "contract.py").write_text(carry_contract(budget=3))
     idea.derive_contract()
     card = idea.workspace.read_json("contract.json")
     idea.workspace.write_json("contract.json", {**card, "contract": {**card["contract"], "budget": 1000}})

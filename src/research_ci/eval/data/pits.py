@@ -1,120 +1,131 @@
-"""Built-in pits: generic ways to break one field of one inst in a copy of a field table. Each picks, at random, an
-inst whose field actually varies, so a pit never lands where it changes nothing."""
+"""Built-in pits: generic ways to break one value column of one inst in copies of the sources. Each picks, at random,
+an inst whose column actually varies, so a pit never lands where it changes nothing. A pit in a column changes the
+cells of that column, or, for a gap, a duplicate or a shift in time, the whole rows of its source."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import numpy as np
 import polars as pl
 
 from research_ci.api.evals import Case, Source
 from research_ci.eval.data.baseline import events
-from research_ci.eval.synthetic import source
+from research_ci.eval.synthetic import sources
+from research_ci.kernel.tables import columns_of
 
-Plant = Callable[[pl.DataFrame, str, np.random.Generator], pl.DataFrame]
-NS = pl.Duration("ns")
+Sources = Mapping[str, pl.DataFrame]
+Plant = Callable[[Sources, str, np.random.Generator], dict[str, pl.DataFrame]]
 
 
-def target(fields: pl.DataFrame, field: str, rng: np.random.Generator, exclude: str | None = None) -> str:
-    """An inst whose ``field`` has enough rows for a pit. It has at least 20 rows of ``field`` and more than two
-    distinct values."""
-    stats = fields.filter(pl.col("field") == field).group_by("inst").agg(pl.len(), pl.col("value").n_unique())
+def holder(tables: Sources, column: str) -> str:
+    """The source that holds ``column``."""
+    found = columns_of(tables).get(column)
+    if found is None:
+        raise ValueError(f"no source holds a column {column}; the columns are {', '.join(columns_of(tables))}")
+    return found
+
+
+def target(tables: Sources, column: str, rng: np.random.Generator, exclude: str | None = None) -> str:
+    """An inst whose ``column`` has enough values for a pit. It has at least 20, and more than two distinct ones."""
+    table = tables[holder(tables, column)]
+    stats = table.filter(pl.col(column).is_not_null()).group_by("inst").agg(pl.len(), pl.col(column).n_unique())
     other = pl.col("inst").ne_missing(pl.lit(exclude, dtype=pl.String))
-    names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2) & other)["inst"].sort()
+    names = stats.filter((pl.col("len") >= 20) & (pl.col(column) > 2) & other)["inst"].sort()
     if names.is_empty():
-        raise ValueError(f"no inst where {field} varies enough to plant a pit")
+        raise ValueError(f"no inst where {column} varies enough to plant a pit")
     return str(names[int(rng.integers(names.len()))])
 
 
-def _rows(fields: pl.DataFrame, inst: str, field: str) -> pl.Expr:
-    return (pl.col("inst") == inst) & (pl.col("field") == field)
+def _replaced(tables: Sources, column: str, table: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    return {**tables, holder(tables, column): table}
 
 
-def _scale(fields: pl.DataFrame, field: str, rng: np.random.Generator, k: float, after: bool) -> pl.DataFrame:
-    e = target(fields, field, rng)
-    hit = _rows(fields, e, field)
+def _scale(tables: Sources, column: str, rng: np.random.Generator, k: float, after: bool) -> dict[str, pl.DataFrame]:
+    table = tables[holder(tables, column)]
+    hit = pl.col("inst") == target(tables, column, rng)
     if after:
-        times = fields.filter(hit)["event_time"].sort()
+        times = table.filter(hit)["event_time"].sort()
         hit = hit & (pl.col("event_time") >= times[int(len(times) * rng.uniform(0.3, 0.7))])
-    return fields.with_columns(value=pl.when(hit).then(pl.col("value") * k).otherwise("value"))
+    return _replaced(tables, column, table.with_columns(pl.when(hit).then(pl.col(column) * k).otherwise(column)))
 
 
-def unit(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A unit error: one inst's field a thousand times larger. It holds throughout."""
-    return _scale(fields, field, rng, 1000.0, after=False)
+def unit(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A unit error: one inst's column a thousand times larger. It holds throughout."""
+    return _scale(tables, column, rng, 1000.0, after=False)
 
 
-def level_break(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A level break: one inst's field half again as large. It holds from a random time on."""
-    return _scale(fields, field, rng, 1.5, after=True)
+def level_break(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A level break: one inst's column half again as large. It holds from a random time on."""
+    return _scale(tables, column, rng, 1.5, after=True)
 
 
-def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A gap: ten usual spacings missing from a random time. The spacings are one inst's, of the field."""
-    e = target(fields, field, rng)
-    ev = events(fields.filter(_rows(fields, e, field)))
+def gap(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A gap: ten usual spacings of one inst's rows missing. They start at a random time, in the column's source."""
+    name = holder(tables, column)
+    hit = pl.col("inst") == target(tables, column, rng)
+    ev = events(tables[name].filter(hit).with_columns(source=pl.lit(name)))
     spacing = int(ev["spacing"].drop_nulls()[0])
     times = ev["event_time"]
     start = times[int(len(times) * rng.uniform(0.3, 0.7))]
     window = pl.col("event_time").is_between(
         start, start + pl.duration(nanoseconds=10 * spacing, time_unit="ns"), closed="left"
     )
-    return fields.filter(~(_rows(fields, e, field) & window))
+    return _replaced(tables, column, tables[name].filter(~(hit & window)))
 
 
-def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A duplicate: one event repeated a millisecond later. The event is one of an inst's events of the field."""
-    e = target(fields, field, rng)
-    rows = fields.filter(_rows(fields, e, field))
+def duplicate(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A duplicate: one row of an inst repeated a millisecond later. The row is one of the column's source."""
+    table = tables[holder(tables, column)]
+    rows = table.filter(pl.col("inst") == target(tables, column, rng))
     copy = rows.sample(1, seed=int(rng.integers(2**31))).with_columns(
         (pl.col(c) + pl.duration(milliseconds=1, time_unit="ns")).alias(c) for c in ("event_time", "available_at")
     )
-    return pl.concat([fields, copy])
+    return _replaced(tables, column, pl.concat([table, copy]))
 
 
-def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A shift: one inst's events stamped one usual spacing late. The events are those of the field."""
-    e = target(fields, field, rng)
-    spacing = int(events(fields.filter(_rows(fields, e, field)))["spacing"].drop_nulls()[0])
-    hit = _rows(fields, e, field)
+def shift(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A shift: one inst's rows stamped one usual spacing late. The rows are those of the column's source."""
+    name = holder(tables, column)
+    hit = pl.col("inst") == target(tables, column, rng)
+    spacing = int(events(tables[name].filter(hit).with_columns(source=pl.lit(name)))["spacing"].drop_nulls()[0])
     move = pl.duration(nanoseconds=spacing, time_unit="ns")
-    return fields.with_columns(
-        event_time=pl.when(hit).then(pl.col("event_time") + move).otherwise("event_time"),
-        available_at=pl.when(hit).then(pl.col("available_at") + move).otherwise("available_at"),
-    )
+    late = [pl.when(hit).then(pl.col(c) + move).otherwise(c).alias(c) for c in ("event_time", "available_at")]
+    return _replaced(tables, column, tables[name].with_columns(late))
 
 
-def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A leak: each event carries the value of the next. The events are one inst's, of the field."""
-    e = target(fields, field, rng)
-    hit = _rows(fields, e, field)
-    rows = fields.filter(hit).sort("event_time").with_columns(pl.col("value").shift(-1)).drop_nulls("value")
-    return pl.concat([fields.filter(~hit), rows])
+def leak(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A leak: each event of one inst carries the next one's value. Only in the column; the last carries none."""
+    table = tables[holder(tables, column)].sort("inst", "event_time")
+    hit = pl.col("inst") == target(tables, column, rng)
+    ahead = pl.when(hit).then(pl.col(column).shift(-1).over("inst")).otherwise(column)
+    return _replaced(tables, column, table.with_columns(ahead.alias(column)))
 
 
-def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A spike: one event of one inst's field, ten times larger."""
-    e = target(fields, field, rng)
-    hit = _rows(fields, e, field)
-    times = fields.filter(hit)["event_time"].sort()
+def spike(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A spike: one event of one inst ten times larger. Only in the column."""
+    table = tables[holder(tables, column)]
+    hit = pl.col("inst") == target(tables, column, rng)
+    times = table.filter(hit)["event_time"].sort()
     at = times[int(len(times) * rng.uniform(0.3, 0.7))]
-    return fields.with_columns(
-        value=pl.when(hit & (pl.col("event_time") == at)).then(pl.col("value") * 10).otherwise("value")
-    )
+    spiked = pl.when(hit & (pl.col("event_time") == at)).then(pl.col(column) * 10).otherwise(column)
+    return _replaced(tables, column, table.with_columns(spiked))
 
 
-def swap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A swap: one inst's series replaced by another inst's. The other's series is taken at the same times, rescaled
+def swap(tables: Sources, column: str, rng: np.random.Generator) -> dict[str, pl.DataFrame]:
+    """A swap: one inst's column replaced by another inst's. The other's values are taken at the same times, rescaled
     to start at the same level: a ticker reused for a different asset, which a check on levels alone will not see."""
-    a = target(fields, field, rng)
-    b = target(fields, field, rng, exclude=a)
-    mine = fields.filter(_rows(fields, a, field))
-    theirs = fields.filter(_rows(fields, b, field)).select("event_time", pl.col("value").alias("other"))
-    joined = mine.join(theirs, on="event_time", how="inner").sort("event_time")
-    if joined.is_empty():
-        raise ValueError(f"{a} and {b} share no times of {field}")
-    k = joined["value"][0] / joined["other"][0] if joined["other"][0] else 1.0
-    moved = joined.with_columns(value=pl.col("other") * k).drop("other")
-    return pl.concat([fields.filter(~_rows(fields, a, field)), moved.select(fields.columns)])
+    table = tables[holder(tables, column)]
+    a = target(tables, column, rng)
+    b = target(tables, column, rng, exclude=a)
+    theirs = table.filter(pl.col("inst") == b).sort("vintage").unique("event_time", keep="first")
+    joined = table.filter(pl.col("inst") == a).join(
+        theirs.select("event_time", pl.col(column).alias("_other")), on="event_time", how="left"
+    )
+    both = joined.drop_nulls([column, "_other"]).sort("event_time")
+    if both.is_empty():
+        raise ValueError(f"{a} and {b} share no times of {column}")
+    k = both[column][0] / both["_other"][0] if both["_other"][0] else 1.0
+    moved = joined.with_columns((pl.col("_other") * k).alias(column)).drop("_other")
+    return _replaced(tables, column, pl.concat([table.filter(pl.col("inst") != a), moved.select(table.columns)]))
 
 
 BUILTIN: dict[str, Plant] = {
@@ -130,12 +141,12 @@ BUILTIN: dict[str, Plant] = {
 
 
 def _touched(name: str, seed: int) -> list[str]:
-    """The insts whose rows a pit changed, planted in prices of a synthetic source."""
-    clean = source(Source(), seed)
+    """The insts whose rows a pit changed, planted in prices of synthetic sources."""
+    clean = sources(Source(), seed)
     planted = BUILTIN[name](clean, "price", np.random.default_rng(seed))
-    keys = clean.columns
-    gone, new = clean.join(planted, on=keys, how="anti"), planted.join(clean, on=keys, how="anti")
-    return sorted(set(gone["inst"]) | set(new["inst"]))
+    pairs = [(before, planted[source]) for source, before in clean.items()]
+    changed = [a.join(b, on=a.columns, how="anti") for x, y in pairs for a, b in ((x, y), (y, x))]
+    return sorted({e for frame in changed for e in frame["inst"]})
 
 
 CASES = [

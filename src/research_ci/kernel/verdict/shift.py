@@ -1,5 +1,5 @@
 """``ShiftInTime`` on the evaluation table: each inst's scores move along its own decision times, circularly, by one
-offset per seed, the same for every inst; the labels stay.
+offset per seed, the same for every inst; the outcomes stay.
 
 An offset counts decision times: the ``k``-th of an inst's rows, in time order, takes the score of its row ``k``
 places earlier, the first ones those of its last rows. Positions ``m`` or more apart are at least ``m`` of the table's

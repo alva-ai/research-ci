@@ -10,9 +10,9 @@ from research_ci.cli.main import app
 from research_ci.render.common import card_id
 from research_ci.store.ledger import Ledger
 from research_ci.workflow.idea import Idea
-from toy import lab, label_contract
+from toy import carry_contract, lab
 
-CONTRACT = label_contract(budget=20)
+CONTRACT = carry_contract(budget=20)
 runner = CliRunner()
 
 
@@ -200,7 +200,8 @@ def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_p
         "research/example.py",
         "rci feat explore <file>",
         "gets polars DataFrames",
-        "fields.lazy() ... .collect()",
+        "wide.lazy() ... .collect()",
+        "`age_<source>`",
         "pandas is fine for dates",
         "time and peak memory",
         '--relayed "<their words>" --card <id>',
@@ -219,8 +220,8 @@ def test_init_writes_a_start_note_and_an_example_the_engine_refuses_to_run(tmp_p
         assert needed in start, needed
     assert len(start.splitlines()) <= 40
     example = (idea / "research" / "example.py").read_text()
-    assert example.startswith("# rci:example") and "TODO" in example and "join_asof" in example
-    assert "fields: pl.DataFrame" in example and "fields.lazy()" in example and ".collect()" in example
+    assert example.startswith("# rci:example") and "TODO" in example and 'on=["t", "inst"]' in example
+    assert "wide: pl.DataFrame" in example and "wide.lazy()" in example and ".collect()" in example
     evals = (idea / "evals" / "example.py").read_text()
     assert evals.startswith("# rci:example") and "CASES = [" in evals and "h0=" in evals and "TODO" in evals
     assert f"lab evals start from {idea / 'evals' / 'example.py'}" in printed
@@ -231,7 +232,7 @@ def test_plugins_lists_every_installed_plugin_with_options_and_declarations() ->
     for needed in (
         "data: Contract(data=Use(name, {options}))",
         "  toy.data(hours: int = 600, seed: int = 0)",
-        "    fields: close, funding_rate, funding_interval_hours",
+        "    sources: candles (close) · funding (funding_rate, funding_interval_hours)",
         "    levels: close · factor 5 · window 24 · mask 24h",
         "universe: Universe(name, clusters=<column>, groups=(<column>, ...))",
         "  ref.carry(price: str = 'close', flow: str | None = None)",
@@ -246,7 +247,7 @@ def test_plugins_lists_every_installed_plugin_with_options_and_declarations() ->
 def test_methods_lists_what_research_code_can_call_and_what_backs_it() -> None:
     text = runner.invoke(app, ["methods"]).stdout
     assert text.startswith(
-        "feat eval: feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=("
+        "feat eval: feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label='y', horizons=("
     )
     assert (
         "  from research_ci.eval.statistics.ic import rank_ic\n    rank_ic(table: pl.DataFrame, label: str = 'y')"
@@ -346,7 +347,7 @@ SPREAD = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 """
 
@@ -354,7 +355,7 @@ ROWS = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     rows = [(t, e, s) for t, e, s in candidates.select("t", "inst", "spread_h").iter_rows()]
     return pl.DataFrame(rows, schema=["t", "inst", "score"], orient="row")
 """

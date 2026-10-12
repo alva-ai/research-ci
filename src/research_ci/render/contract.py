@@ -14,12 +14,7 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
         add("decisive", _decisive_line(d))
     dec = spec["decisions"]
     add("decisions", f"every {dec['every']} from {dec['from']} · {dec['count']} decision times", dec.get("note"))
-    data = spec["data"]
-    add(
-        "data",
-        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['insts']} insts · "
-        f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
-    )
+    add("data", data_line(spec["data"]))
     if "universe" in spec:
         u = spec["universe"]
         add(
@@ -34,11 +29,13 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
     options = ", ".join(f"{k}={v}" for k, v in c["options"].items())
     round_trip = "" if c["round_trip_median"] is None else f" · median round trip {c['round_trip_median'] * 1e4:.1f} bp"
     add("costs", f"{c['plugin']}({options}){round_trip}")
-    if spec.get("labels"):
-        add("labels", *[f"{lab['name']}: {lab['plugin']} · H {' '.join(lab['horizons'])}" for lab in spec["labels"]])
+    o = spec["outcome"]
+    given = ", ".join(f"{k}={v}" for k, v in o["options"].items())
+    default = " (none named: the decision period times 1, 4 and 16)" if o["default"] else ""
+    add("outcome", f"{o['plugin']}({given}) · H {' '.join(o['horizons'])}{default}")
     add("checks", *[f"{MARK[ch['status']]:<4} {ch['name']}: {ch['detail']}" for ch in spec["checks"]])
     for d in spec["decisive"]:
-        add("power", f"{d['on']}: the smallest gain over random the data can detect (MDE)", *_label_table(d))
+        add("power", f"{d['name']}: the smallest gain over random the data can detect (MDE)", *_horizon_table(d))
     alts = spec["alternatives"]
     add(
         "alts",
@@ -65,12 +62,20 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
     return "\n".join(out)
 
 
+def data_line(data: dict[str, Any]) -> str:
+    """The data a card rests on: the plugin and its snapshot, its sources, and what the explore data covers."""
+    return (
+        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows in {', '.join(data['sources'])} · "
+        f"{data['insts']} insts · {data['first']} → {data['explore_end']} · {data['age_days']} days old"
+    )
+
+
 def _decisive_line(d: dict[str, Any]) -> str:
     options = ", ".join(f"{k}={v}" for k, v in d.get("options", {}).items())
-    return f"{d['on']}: beats random significantly · target {d['target']}({options})"
+    return f"{d['target']}({options}): beats random significantly"
 
 
-def _label_table(d: dict[str, Any]) -> list[str]:
+def _horizon_table(d: dict[str, Any]) -> list[str]:
     rolls = d.get("rolls")
     mde = f"MDE bp/{d['per']}" if d.get("per") else "MDE"
     rows = [f"{'H':<8}{'decisions':>10}{'blocks':>8}{mde:>14}" + ("  if rolled" if rolls else "")]

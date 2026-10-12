@@ -11,23 +11,28 @@ rejects in one sentence (``h0``), and it can veto. It can never pass what the de
 anything, the engine runs the tests of every lab eval an idea lists, and a layer whose lab evals do not all pass them is
 refused; ``rci eval check <file>`` runs them any time, for free.
 
-In ``data.py`` an eval gets the explore data, a FieldTable, and returns the rows it flags (``inst``,
-``event_time``, optionally ``field``); no rows means it found nothing. ``on_fail`` is what the engine does with them:
-masks them (``mask``, the default), drops their insts (``drop_insts``), asks a person (``ask``), or, for a lab
-eval, blocks the data check (``block``): it judges the data after the treatments found before it, and any row it
-flags there is a veto. ``covers`` names the (category, field) pairs it
-claims to catch: the engine plants pits of those categories in clean copies of the data, the built-in ones and those of
-``PITS`` in the eval's module, and the eval must flag every pit that moves the contract's decisive number by the
-materiality threshold. Evals only add to the data check; they cannot waive a step.
+In ``data.py`` an eval reads the explore data by its parameters' names: one named ``wide`` gets ``wide``, the
+sources as of each decision time (``t``, ``inst``, the value columns, ``age_<source>``), and one named ``sources`` the
+sources themselves, by name, at their own cadence; it may take both. It returns the rows it flags; no rows means it
+found nothing. Rows with ``t`` and ``inst`` are rows of ``wide``, candidates at a decision time; rows with
+``source``, ``inst`` and ``event_time``, and optionally ``column``, are cells of a source, every value column of the
+row when they name none. ``on_fail`` is what the engine does with them: masks them (``mask``, the default: it drops
+those candidate rows, or sets those cells to null), drops their insts (``drop_insts``), asks a person (``ask``), or,
+for a lab eval, blocks the data check (``block``): it judges the data after the treatments found before it, and any
+row it flags there is a veto. ``covers`` names the (category, column) pairs it claims to catch: the engine plants pits
+of those categories in clean copies of the sources, the built-in ones and those of ``PITS`` in the eval's module, and
+the eval must flag every pit that moves the contract's decisive number by the materiality threshold. Evals only add
+to the data check; they cannot waive a step.
 
-In ``feat.py`` an eval gets the evaluation table of one horizon (``t``, ``inst``, ``score``, ``y`` and its
-components ``y_<part>``, the candidate columns) and returns one value per decision time (``t``, ``value``); the
-engine averages the values by blocks of the horizon and compares the average with the same in the floor world and the
-idea's null worlds that name it, as a z score. A library eval is shown next to the decisive test; a lab eval must reach
-``z ≥ 2`` at every horizon it covers, or the submission fails there. ``label`` names the contract's label (its first by
-default), ``horizons`` picks its horizons (all by default), and ``combine`` says how they count: the best,
-standardized, one vote for all its horizons (``max``, the default), or each horizon on its own (``each``). An eval
-named like a default diagnostic of the engine is judged in its place.
+In ``feat.py`` an eval gets the evaluation table of one horizon (``t``, ``inst``, ``score``, the outcome ``y``, its
+parts ``y_<part>`` and ``y_end``, the candidate columns) and returns one value per decision time (``t``, ``value``);
+the engine averages the values by blocks of the horizon and compares the average with the same in the floor world and
+the idea's null worlds that name it, as a z score. A library eval is shown next to the decisive test; a lab eval must
+reach ``z ≥ 2`` at every horizon it covers, or the submission fails there. ``label`` names the column the eval reads
+as ``y``: the outcome (the default) or one of its parts, such as ``"y_flow"``; ``horizons`` picks the contract's
+horizons (all by default), and ``combine`` says how they count: the best, standardized, one vote for all its horizons
+(``max``, the default), or each horizon on its own (``each``). An eval named like a default diagnostic of the engine is
+judged in its place.
 
 What an eval declares about itself, for the engine to check before it is trusted: its tests. An eval's module lists
 ``CASES``, answers worked by hand, and may list ``PROPERTIES``, statistical behaviour on synthetic markets the engine
@@ -35,6 +40,7 @@ builds. The engine's library is held to them in its CI; an idea's lab evals are 
 them, and a layer with one whose tests fail is refused.
 """
 
+import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -50,31 +56,34 @@ Origin = Literal["library", "lab"]
 LIBRARY = "research_ci.eval"
 TABLE_KEYS = ("t", "inst", "score", "y")
 ON_FAIL = ("mask", "drop_insts", "ask", "block")
+DATA_INPUTS = ("wide", "sources")
 COMBINE = ("max", "each")
 FORMAT: dict[str, str] = {
     "data": (
-        "data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=[(category, field)]), ...], "
-        "with at least one lab eval: fn(fields) returns the rows it flags (inst, event_time, optionally field), "
-        "on_fail is mask (the default), drop_insts, ask, or block (a lab eval only: any row it flags in the data "
-        "after the treatments before it blocks the data), and covers names the pits it claims to catch; a lab eval "
-        "is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), and "
-        "h0 names in one sentence the H0 it rejects; an eval of the engine's library (`rci methods`; its options with "
-        "functools.partial) sets no h0"
+        "data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=[(category, column)]), ...], "
+        "with at least one lab eval: fn(wide) or fn(sources), or fn(wide, sources), by the parameters' names, returns "
+        "the rows it flags: t, inst for rows of wide, or source, inst, event_time, optionally column, for cells of a "
+        "source; on_fail is mask (the default), drop_insts, ask, or block (a lab eval only: any row it flags in the "
+        "data after the treatments before it blocks the data), and covers names the pits it claims to catch; a lab "
+        "eval is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), "
+        "and h0 names in one sentence the H0 it rejects; an eval of the engine's library (`rci methods`; its options "
+        "with functools.partial) sets no h0"
     ),
     "feat": (
-        "feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=(...), combine='max'), ...], "
+        "feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label='y', horizons=(...), combine='max'), ...], "
         "with at least one lab eval: fn(table) returns t, value for each decision time from the evaluation table "
-        "(t, inst, score, y, y_<component>, and the candidate columns); a lab eval is a function of the idea's own "
-        "in evals/<name>.py with CASES in its module (`rci eval check <file>`), h0 names in one sentence the H0 it "
-        "rejects, and it must reach z ≥ 2 at every horizon it covers; an eval of the engine's library "
-        "(`rci methods`; its options with functools.partial) sets no h0 and is shown"
+        "(t, inst, score, y, y_<part>, y_end, and the candidate columns), label names the column it reads as y (y or "
+        "a part y_<part>); a lab eval is a function of the idea's own in evals/<name>.py with CASES in its module "
+        "(`rci eval check <file>`), h0 names in one sentence the H0 it rejects, and it must reach z ≥ 2 at every "
+        "horizon it covers; an eval of the engine's library (`rci methods`; its options with functools.partial) sets "
+        "no h0 and is shown"
     ),
 }
 FOR_DATA = ("on_fail", "covers")
 FOR_FEAT = ("label", "horizons", "combine")
 H0_EXAMPLE = {
     "data": "every close is a price the venue traded at",
-    "feat": "the scores do not rank the funding part of the carry",
+    "feat": "the scores do not rank the flow part of the outcome",
 }
 
 
@@ -82,9 +91,10 @@ H0_EXAMPLE = {
 class Eval:
     """An eval with what its layer needs to know: ``of`` is the function; ``name`` defaults to its name; ``h0``, for a
     lab eval and only for one, is the H0 it rejects, in one sentence. For ``data.py``: ``on_fail`` and ``covers``; for
-    ``feat.py``: ``label``, ``horizons`` and ``combine``. ``note`` is free text kept with the result."""
+    ``feat.py``: ``label`` (the column read as ``y``), ``horizons`` and ``combine``. ``note`` is free text kept with the
+    result."""
 
-    of: Callable[[pl.DataFrame], Any]
+    of: Callable[..., Any]
     name: str = ""
     h0: str = ""
     on_fail: OnFail | None = None
@@ -106,12 +116,15 @@ class Eval:
         object.__setattr__(self, "h0", " ".join(self.h0.split()))
         covers = tuple(tuple(c) for c in self.covers)
         if not all(len(c) == 2 and all(isinstance(x, str) for x in c) for c in covers):
-            raise ValueError(f"eval {name!r}: covers is a list of (category, field) pairs")
+            raise ValueError(f"eval {name!r}: covers is a list of (category, column) pairs")
         object.__setattr__(self, "covers", covers)
         if self.on_fail is not None and self.on_fail not in ON_FAIL:
             raise ValueError(f"eval {name!r}: on_fail is mask, drop_insts, ask or block")
         if self.combine is not None and self.combine not in COMBINE:
             raise ValueError(f"eval {name!r}: combine is max or each")
+        column = self.label
+        if column is not None and ((column != "y" and not column.startswith("y_")) or column == "y_end"):
+            raise ValueError(f"eval {name!r}: label names the column read as y: y, or a part y_<part>")
         if self.horizons is not None:
             object.__setattr__(self, "horizons", tuple(self.horizons))
 
@@ -152,6 +165,8 @@ def evals_of(module: Any, layer: Layer) -> list[Eval]:
             home = "feat.py" if layer == "data" else "data.py"
             raise ValueError(f"eval {e.name!r} sets {', '.join(wrong)}, which only {home} reads")
         _check_h0(e, layer)
+        if layer == "data":
+            data_inputs(e.of, e.name)
         out.append(
             replace(e, on_fail=e.on_fail or "mask") if layer == "data" else replace(e, combine=e.combine or "max")
         )
@@ -160,6 +175,21 @@ def evals_of(module: Any, layer: Layer) -> list[Eval]:
     if twice:
         raise ValueError(f"eval names must be unique; give these a name=: {', '.join(twice)}")
     return out
+
+
+def data_inputs(fn: Callable[..., Any], name: str = "") -> tuple[str, ...]:
+    """What a data eval reads, by its parameters' names: ``wide``, ``sources``, or both, in its order."""
+    try:
+        params = [p for p in inspect.signature(fn).parameters.values() if p.default is inspect.Parameter.empty]
+    except (TypeError, ValueError):
+        params = []
+    names = tuple(p.name for p in params)
+    if not names or any(n not in DATA_INPUTS for n in names):
+        shown = ", ".join(names) or "no parameters"
+        raise ValueError(
+            f"eval {name or name_of(fn)!r} takes {shown}: a data eval takes wide, sources, or both, by those names"
+        )
+    return names
 
 
 def _check_h0(e: Eval, layer: Layer) -> None:
@@ -203,9 +233,9 @@ class Case:
 @dataclass(frozen=True)
 class Market:
     """A synthetic evaluation table: ``insts`` candidates in ``clusters`` (and the clusters in ``groups``) at
-    ``times`` hourly decision times. Each label is a group level (share ``group_share`` of its variance), a cluster
+    ``times`` hourly decision times. Each outcome is a group level (share ``group_share`` of its variance), a cluster
     shock (``cluster_share``) and its own noise, Student-t with ``tail`` degrees of freedom (``None``: normal). The
-    score's rank correlation with the label is about ``ic``: across the insts at each time (``shape="cross"``), or
+    score's rank correlation with the outcome is about ``ic``: across the insts at each time (``shape="cross"``), or
     over time within each inst (``"series"``, judged against a world that shifts the scores in time)."""
 
     times: int = 120
@@ -231,9 +261,9 @@ class Market:
 
 @dataclass(frozen=True)
 class Source:
-    """A synthetic field table: ``insts`` insts with an hourly ``price`` (a random walk) and a ``flow`` settled
-    every ``settle`` hours and known ``lag`` hours after it; a share ``revised`` of the flows gets a second vintage one
-    settlement later."""
+    """Synthetic sources: ``insts`` insts with an hourly ``price`` (a random walk, source ``prices``) and a ``flow``
+    settled every ``settle`` hours and known ``lag`` hours after it (source ``flows``); a share ``revised`` of the
+    flows gets a second vintage one settlement later."""
 
     insts: int = 12
     hours: int = 24 * 14
@@ -243,7 +273,7 @@ class Source:
 
     def __post_init__(self) -> None:
         if self.insts < 2 or self.hours < 4 * self.settle or self.settle < 1 or self.lag < 0:
-            raise ValueError("a source needs two insts and a few settlements")
+            raise ValueError("synthetic sources need two insts and a few settlements")
         if not 0 <= self.revised <= 1:
             raise ValueError("revised is a share")
 

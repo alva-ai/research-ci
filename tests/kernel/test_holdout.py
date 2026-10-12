@@ -3,8 +3,8 @@ import polars as pl
 import pytest
 
 from research_ci.kernel.holdout.tiers import Tier, TierError, Tiers, decision_window, require_in_window, visible
-from research_ci.kernel.tables import field_table
-from research_ci.kernel.time.asof import asof
+from research_ci.kernel.tables import source_tables
+from research_ci.kernel.time.asof import wide
 from research_ci.kernel.time.clock import to_ns
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
@@ -12,22 +12,23 @@ H = pd.Timedelta(hours=1)
 TIERS = Tiers(explore_end=to_ns(T0 + 10 * H), seal_end=to_ns(T0 + 20 * H))
 
 
-def _prices(n: int = 30) -> pl.DataFrame:
-    rows = [("a", "close", T0 + i * H, T0 + i * H, 100.0 + i, 0) for i in range(n)]
-    rows += [("b", "close", T0 + i * H, T0 + i * H, 200.0 - i, 0) for i in range(n)]
-    return field_table(pd.DataFrame(rows, columns=["inst", "field", "event_time", "available_at", "value", "vintage"]))
+def _prices(n: int = 30) -> dict[str, pl.DataFrame]:
+    rows = [("a", T0 + i * H, T0 + i * H, 0, 100.0 + i) for i in range(n)]
+    rows += [("b", T0 + i * H, T0 + i * H, 0, 200.0 - i) for i in range(n)]
+    columns = ["inst", "event_time", "available_at", "vintage", "close"]
+    return source_tables({"candles": pd.DataFrame(rows, columns=columns)})
 
 
 def test_explore_tier_never_shows_rows_after_its_cutoff() -> None:
     explore = visible(_prices(), Tier.EXPLORE, TIERS)
-    assert explore["available_at"].max() == T0 + 10 * H
-    late = asof(explore, T0 + 25 * H)
-    assert late["time"].max() == T0 + 10 * H
+    assert explore["candles"]["available_at"].max() == T0 + 10 * H
+    late = wide(explore, [to_ns(T0 + 25 * H)])
+    assert late["close"].to_list() == [110.0, 190.0] and late["age_candles"].max() == 15 * H
 
 
 def test_seal_tier_stops_at_the_seal_end() -> None:
     sealed = visible(_prices(), Tier.SEAL, TIERS)
-    assert sealed["available_at"].max() == T0 + 20 * H
+    assert sealed["candles"]["available_at"].max() == T0 + 20 * H
 
 
 def test_forward_tier_needs_a_freeze_time() -> None:

@@ -125,14 +125,14 @@ def test_a_lab_eval_from_the_example_module_is_refused_until_it_is_rewritten(tmp
 
     root = _idea(tmp_path, EVALS_EXAMPLE)
     with pytest.raises(ev.EvalsError, match="comes from evals/scale.py, which is still the example; write your own"):
-        ev.refuse_untested([Eval(_load(root, "ranks_label"))], root, "feat.py")
+        ev.refuse_untested([Eval(_load(root, "ranks_outcome"))], root, "feat.py")
     with pytest.raises(ev.EvalsError, match="evals/scale.py is still the example"):
         ev.checked_file(root / "evals" / "scale.py", root)
     copied = "\n".join(EVALS_EXAMPLE.splitlines()[2:])
     root = _idea(tmp_path / "copy", copied)
-    ev.refuse_untested([Eval(_load(root, "ranks_label")), Eval(_load(root, "flags"))], root, "feat.py")
+    ev.refuse_untested([Eval(_load(root, "ranks_outcome")), Eval(_load(root, "flags"))], root, "feat.py")
     found, problem = ev.checked_file(root / "evals" / "scale.py", root)
-    assert not problem and [(name, v.status) for name, v in found] == [("flags", "valid"), ("ranks_label", "valid")]
+    assert not problem and [(name, v.status) for name, v in found] == [("flags", "valid"), ("ranks_outcome", "valid")]
 
 
 def test_a_data_eval_module_lists_its_own_pits(tmp_path: Path) -> None:

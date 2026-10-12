@@ -11,8 +11,8 @@ from research_ci.cli import common
 KIND_USE = {
     "data": "Contract(data=Use(name, {options}))",
     "universe": "Universe(name, clusters=<column>, groups=(<column>, ...))",
-    "label": "Label(<label name>, Use(name, {options}), horizons=(...))",
-    "target": "Effect(on=<label name>, target=Use(name, {options}))",
+    "outcome": "Contract(outcome=Use(name, {options}), horizons=(...))",
+    "target": "Effect(target=Use(name, {options}))",
     "cost": "Contract(costs=Use(name, {options}))",
     "consumer": "Contract(consumer=Use(name, {options})), for its decision times",
 }
@@ -48,11 +48,12 @@ def plugins(as_json: common.AsJson = False) -> None:
 def _declared(p: dict[str, Any]) -> list[str]:
     """What a plugin says about itself: its docstring's first sentence, and what its kind declares."""
     lines = [p["doc"]] if p["doc"] else []
-    if p.get("fields") is not None:
-        lines.append(f"fields: {', '.join(p['fields']) or 'not declared'}")
+    if p.get("sources") is not None:
+        shown = " · ".join(f"{name} ({', '.join(columns)})" for name, columns in p["sources"].items())
+        lines.append(f"sources: {shown or 'not declared'}")
     if p.get("levels"):
         lv = p["levels"]
-        lines.append(f"levels: {', '.join(lv['fields'])} · factor {lv['factor']:g} · window {lv['window']}")
+        lines.append(f"levels: {', '.join(lv['columns'])} · factor {lv['factor']:g} · window {lv['window']}")
         lines[-1] += f" · mask {lv['mask']}"
     if p.get("reference"):
         lines.append("reference source: answers the independent check at admission")

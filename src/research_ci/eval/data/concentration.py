@@ -14,19 +14,18 @@ from research_ci.kernel.verdict.power import block_se
 SHARE_SCHEMA = {"cluster": pl.String, "share": pl.Float64}
 
 
-def shares(
-    rows: pl.DataFrame, cluster: str, h_ns: int | str, label: str = "value", by: Sequence[str] = ()
-) -> pl.DataFrame:
+def shares(rows: pl.DataFrame, cluster: str, h_ns: int | str, label: str = "y", by: Sequence[str] = ()) -> pl.DataFrame:
     """Each cluster's share of the noise, between 0 and 1. The share is the part of the variance of the block means (one
-    horizon long, as the MDE takes them) of the label's mean per decision time ``t``, each cluster weighted once, that
-    goes away when the cluster is left out. ``h_ns`` is the horizon, or the column that holds it; with ``by`` (such as
-    the key of each horizon in stacked rows) each group is measured on its own. Largest share first.
+    horizon long, as the MDE takes them) of the mean of ``label``, the outcome, per decision time ``t``, each cluster
+    weighted once, that goes away when the cluster is left out. ``h_ns`` is the horizon, or the column that holds it;
+    with ``by`` (such as the key of each horizon in stacked rows) each group is measured on its own. Largest share
+    first.
 
     Every cluster is left out at once, by algebra on the means per decision time and cluster: the mean without a
     cluster is the sum of the cluster means less its own, over their count less one. A cluster that is alone at a
     decision time leaves nothing there, and one alone everywhere carries everything. The number measured is the
     default target's shape (``ref.mean``: each cluster weighted once); a target that picks some candidates sees part
-    of these rows, and the shares are those of the label's noise."""
+    of these rows, and the shares are those of the outcome's noise."""
     keys = list(by) or ["_key"]
     schema = {**{k: rows.schema[k] for k in by}, **SHARE_SCHEMA}
     if cluster not in rows.columns:
@@ -102,7 +101,7 @@ def _mean(table: pl.DataFrame) -> pl.DataFrame:
 
 
 def _scaled(k: float, seed: int, m: Market | None = None) -> pl.DataFrame:
-    """A synthetic market whose cluster c0 has labels ``k`` times as large."""
+    """A synthetic market whose cluster c0 has outcomes ``k`` times as large."""
     table = market(m or Market(), seed)
     return table.with_columns(y=pl.when(pl.col("cluster") == "c0").then(pl.col("y") * k).otherwise("y"))
 
@@ -113,7 +112,7 @@ def _top(k: float, seed: int) -> tuple[str, float]:
 
 
 def _blamed(seed: int) -> list[str]:
-    """The clusters above half the noise on a market of three clusters of three, when c0 has labels thirty times as
+    """The clusters above half the noise on a market of three clusters of three, when c0 has outcomes thirty times as
     large."""
     table = _scaled(30.0, seed, Market(insts=9, clusters=3, groups=1))
     return shares(table, "cluster", HOUR_NS, label="y").filter(pl.col("share") > 0.5)["cluster"].to_list()
@@ -161,7 +160,7 @@ CASES = [
         0,
     ),
     Case(
-        "a cluster with labels thirty times as large carries nearly all of it, on every market",
+        "a cluster with outcomes thirty times as large carries nearly all of it, on every market",
         lambda: sum(c == "c0" and share > 0.9 for c, share in (_top(30.0, s) for s in range(10))),
         10,
     ),

@@ -1,19 +1,19 @@
-"""The test of a test: before an eval and a null world judge anything, they must kill an output that carries only
-what the world keeps, and pass one that adds a known amount of real information.
+"""The test of a test: before an eval and a null world judge anything, they must kill an output that carries only what
+the world keeps, and pass one that adds a known amount of real information.
 
-A world claims to keep the label's level in each value of a column (``keeps``) at each decision time, or only the
-level at each time; a world that shifts the scores in time keeps each inst's own level over time instead. The
-stand-in is that level of the label plus noise; the planted output adds the label's residual around it, a signal of
-what the world destroys (which candidates do better at a time, or when an inst does better), sized so the eval
-moves by 1.5 times its smallest detectable effect. For events, both are kept only at the share ``events`` of the rows
-where they are highest, as events, and missing elsewhere, so a planted output marks the rows that do better. Which rows
-those are varies from draw to draw, so its move is the mean over ``SIZED`` draws; and events that follow the label
-bunch in time where the label does, which spreads their null wider than a stand-in's, so the move is sized in the
-planted output's own MDE. Both use the labels on purpose and are never features.
+A world claims to keep the outcome's level in each value of a column (``keeps``) at each decision time, or only the
+level at each time; a world that shifts the scores in time keeps each inst's own level over time instead. The stand-in
+is that level of the outcome plus noise; the planted output adds the outcome's residual around it, a signal of what the
+world destroys (which candidates do better at a time, or when an inst does better), sized so the eval moves by 1.5 times
+its smallest detectable effect. For events, both are kept only at the share ``events`` of the rows where they are
+highest, as events, and missing elsewhere, so a planted output marks the rows that do better. Which rows those are
+varies from draw to draw, so its move is the mean over ``SIZED`` draws; and events that follow the outcome bunch in time
+where the outcome does, which spreads their null wider than a stand-in's, so the move is sized in the planted output's
+own MDE. Both use the outcomes on purpose and are never features.
 
 Even in a world that keeps what it claims, a stand-in beats ``z_base`` by chance at the rate a t distribution with as
-many degrees of freedom as null shuffles gives; it must not live more often than that rate plus three binomial
-standard errors over ``reps``. The planted output must live at least 80% of the time.
+many degrees of freedom as null shuffles gives; it must not live more often than that rate plus three binomial standard
+errors over ``reps``. The planted output must live at least 80% of the time.
 """
 
 import math
@@ -134,7 +134,7 @@ def _batched(evaluate: Evaluate, table: pl.DataFrame, within: bool = True, other
 
 
 def _kept(keeps: str | None, shifts: bool) -> list[str]:
-    """The columns of the label's level a world keeps: each decision time's (and each value of ``keeps`` there), or,
+    """The columns of the outcome's level a world keeps: each decision time's (and each value of ``keeps`` there), or,
     for a shift in time, each inst's."""
     if shifts:
         return ["inst"] + ([keeps] if keeps not in (None, "time", "inst") else [])
@@ -170,7 +170,7 @@ def _standard(x: np.ndarray) -> np.ndarray:
 
 
 def _calibrated(bucket: str | None) -> bool:
-    """On a market whose labels rest partly on the group, a world shuffling within ``bucket`` claims to keep it."""
+    """On a market whose outcomes rest partly on the group, a world shuffling within ``bucket`` claims to keep it."""
     table = market(Market(group_share=0.4, tail=None), seed=0)
     shuffle = Permutation(table, bucket, "cluster", HOUR_NS).index
     return calibrate(rank_ic, table, HOUR_NS, "group", shuffle, reps=40, nulls=20, z_base=2.0)["ok"]
@@ -185,7 +185,7 @@ def _shifted(events: float) -> bool:
 
 
 def _signed(table: pl.DataFrame) -> pl.DataFrame:
-    """The mean of sign(score) × label at each time, over the rows with a score."""
+    """The mean of sign(score) × outcome at each time, over the rows with a score."""
     rows = table.filter(pl.col("score").is_finite())
     return rows.group_by("t").agg((pl.col("score").sign() * pl.col("y")).mean().alias("value")).sort("t")
 

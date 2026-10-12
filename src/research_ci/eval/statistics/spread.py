@@ -1,4 +1,4 @@
-"""How far apart the labels of the highest and lowest scored candidates are, at each decision time."""
+"""How far apart the outcomes of the highest and lowest scored candidates are, at each decision time."""
 
 import polars as pl
 
@@ -7,8 +7,8 @@ from research_ci.eval.synthetic import hand
 
 
 def quantile_spread(table: pl.DataFrame, share: float = 0.2, label: str = "y") -> pl.DataFrame:
-    """Mean label of the top ``share`` less the bottom ``share``. The shares are of the candidates by score, at each
-    time; a share is ``floor(share * n)`` candidates, at least one."""
+    """Mean outcome of the top ``share`` less the bottom ``share``. The shares are of the candidates by score, at each
+    time; a share is ``floor(share * n)`` candidates, at least one; ``label`` is the column read as the outcome."""
     rows = table.filter(pl.col("score").is_not_null() & pl.col(label).is_not_null())
     n = pl.len().over("t")
     k = (n * share + 1e-9).floor().clip(lower_bound=1)

@@ -11,31 +11,32 @@ from research_ci.api import Case
 T = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def ranks_label(table: pl.DataFrame) -> pl.DataFrame:
-    """A feat eval. table: the evaluation table of one horizon (t, inst, score, y, the label's parts y_<part>, and
-    the candidate columns). It returns one value per decision time (t, value); here the rank correlation of score and
-    label. TODO: what yours measures, such as the score against one part of the label, y_<part>."""
+def ranks_outcome(table: pl.DataFrame) -> pl.DataFrame:
+    """A feat eval. table: the evaluation table of one horizon (t, inst, score, the outcome y, its parts y_<part> and
+    y_end, and the candidate columns). It returns one value per decision time (t, value); here the rank correlation of
+    score and outcome. TODO: what yours measures, such as the score against one part of the outcome, y_<part>."""
     return table.group_by("t").agg(pl.corr("score", "y", method="spearman").alias("value")).sort("t")
 
 
-def flags(fields: pl.DataFrame) -> pl.DataFrame:
-    """A data eval. fields: the explore data (inst, field, event_time, available_at, value, vintage, source). It
-    returns the rows it flags (inst, event_time, optionally field); none means it found nothing. TODO: what yours
-    catches; here a value of FIELD at zero or below."""
-    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("inst", "field", "event_time")
+def flags(wide: pl.DataFrame) -> pl.DataFrame:
+    """A data eval. wide: the explore data as of each decision time (t, inst, every value column, age_<source>); an
+    eval that takes sources instead gets each source by name at its own cadence. It returns the rows it flags: t, inst
+    for rows of wide, or source, inst, event_time and optionally column for cells of a source; none means it found
+    nothing. TODO: what yours catches; here a value of COLUMN at zero or below."""
+    return wide.filter(pl.col(COLUMN) <= 0).select("t", "inst")
 
 
-FIELD = "TODO"
+COLUMN = "TODO"
 FOUR = pl.DataFrame({"t": [T] * 4, "inst": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]})
-ROWS = pl.DataFrame({"inst": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
+ROWS = pl.DataFrame({"t": [T, T], "inst": ["a", "b"], COLUMN: [1.0, 0.0]})
 
 # The tests the engine runs before the eval judges anything, worked by hand; a failed one refuses the layer.
 CASES = [
-    Case("TODO: one swap in four: 1 - 6·2/(4·15)", ranks_label, 0.8, given=FOUR),
+    Case("TODO: one swap in four: 1 - 6·2/(4·15)", ranks_outcome, 0.8, given=FOUR),
     Case("TODO: the value at zero is flagged", flags, 1, given=ROWS),
 ]
 
-# feat.py: from evals.<name> import ranks_label
-#          EVALS = [Eval(ranks_label, h0="TODO: the H0 it rejects, such as: the scores do not rank the label")]
+# feat.py: from evals.<name> import ranks_outcome
+#          EVALS = [Eval(ranks_outcome, h0="TODO: the H0 it rejects, such as: the scores do not rank the outcome")]
 # data.py: from evals.<name> import flags
-#          EVALS = [Eval(flags, h0="TODO: such as: every value of the field is above zero", on_fail="block")]
+#          EVALS = [Eval(flags, h0="TODO: such as: every value of the column is above zero", on_fail="block")]

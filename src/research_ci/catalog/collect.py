@@ -37,7 +37,6 @@ UNDOCUMENTED = {
     "protocol.deterministic": "Two identical consumer runs must give the same net.",
     "protocol.max_drawdown": "The consumer's deepest fall in equity from its running peak.",
     "protocol.total": "The consumer's net summed over the run.",
-    "protocol.truncated": "The field table cut to the rows known by `t`.",
     "data.invariants.hedge_check": "The card's hedged-legs line, naming the pairs most often apart.",
 }
 TARGETS: dict[str, tuple[str, str, type]] = {

@@ -1,9 +1,10 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
 import polars as pl
 
-from research_ci.kernel.time.clock import lit_time
+from research_ci.kernel.time.asof import known
 
 
 class Tier(StrEnum):
@@ -28,17 +29,17 @@ class Tiers:
             raise TierError("seal_end must be after explore_end")
 
 
-def visible(fields: pl.DataFrame, tier: Tier, tiers: Tiers, frozen_at: int | None = None) -> pl.DataFrame:
-    """Rows the given tier may read. Explore and seal are cut by ``available_at``; forward sees everything."""
+def visible(
+    sources: Mapping[str, pl.DataFrame], tier: Tier, tiers: Tiers, frozen_at: int | None = None
+) -> dict[str, pl.DataFrame]:
+    """The rows of each source the given tier may read. Explore and seal are cut by ``available_at``; forward sees
+    everything."""
     if tier is Tier.FORWARD:
         if frozen_at is None:
             raise TierError("the forward tier needs the freeze time")
-        return fields
+        return dict(sources)
     cutoff = tiers.explore_end if tier is Tier.EXPLORE else _seal_end(tiers)
-    out = fields.filter(pl.col("available_at") <= lit_time(cutoff))
-    if fields["available_at"].flags["SORTED_ASC"]:
-        out = out.with_columns(pl.col("available_at").set_sorted())
-    return out
+    return known(sources, cutoff)
 
 
 def decision_window(tier: Tier, tiers: Tiers, frozen_at: int | None = None) -> tuple[int | None, int | None]:

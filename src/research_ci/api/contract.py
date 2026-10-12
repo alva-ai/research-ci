@@ -17,8 +17,10 @@ SHAPES: dict[str, str] = {
     "series": "when one or a few assets do better: timing, long or short",
     "events": "what follows an event; the scores exist only at the event rows",
 }
-USAGE_TARGETS = ("claim", "costs", "labels")
+USAGE_TARGETS = ("claim", "costs", "outcome")
 LAYER_NAMES = ("data", "feat", "signal", "algo")
+DEFAULT_TARGET = "ref.mean"
+DEFAULT_HORIZONS = (1, 4, 16)
 
 
 @dataclass(frozen=True)
@@ -83,36 +85,23 @@ class Universe:
 
 
 @dataclass(frozen=True)
-class Label:
-    """An outcome after each decision, computed by a label plugin for every horizon. The engine controls which data
-    the plugin sees and who gets the values; the plugin defines what is measured."""
-
-    name: str
-    use: Use | str
-    horizons: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "use", as_use(self.use))
-        object.__setattr__(self, "horizons", tuple(self.horizons))
-        if not self.name.strip():
-            raise ContractError("name the label")
-        _horizons(self.horizons)
-
-
-@dataclass(frozen=True)
 class Effect:
-    """The effect the claim is about, on one of the contract's labels. ``target`` is the plugin that turns each
-    decision's label values and scores into the one number the claim is about; it must read the scores, such as
-    ``Use("ref.mean", {"cluster": ..., "top": 0.2})``. Feat passes the effect when, with the submitted scores, it beats
-    random scores significantly. A backtest is not an effect here: the consumer judges the algo layer.
+    """The effect the claim is about, on the contract's outcome. ``target`` is the plugin that turns each decision's
+    outcome rows and scores into the one number the claim is about; it must read the scores, such as
+    ``Use("ref.mean", {"cluster": ..., "top": 0.2})``, the default being ``ref.mean`` over the universe's clusters. The
+    effect goes by its target's name. Feat passes the effect when, with the submitted scores, it beats random scores
+    significantly. A backtest is not an effect here: the consumer judges the algo layer.
     """
 
-    on: str
     target: Use | str | None = None
 
     def __post_init__(self) -> None:
         if self.target is not None:
             object.__setattr__(self, "target", as_use(self.target))
+
+    @property
+    def name(self) -> str:
+        return as_use(self.target).name if self.target is not None else DEFAULT_TARGET
 
 
 @dataclass(frozen=True)
@@ -160,10 +149,12 @@ class Contract:
     """The claim an idea makes and the rules its verdicts are held to. Written by the agent, frozen by a person.
 
     Everything here is a declaration; the engine derives the numbers. ``used`` must be stated even when empty.
-    Decisions come from ``execution``, or from the timing of the consumer the algo layer will run. Explore data ends
-    at ``explore_end`` (``"latest"`` is filled from the data at derive time); the sealed segment runs to ``seal_end``,
-    or there is none and only ``forward`` data confirms. ``budget`` is the number of submissions each layer may use
-    across all its versions, one number or one per layer.
+    Decisions come from ``execution``, or from the timing of the consumer the algo layer will run. ``outcome`` is the
+    plugin that says what each candidate earns over each of the ``horizons``; without them, the horizons are the
+    decision period times 1, 4 and 16 (``default_horizons``). Explore data ends at ``explore_end`` (``"latest"`` is
+    filled from the data at derive time); the sealed segment runs to ``seal_end``, or there is none and only
+    ``forward`` data confirms. ``budget`` is the number of submissions each layer may use across all its versions, one
+    number or one per layer.
     """
 
     claim: str
@@ -177,13 +168,19 @@ class Contract:
     execution: Execution | None = None
     consumer: Use | str | None = None
     universe: Universe | None = None
-    labels: tuple[Label, ...] = ()
+    outcome: Use | str | None = None
+    horizons: tuple[str, ...] | None = None
     forward: Forward | None = None
     budget: int | Mapping[str, int] = 20
 
     def __post_init__(self) -> None:
-        for name in ("decisive", "alternatives", "labels"):
+        for name in ("decisive", "alternatives"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
+        if self.outcome is not None:
+            object.__setattr__(self, "outcome", as_use(self.outcome))
+        if self.horizons is not None:
+            object.__setattr__(self, "horizons", tuple(self.horizons))
+            _horizons(self.horizons)
         if self.used is not None:
             object.__setattr__(self, "used", tuple(self.used))
         object.__setattr__(self, "data", as_use(self.data))
@@ -202,7 +199,9 @@ class Contract:
         if not self.claim.strip() or self.claim.startswith("TODO"):
             raise ContractError("state the claim in one sentence")
         if not self.decisive:
-            raise ContractError("state the decisive effect: the label, and a target that reads the scores")
+            raise ContractError("state the decisive effect: a target that reads the scores")
+        if self.outcome is None:
+            raise ContractError("name the outcome plugin: outcome=Use(<name>, {options})")
         if not self.alternatives:
             raise ContractError("list at least one alternative explanation specific to this idea")
         ids = [a.id for a in self.alternatives]
@@ -235,22 +234,14 @@ class Contract:
     def _check_trade(self) -> None:
         if (self.execution is None) == (self.consumer is None):
             raise ContractError("declare decision times with execution, or name the consumer that has them; not both")
-        if self.labels and self.universe is None:
-            raise ContractError("labels are per candidate; name the universe")
+        if self.universe is None:
+            raise ContractError("the outcome is per candidate; name the universe")
 
     def _check_targets(self) -> None:
-        names = [label.name for label in self.labels]
-        if len(names) != len(set(names)):
-            raise ContractError(f"label names must be unique: {names}")
-        for effect in self.decisive:
-            if effect.on == "consumer":
-                raise ContractError(
-                    "a backtest is judged at the algo layer, not in the contract: make the decisive effect a label "
-                    'effect, with a target that reads the scores, such as Use("ref.mean", {"cluster": ..., "top": 0.2})'
-                )
-            if effect.on not in names:
-                known = ", ".join(names) or "none"
-                raise ContractError(f"decisive effect on {effect.on!r}: not a label of this contract (labels: {known})")
+        names = [e.name for e in self.decisive]
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:
+            raise ContractError(f"decisive effects go by their targets, which must differ: {', '.join(twice)} twice")
 
     def _check_budget(self) -> None:
         budget = self.budget
@@ -293,9 +284,28 @@ def _span(name: str, value: str) -> pd.Timedelta:
         raise ContractError(f"{name} is not a duration: {value!r}") from exc
 
 
+def default_horizons(every: str) -> tuple[str, ...]:
+    """The horizons of a contract that names none: the decision period times 1, 4 and 16."""
+    return tuple(_text(span(every) * k) for k in DEFAULT_HORIZONS)
+
+
+def horizons_of(contract: Contract, every: str) -> tuple[str, ...]:
+    """The contract's horizons, or the default ones of its decision period ``every``."""
+    return contract.horizons if contract.horizons is not None else default_horizons(every)
+
+
+def _text(delta: pd.Timedelta) -> str:
+    """A duration as a contract writes it: whole days, hours, minutes, or seconds."""
+    seconds = int(delta.total_seconds())
+    for unit, size in (("d", 86_400), ("h", 3_600), ("min", 60)):
+        if seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
 def _horizons(horizons: tuple[str, ...]) -> None:
     if not horizons:
-        raise ContractError("a label needs at least one horizon")
+        raise ContractError("name at least one horizon, or leave horizons out for the default ones")
     spans = [_span("horizon", h) for h in horizons]
     if any(s <= pd.Timedelta(0) for s in spans) or spans != sorted(set(spans)):
         raise ContractError(f"horizons must be positive, distinct, and ascending: {horizons}")

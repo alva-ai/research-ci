@@ -14,7 +14,7 @@ def _decisive(adjusted: dict[str, float], z: float | None = None) -> dict:
     rows = [{"h": h, "counted": True, "adjusted": a} for h, a in adjusted.items()]
     best = max(adjusted, key=lambda h: adjusted[h])
     family = max(adjusted.values()) if z is None else z
-    return {"on": "carry", "z": family, "best": best, "effect": 1e-4, "se": 2e-5, "per": "entry", "horizons": rows}
+    return {"name": "ref.mean", "z": family, "best": best, "effect": 1e-4, "se": 2e-5, "per": "entry", "horizons": rows}
 
 
 def _horizon(h: str, z: float, sd: float = 0.01, counted: bool = True) -> dict:
@@ -40,8 +40,8 @@ def test_a_horizon_passes_where_the_decisive_test_passes_and_every_lab_eval_that
     d = _decisive({"8h": 3.0, "24h": 2.0})
     assert passing(d, NEED) == ["8h"]
     v = combine([d], [_row("funding", {"8h": 5.0, "24h": 5.0})], NEED)
-    assert v["status"] == "PASSED" and v["horizons"] == {"carry": ["8h"]} and v["slots"] == []
-    assert v["notes"][0].startswith("carry: passes at 8h: the decisive test beats random there, z 3 ≥ 2.60 (slot 1)")
+    assert v["status"] == "PASSED" and v["horizons"] == {"ref.mean": ["8h"]} and v["slots"] == []
+    assert v["notes"][0].startswith("ref.mean: passes at 8h: the decisive test beats random there, z 3 ≥ 2.60 (slot 1)")
 
 
 def test_a_lab_eval_votes_once_for_all_its_horizons_with_max_and_horizon_by_horizon_with_each() -> None:
@@ -52,16 +52,16 @@ def test_a_lab_eval_votes_once_for_all_its_horizons_with_max_and_horizon_by_hori
     assert votes(uncounted) == {"8h": False}
     d = _decisive({"8h": 3.0, "24h": 3.0})
     v = combine([d], [_row("x", {"8h": 1.0, "24h": 2.5}, "each")], NEED)
-    assert v["status"] == "PASSED" and v["horizons"] == {"carry": ["24h"]}
-    assert any(n.startswith("carry 8h: beats random, but slot 3 rejects it: lab eval 'x'") for n in v["notes"])
+    assert v["status"] == "PASSED" and v["horizons"] == {"ref.mean": ["24h"]}
+    assert any(n.startswith("ref.mean 8h: beats random, but slot 3 rejects it: lab eval 'x'") for n in v["notes"])
 
 
 def test_a_horizon_no_lab_eval_covers_cannot_pass() -> None:
     d = _decisive({"8h": 3.0, "24h": 3.0})
     only = _row("x", {"24h": 4.0})
     v = combine([d], [only], NEED)
-    assert v["status"] == "PASSED" and v["horizons"] == {"carry": ["24h"]}
-    assert "carry 8h: beats random, but slot 3 rejects it: no lab eval covers 8h" in v["notes"]
+    assert v["status"] == "PASSED" and v["horizons"] == {"ref.mean": ["24h"]}
+    assert "ref.mean 8h: beats random, but slot 3 rejects it: no lab eval covers 8h" in v["notes"]
     world = _row("rank ic", {"8h": 4.0, "24h": 4.0}, world="null 1", by="default")
     v = combine([d], [world], NEED)
     assert v["status"] == "FAILED" and v["slots"] == [3], "a world is no lab eval"
@@ -70,9 +70,10 @@ def test_a_horizon_no_lab_eval_covers_cannot_pass() -> None:
 def test_lab_evals_never_turn_a_failed_decisive_test_into_a_pass() -> None:
     d = _decisive({"8h": 2.0, "24h": 1.0})
     v = combine([d], [_row("funding", {"8h": 9.0, "24h": 9.0})], NEED)
-    assert v["status"] == "FAILED" and v["slots"] == [1] and v["horizons"] == {"carry": []}
+    assert v["status"] == "FAILED" and v["slots"] == [1] and v["horizons"] == {"ref.mean": []}
     assert v["notes"] == [
-        "carry: does not beat random, z 2 < 2.60 (decisive test, slot 1): gain over random 1 bp per entry ± 0.2 at 8h"
+        "ref.mean: does not beat random, z 2 < 2.60 (decisive test, slot 1): gain over random 1 bp per entry ± 0.2 "
+        "at 8h"
     ]
 
 
@@ -80,11 +81,11 @@ def test_a_veto_fails_the_claim_in_slot_3_and_says_its_h0_its_z_and_whether_it_c
     d = _decisive({"8h": 3.0, "24h": 3.0})
     weak = _row("funding", {"8h": 1.2, "24h": 0.5}, "each")
     world = _row("decisive", {"8h": 1.5, "24h": 3.0}, "each", world="null 1", by="decisive")
-    world["name"], world["h0"], world["per"] = "carry", "", "entry"
+    world["name"], world["h0"], world["per"] = "ref.mean", "", "entry"
     v = combine([d], [weak, world], NEED)
-    assert v["status"] == "FAILED" and v["slots"] == [3] and v["horizons"] == {"carry": []}
+    assert v["status"] == "FAILED" and v["slots"] == [3] and v["horizons"] == {"ref.mean": []}
     (note,) = v["notes"]
-    assert note.startswith("carry: beats random at 8h, 24h, z 3 ≥ 2.60 (decisive test, slot 1), but slot 3 rejects")
+    assert note.startswith("ref.mean: beats random at 8h, 24h, z 3 ≥ 2.60 (decisive test, slot 1), but slot 3 rejects")
     assert (
         "8h: lab eval 'funding' (H0: the scores do not rank funding) vs the floor world: z 1.2 < 2.00 (at 8h); not "
         "rejected: its gain over the null at 8h, 0.012, is below what it can detect there (MDE 0.02842)"

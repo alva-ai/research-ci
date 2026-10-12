@@ -1,4 +1,4 @@
-"""Rank correlation of the score with the label: across the candidates at each decision time, or over each inst's
+"""Rank correlation of the score with the outcome: across the candidates at each decision time, or over each inst's
 decision times."""
 
 import polars as pl
@@ -8,17 +8,17 @@ from research_ci.eval.synthetic import HOUR_NS, hand
 
 
 def rank_ic(table: pl.DataFrame, label: str = "y") -> pl.DataFrame:
-    """Spearman correlation of score and label at each decision time. The correlation runs across the candidates at
-    that time."""
+    """Spearman correlation of score and outcome at each decision time. The correlation runs across the candidates at
+    that time; ``label`` is the column read as the outcome."""
     rows = table.filter(pl.col("score").is_not_null() & pl.col(label).is_not_null())
     return rows.group_by("t").agg(pl.corr("score", label, method="spearman").alias("value")).sort("t")
 
 
 def ts_ic(table: pl.DataFrame, label: str = "y") -> pl.DataFrame:
-    """Rank correlation of score and label over time, per inst. Each inst's score and label are ranked over its
+    """Rank correlation of score and outcome over time, per inst. Each inst's score and outcome are ranked over its
     own decision times and standardized, and the value at a decision time is the mean over the insts of their
     product, so its mean over one inst's times is their Spearman correlation over time. Rows without a finite score
-    or label are left out, and an inst whose score or label never changes counts nowhere."""
+    or outcome are left out, and an inst whose score or outcome never changes counts nowhere."""
     rows = table.filter(pl.col("score").is_finite() & pl.col(label).is_finite())
     ranked = rows.with_columns(pl.col("score", label).rank().over("inst").cast(pl.Float64))
     standard = [((pl.col(c) - pl.col(c).mean()) / pl.col(c).std(ddof=0)).over("inst") for c in ("score", label)]
@@ -45,7 +45,7 @@ SERIES = Market(times=300, insts=4, clusters=4, shape="series")
 CASES = [
     Case("the same order", lambda: _one([1, 2, 3, 4], [0.1, 0.3, 0.5, 0.9]), 1.0),
     Case("the reverse order", lambda: _one([1, 2, 3, 4], [0.9, 0.5, 0.3, 0.1]), -1.0),
-    Case("rows missing a score or a label are left out", lambda: _one([1, 2, None, 4], [0.1, 0.3, 0.2, None]), 1.0),
+    Case("rows missing a score or an outcome are left out", lambda: _one([1, 2, None, 4], [0.1, 0.3, 0.2, None]), 1.0),
     Case(
         "over time: one swap in four, Spearman's 1 - 6·6/(4·15)",
         lambda: _over_time({"score": [1.0, 3.0, 2.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]}),

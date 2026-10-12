@@ -1,19 +1,22 @@
 """Invariants a plugin declares and the engine checks. A universe whose candidates are one asset on two venues
-declares the hedge (``research_ci.api.Hedge``): the field that prices the legs and how close they must stay. At every
-decision time the legs must then trade at about the same level and, when both move enough to tell, move together over
-the recent past, using only prices known by then."""
+declares the hedge (``research_ci.api.Hedge``): the column of ``wide`` that prices the legs and how close they must
+stay. At every decision time the legs must then trade at about the same level and, when both move enough to tell, move
+together over the recent past, using only prices known by then: ``wide`` holds the price each leg had at each decision
+time."""
 
 import polars as pl
 
 from research_ci.api.evals import Case, Source
-from research_ci.eval.synthetic import HOUR_NS, START_NS, source
+from research_ci.eval import synthetic
+from research_ci.eval.synthetic import HOUR_NS, START_NS
+from research_ci.kernel.time.asof import wide as as_of
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.check import Check
 
 
 def hedged_legs(
     cands: pl.DataFrame,
-    fields: pl.DataFrame,
+    wide: pl.DataFrame,
     price: str,
     max_ratio: float,
     min_corr: float,
@@ -23,24 +26,17 @@ def hedged_legs(
     keep: tuple[str, ...] = (),
 ) -> pl.DataFrame:
     """Per candidate row: the legs' price ratio, correlation, and ``ok``. Rows are ``t`` and ``inst``; the correlation
-    is that of the legs' latest returns over the pair's last ``window`` decisions. The correlation counts only when both
-    legs' returns vary by at least ``min_move``; a pegged asset's returns are noise on both venues."""
+    is that of the legs' returns from the decision time before, over the pair's last ``window`` decisions. The
+    correlation counts only when both legs' returns vary by at least ``min_move``; a pegged asset's returns are noise on
+    both venues."""
     px = (
-        fields.filter(pl.col("field") == price)
-        .sort("inst", "available_at")
-        .select(
-            pl.col("inst").alias("leg"),
-            pl.col("available_at").alias("t"),
-            pl.col("value").alias("px"),
-            (pl.col("value") / pl.col("value").shift(1).over("inst")).log().alias("r"),
-        )
-        .sort("t")
+        wide.select("t", pl.col("inst").alias("leg"), pl.col(price).alias("px"))
+        .sort("leg", "t")
+        .with_columns(r=(pl.col("px") / pl.col("px").shift(1).over("leg")).log())
     )
     rows = cands.select("t", "inst", "long", "short", *keep).with_columns(pl.col("t").cast(TIME))
-    q = rows.unpivot(index="t", on=["long", "short"], value_name="leg").select("t", "leg").unique().sort("t")
-    known = q.join_asof(px, on="t", by="leg", strategy="backward", check_sortedness=False)
-    rows = rows.join(known.rename({"leg": "long", "px": "px_long", "r": "r_long"}), on=["t", "long"], how="left")
-    rows = rows.join(known.rename({"leg": "short", "px": "px_short", "r": "r_short"}), on=["t", "short"], how="left")
+    rows = rows.join(px.rename({"leg": "long", "px": "px_long", "r": "r_long"}), on=["t", "long"], how="left")
+    rows = rows.join(px.rename({"leg": "short", "px": "px_short", "r": "r_short"}), on=["t", "short"], how="left")
     a, b = pl.min_horizontal("long", "short"), pl.max_horizontal("long", "short")
     rows = rows.with_columns(pair=a + "|" + b).sort("t")
     corr = pl.rolling_corr(pl.col("r_long"), pl.col("r_short"), window_size=window, min_samples=min_obs)
@@ -67,14 +63,14 @@ def hedge_check(legs: pl.DataFrame, price: str, max_ratio: float, min_corr: floa
 
 def _bad_share() -> dict[str, float]:
     """e1 is e0 on another venue, a little apart; e2 is another asset at the same level."""
-    f = source(Source(insts=3), 0).filter(pl.col("field") == "price")
-    e0 = f.filter(pl.col("inst") == "e0")
-    twin = e0.with_columns(inst=pl.lit("e1"), value=pl.col("value") * 1.002)
-    f = pl.concat([e0, twin, f.filter(pl.col("inst") == "e2")])
-    hours = pl.DataFrame({"t": pl.int_range(80, 300, eager=True) * HOUR_NS + START_NS})
+    prices = synthetic.sources(Source(insts=3), 0)["prices"]
+    e0 = prices.filter(pl.col("inst") == "e0")
+    twin = e0.with_columns(inst=pl.lit("e1"), price=pl.col("price") * 1.002)
+    tables = {"prices": pl.concat([e0, twin, prices.filter(pl.col("inst") == "e2")])}
+    hours = list(range(START_NS + 80 * HOUR_NS, START_NS + 300 * HOUR_NS, HOUR_NS))
     pairs = pl.DataFrame({"inst": ["e0>e1", "e0>e2"], "long": ["e0", "e0"], "short": ["e1", "e2"]})
-    cands = hours.join(pairs, how="cross").with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"))
-    legs = hedged_legs(cands, f, "price", 1.2, 0.3, 72, 48, 1e-3)
+    t = pl.DataFrame({"t": hours}).with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"))
+    legs = hedged_legs(t.join(pairs, how="cross"), as_of(tables, hours), "price", 1.2, 0.3, 72, 48, 1e-3)
     bad = legs.group_by("inst").agg((~pl.col("ok")).mean().alias("bad"))
     return {str(e): float(v) for e, v in bad.iter_rows()}
 

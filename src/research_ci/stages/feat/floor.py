@@ -34,8 +34,9 @@ import polars as pl
 
 from research_ci.api.contract import Contract, ContractError, Effect, Use, as_use, span
 from research_ci.api.evals import FORMAT, Eval, source_of
-from research_ci.api.plugins import CostModel, TargetPlugin
+from research_ci.api.plugins import CostModel, Sources, TargetPlugin
 from research_ci.eval import protocol as pr
+from research_ci.kernel.time.asof import known, wide
 from research_ci.kernel.time.clock import TIME, lit_time
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict import rule, worlds
@@ -65,12 +66,12 @@ SCORE_COLUMNS = ("t", "inst", "score")
 NO_TRIAL = "; no submission was spent"
 EXPLORED = "; nothing was recorded"
 SHAPE = (
-    "a features file defines features(fields, candidates), which gets polars DataFrames and returns a DataFrame "
+    "a features file defines features(wide, candidates), which gets polars DataFrames and returns a DataFrame "
     "(polars or pandas) or a polars LazyFrame with columns t, inst, score; research/example.py shows one"
 )
 EVALS_FORMAT = FORMAT["feat"]
 Features = Callable[[pl.DataFrame, pl.DataFrame], Any]
-Tables = dict[str, dict[str, tuple[pl.DataFrame, int]]]
+Tables = dict[str, tuple[pl.DataFrame, int]]
 RANKS: dict[str, tuple[str, str]] = {
     "cross": ("the scores do not rank the candidates", "give two or more candidates distinct scores at each time"),
     "series": (
@@ -112,30 +113,34 @@ class FeatSettings:
 
 @dataclass
 class Frozen:
-    """What feat reads: the treated data and the candidates the data layer froze, and one evaluation table per label
-    and horizon (``t``, ``inst``, ``y`` and its components, the candidate columns) on every ``stride``-th decision
-    time whose label is complete before the explore data ends."""
+    """What feat reads: the treated sources, ``wide`` built on them and the candidates the data layer froze, the
+    decision times of ``wide`` (ns), and one evaluation table per horizon (``t``, ``inst``, ``y``, its parts and
+    ``y_end``, the candidate columns) on every ``stride``-th decision time whose outcome is complete before the
+    explore data ends; ``parts`` names the outcome's parts."""
 
     contract: Contract
-    fields: pl.DataFrame
+    sources: Sources
+    wide: pl.DataFrame
     candidates: pl.DataFrame
+    times: list[int]
     tables: Tables
-    components: dict[str, list[str]]
+    parts: list[str]
     start: int
     end: int
     stride: int
     deps: dict[str, str]
     registry: Registry | None
-    panel: str = ""
+    treated: str = ""
+    wide_hash: str = ""
     exclusions: str = ""
 
     def inputs(self, cut: int | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
-        """What a features file gets: the frozen data and the candidates, as polars DataFrames, copies that share
-        their memory; with ``cut``, only the rows known by then and the candidates up to it."""
+        """What a features file gets: ``wide`` and the candidates, as polars DataFrames, copies that share their
+        memory; with ``cut``, ``wide`` built again on the sources cut there, up to it, and the candidates up to it."""
         if cut is None:
-            return self.fields.clone(), self.candidates.clone()
+            return self.wide.clone(), self.candidates.clone()
         return (
-            self.fields.filter(pl.col("available_at") <= lit_time(cut)),
+            wide(known(self.sources, cut), [t for t in self.times if t <= cut]),
             self.candidates.filter(pl.col("t") <= lit_time(cut)),
         )
 
@@ -173,8 +178,8 @@ class Seen:
         return self.frozen.contract.universe.shape
 
     def judge(self, evaluate: Evaluate) -> Found:
-        """A default diagnostic, ``evaluate`` on the label of the first decisive effect, judged under ``name``."""
-        e = Eval(evaluate, self.name, label=self.frozen.contract.decisive[0].on, combine="max")
+        """A default diagnostic, ``evaluate`` on the outcome, judged under ``name``."""
+        e = Eval(evaluate, self.name, combine="max")
         return judged(self, e, "default")
 
 
@@ -257,7 +262,7 @@ def decisive_test(seen: Seen) -> Found:
     for effect in seen.frozen.contract.decisive:
         evaluate, use, head = target(effect, seen.frozen)
         settle = Sequential(s.floor_batch, seen.need, horizons=True)
-        request = Request(evaluate, lanes(seen.scored[effect.on], floor), s.floor_reps, s.min_blocks, "max", settle)
+        request = Request(evaluate, lanes(seen.scored, floor), s.floor_reps, s.min_blocks, "max", settle)
         found.shown["decisive"].append(Pending(request, partial(_decided, use, head, seen.need)))
     return found
 
@@ -285,8 +290,8 @@ def lab_evals(seen: Seen) -> Found:
 
 def null_worlds(seen: Seen) -> Found:
     """Each null world of ``nulls/feat.py`` that names no eval judges the decisive effect itself, with the submitted
-    scores shuffled its way: it must reach ``z ≥ 2`` at every horizon of the effect's label, or the submission fails
-    there. A world that names evals judges them where they are judged."""
+    scores shuffled its way: it must reach ``z ≥ 2`` at every horizon, or the submission fails there. A world that
+    names evals judges them where they are judged."""
     s = seen.settings
     found = Found(shown={"vetoes": []})
     for w in seen.worlds:
@@ -295,7 +300,7 @@ def null_worlds(seen: Seen) -> Found:
         for effect in seen.frozen.contract.decisive:
             evaluate, _, head = target(effect, seen.frozen)
             veto = Sequential(s.floor_batch, rule.VETO_Z, horizons=True)
-            request = Request(evaluate, lanes(seen.scored[effect.on], w), w.reps, s.min_blocks, "each", veto)
+            request = Request(evaluate, lanes(seen.scored, w), w.reps, s.min_blocks, "each", veto)
             found.shown["vetoes"].append(Pending(request, partial(_world_row, effect, head, w, seen)))
     return found
 
@@ -396,8 +401,8 @@ def judged(seen: Seen, e: Eval, by: str, validation: "ev.Validation | None" = No
     diagnostic or a library eval in the floor world is shown (slot 2), on ``shown_reps`` shuffles. Worlds that shuffle
     alike are judged once and shown under each name."""
     s = seen.settings
-    label = label_of(e, seen.frozen)
-    tables = {h: seen.scored[label][h] for h in horizons_of(e, seen.frozen)}
+    label = column_of(e, seen.frozen)
+    tables = {h: _as_y(seen.scored[h], label) for h in horizons_of(e, seen.frozen)}
     combine = e.combine or "max"
     alike: dict[tuple[Any, ...], Request] = {}
     found = Found(shown={"shown": [], "vetoes": []})
@@ -416,19 +421,23 @@ def judged(seen: Seen, e: Eval, by: str, validation: "ev.Validation | None" = No
     return found
 
 
-def label_of(e: Eval, frozen: Frozen) -> str:
-    names = [label.name for label in frozen.contract.labels]
-    if not names:
-        raise FeatError("the contract declares no labels; evals need one")
-    label = e.label or names[0]
-    if label not in names:
-        raise FeatError(f"eval {e.name}: no label {label!r} in the contract ({', '.join(names)}){NO_TRIAL}")
-    return label
+def column_of(e: Eval, frozen: Frozen) -> str:
+    """The column an eval reads as ``y``: the outcome, or one of its parts."""
+    column = e.label or "y"
+    if column != "y" and column not in frozen.parts:
+        known = ", ".join(["y", *frozen.parts])
+        raise FeatError(f"eval {e.name}: label {column!r} is not the outcome or one of its parts ({known}){NO_TRIAL}")
+    return column
+
+
+def _as_y(lane: tuple[pl.DataFrame, int], column: str) -> tuple[pl.DataFrame, int]:
+    """A horizon's table with ``column`` read as ``y``."""
+    table, h_ns = lane
+    return (table if column == "y" else table.with_columns(pl.col(column).alias("y")), h_ns)
 
 
 def horizons_of(e: Eval, frozen: Frozen) -> tuple[str, ...]:
-    label = label_of(e, frozen)
-    declared = next(lab.horizons for lab in frozen.contract.labels if lab.name == label)
+    declared = tuple(frozen.tables)
     if e.horizons is None:
         return declared
     unknown = [h for h in e.horizons if h not in declared]
@@ -444,25 +453,19 @@ def floor_world(frozen: Frozen, s: FeatSettings) -> World:
 
 
 def target(effect: Effect, frozen: Frozen) -> tuple[dict[str, Evaluate], Use, dict[str, Any]]:
-    """The effect's target per horizon of its label, the plugin it names, and the effect as cards show it."""
+    """The effect's target per horizon, the plugin it names, and the effect as cards show it."""
     c = frozen.contract
     use = target_use(effect, c)
     plugin: TargetPlugin = load(use, frozen.registry)
     costs: CostModel = load(as_use(c.costs), frozen.registry)
-    parts = frozen.components.get(effect.on, [])
-    back = {"y": "value"} | {f"y_{p}": p for p in parts}
-
     batched = getattr(plugin, "batched", None) if owner(plugin, "batched") is owner(plugin, "reduce") else None
 
     def make(h: str) -> Evaluate:
         horizon = span(h)
         form = cast(Batched | None, batched(horizon, costs)) if callable(batched) else None
-        return Statistic(
-            lambda table: plugin.reduce(table.rename(back), horizon, costs),
-            None if form is None else _renamed(form, back),
-        )
+        return Statistic(lambda table: plugin.reduce(table, horizon, costs), form)
 
-    return {h: make(h) for h in frozen.tables[effect.on]}, use, units(effect, plugin)
+    return {h: make(h) for h in frozen.tables}, use, units(effect, plugin)
 
 
 def calibration(frozen: Frozen, s: FeatSettings) -> dict[str, Any]:
@@ -471,7 +474,7 @@ def calibration(frozen: Frozen, s: FeatSettings) -> dict[str, Any]:
     ``ok`` is false, with ``notes`` saying why, when any of them does not hold."""
     started = time.monotonic()
     checks = [_reads_score(e, frozen) for e in frozen.contract.decisive]
-    effects = {e.on: target(e, frozen)[2] for e in frozen.contract.decisive}
+    effects = {e.name: target(e, frozen)[2] for e in frozen.contract.decisive}
     rows = [r | effects[r["effect"]] for r in _calibrate(frozen, s)]
     notes = [f"{c.name}: {c.detail}" for c in checks if c.status == "fail"]
     notes += [_returned(r) for r in rows if not r.get("ok")]
@@ -490,27 +493,21 @@ def computed(
     """The scores of ``features`` on what the engine hands it, collected and checked, and what the call cost, a
     returned LazyFrame's collection included; the peak memory only for the full call, which runs alone. A failure says
     what to fix, and ``after`` what it did not cost."""
-    fields, cands = frozen.inputs(cut)
+    table, cands = frozen.inputs(cut)
 
     def call() -> Any:
-        raw = features(fields, cands)
+        raw = features(table, cands)
         return raw.collect() if isinstance(raw, pl.LazyFrame) else raw
 
     try:
         raw, spent = measured(call, memory=cut is None)
     except Exception as exc:
-        raise FeatError(
-            f"{path.name}: features(fields, candidates) failed: {type(exc).__name__}: {exc}{after}"
-        ) from exc
+        raise FeatError(f"{path.name}: features(wide, candidates) failed: {type(exc).__name__}: {exc}{after}") from exc
     asked = frozen.candidates if cut is None else frozen.candidates.filter(pl.col("t") <= lit_time(cut))
     try:
         return _scores(raw, asked), spent
     except FeatError as exc:
         raise FeatError(f"{exc}{after}") from exc
-
-
-def _renamed(form: Batched, back: dict[str, str]) -> Batched:
-    return lambda table: form(table.rename(back))
 
 
 def _decided(
@@ -529,7 +526,7 @@ def _outcome(use: Use, head: dict[str, Any], result: dict[str, Any], need: float
     best = next((r for r in rows if r["h"] == result["best"]), None)
     z = result["z"]
     return head | {
-        "kind": "label",
+        "kind": "outcome",
         "target": use.name,
         "effect": best["gain"] if best else math.nan,
         "se": best["se"] if best else math.nan,
@@ -583,8 +580,8 @@ def _world_row(
 ) -> list[dict[str, Any]]:
     assert result is not None
     if isinstance(result, Exception):
-        raise _failed(f"the decisive effect on {effect.on}", "decisive", result) from result
-    row: dict[str, Any] = {"name": effect.on, "by": "decisive", "h0": "", "label": effect.on, "combine": "each"}
+        raise _failed(f"the decisive effect {effect.name}", "decisive", result) from result
+    row: dict[str, Any] = {"name": effect.name, "by": "decisive", "h0": "", "label": "y", "combine": "each"}
     row |= head | _world(w, seen) | result | {"horizons": _horizons(result, rule.VETO_Z), "slot": 3}
     row["votes"] = rule.votes(row)
     row["passed"] = all(row["votes"].values())
@@ -616,13 +613,13 @@ def _calibrate(frozen: Frozen, s: FeatSettings) -> list[dict[str, Any]]:
     for effect in frozen.contract.decisive:
         evaluate, _, _ = target(effect, frozen)
         h = min(evaluate, key=span)
-        table, h_ns = frozen.tables[effect.on][h]
+        table, h_ns = frozen.tables[h]
         table = _thin(table, s.calibration_times)
         shuffle, distinct = worlds.shuffler(table, floor, h_ns)
         nulls = min(s.calibration_nulls, distinct or s.calibration_nulls)
         args = (evaluate[h], table, h_ns, floor.keeps, shuffle, s.calibration_reps, nulls, s.z_base)
         found = _safe_calibrate(*args, shifts=floor.shift is not None, events=events)
-        out.append({"effect": effect.on, "world": floor.name, "horizon": h, **found})
+        out.append({"effect": effect.name, "world": floor.name, "horizon": h, **found})
     return out
 
 
@@ -654,8 +651,7 @@ def _reads_score(effect: Effect, frozen: Frozen) -> pr.Check:
     """Derive already blocks a target that ignores the scores; feat checks again on its own evaluation table, for
     events with rows left without a score."""
     evaluate, use, _ = target(effect, frozen)
-    h = next(iter(frozen.tables[effect.on]))
-    table, _ = frozen.tables[effect.on][h]
+    h, (table, _) = next(iter(frozen.tables.items()))
     assert frozen.contract.universe is not None
     missing = UNSCORED if frozen.contract.universe.shape == "events" else 0.0
     return pr.target_reads_score(use.name, lambda t: per_t(evaluate[h], t), table, missing)

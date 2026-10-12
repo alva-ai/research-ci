@@ -3,7 +3,7 @@
 ones that the eval's ``covers`` is checked against, next to its ``CASES``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -11,44 +11,46 @@ import numpy as np
 import polars as pl
 
 OnFail = Literal["mask", "drop_insts", "ask", "block"]
+Plant = Callable[[Mapping[str, pl.DataFrame], str, np.random.Generator], Mapping[str, pl.DataFrame]]
 
 
 @dataclass(frozen=True)
 class Pit:
-    """A planted problem of ``category`` in ``field``: ``plant(fields, field, rng)`` returns a copy with it planted
-    in one inst where the field varies. A data eval's module lists them in ``PITS``, next to its ``CASES``: a test of
-    every eval of the module that covers the category."""
+    """A planted problem of ``category`` in a value column: ``plant(sources, column, rng)`` returns copies of the
+    sources with it planted in the source that holds the column, in one inst where the column varies. A data eval's
+    module lists them in ``PITS``, next to its ``CASES``: a test of every eval of the module that covers the
+    category."""
 
     category: str
-    plant: Callable[[pl.DataFrame, str, np.random.Generator], pl.DataFrame]
+    plant: Plant
     note: str = ""
 
 
 @dataclass(frozen=True)
 class Levels:
-    """Fields whose values are levels, such as prices, as a data plugin declares them in a class attribute
-    ``levels``. A move of ``factor`` or more that lasts over the next ``window`` events is a level shift: admission asks
-    the independent source about it, and the data check masks the ones it did not confirm for ``mask`` on each side.
-    A source that declares no levels is not checked for level shifts."""
+    """Value columns that are levels, such as prices, as a data plugin declares them in a class attribute
+    ``levels``. A move of ``factor`` or more that lasts over the next ``window`` events of the column's source is a
+    level shift: admission asks the independent source about it, and the data check masks the ones it did not confirm
+    for ``mask`` on each side. A source that declares no levels is not checked for level shifts."""
 
-    fields: tuple[str, ...]
+    columns: tuple[str, ...]
     factor: float
     window: int
     mask: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "fields", tuple(self.fields))
-        if not self.fields or self.factor <= 1 or self.window < 1:
-            raise ValueError("levels need fields, a factor above 1 and a window of at least one event")
+        object.__setattr__(self, "columns", tuple(self.columns))
+        if not self.columns or self.factor <= 1 or self.window < 1:
+            raise ValueError("levels need columns, a factor above 1 and a window of at least one event")
 
 
 @dataclass(frozen=True)
 class Hedge:
     """Legs that are one asset on two venues, as a universe plugin declares them in a class attribute ``hedge``. At
-    every decision time ``price`` must put the legs within ``max_ratio`` of each other and, when both legs' returns vary
-    by at least ``min_move``, their returns over the pair's last ``window`` decisions (at least ``min_obs``) must
-    correlate by ``min_corr`` or more; the data check drops the candidate rows where they do not. A universe that
-    declares no hedge is not checked."""
+    every decision time the column ``price`` of ``wide`` must put the legs within ``max_ratio`` of each other and, when
+    both legs' returns from one decision to the next vary by at least ``min_move``, those returns over the pair's last
+    ``window`` decisions (at least ``min_obs``) must correlate by ``min_corr`` or more; the data check drops the
+    candidate rows where they do not. A universe that declares no hedge is not checked."""
 
     price: str
     max_ratio: float

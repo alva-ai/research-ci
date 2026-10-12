@@ -17,19 +17,19 @@ a person reads each card and approves it, and an agent relays the words with the
 
 | Path | What it is |
 | --- | --- |
-| `pyproject.toml`, `src/toy_lab/` | The lab's plugins, registered as entry points: `toy.data`, hourly closes and funding rates every 8 hours for three symbols on three venues over 25 days; `toy.pairs`, every venue pair of a symbol |
-| `ideas/spread/contract.py` | The claim (cross-venue funding spreads persist), the decisive effect (the top third of pairs by score earns more carry than random), the alternative (`tail`: a few symbols carry the result), labels, costs and the budget |
-| `ideas/spread/data.py`, `evals/toy.py` | Slot 3 for data: the lab eval `closes_at_zero` with its h0, and its CASES (slot 4) next to it |
-| `ideas/spread/feat.py`, `evals/toy.py` | Slot 3 for feat: the lab eval `funding_ic` with its h0, and its CASES |
+| `pyproject.toml`, `src/toy_lab/` | The lab's plugins, registered as entry points: `toy.data`, two sources for three symbols on three venues over 25 days, `candles` with an hourly `close` and `funding` with a `funding_rate` and its `funding_interval_hours` every 8 hours; `toy.pairs`, every venue pair of a symbol, read from `wide` |
+| `ideas/spread/contract.py` | The claim (cross-venue funding spreads persist), the decisive effect (the top third of pairs by score earns more carry than random), the alternative (`tail`: a few symbols carry the result), the outcome `ref.carry` at 8h and 24h, costs and the budget |
+| `ideas/spread/data.py`, `evals/toy.py` | Slot 3 for data: the lab eval `closes_at_zero`, which reads the sources and flags cells of `candles`, with its h0, and its CASES (slot 4) next to it |
+| `ideas/spread/feat.py`, `evals/toy.py` | Slot 3 for feat: the lab eval `funding_ic`, on the funding part of the outcome, `y_flow`, with its h0, and its CASES |
 | `ideas/spread/nulls/feat.py` | The null world of the contract's alternative, `tail`, which can veto |
-| `ideas/spread/research/` | Three features files: `noise.py` (random scores), `peek.py` (reads each venue's average funding over the whole period, so it looks ahead) and `spread.py` (the latest funding spread) |
+| `ideas/spread/research/` | Three features files, each `features(wide, candidates)`: `noise.py` (random scores), `peek.py` (reads each venue's average funding over every row of `wide`, so it looks ahead) and `spread.py` (the latest funding spread) |
 | `ideas/spread/.rci/` | The ledger and the cards a run writes; not committed, since it records the absolute paths of the files it judged |
 
 `rci init` also wrote `START.md`, `research/example.py` and `evals/example.py`: what a fresh idea starts from, refused until they are rewritten.
 
 ## The flow
 
-1. `rci contract derive`: the contract's premises (point-in-time universe, labels that do not read past t + h) and the power
+1. `rci contract derive`: the contract's premises (point-in-time universe, an outcome that does not read past t + h) and the power
    at each horizon. DECIDABLE.
 2. `rci data check`: the source's admission, the default checks, the lab eval `closes_at_zero` and the calibration of the
    decisive test. READY.
@@ -39,6 +39,8 @@ a person reads each card and approves it, and an agent relays the words with the
    neither the lab eval nor the `tail` world vetoes. PASSED at 8h, 24h.
 
 ## Transcript
+
+The transcript below was recorded before the sources, `wide` and the outcome replaced the field table and labels; `run.sh` prints the current cards.
 
 ```text
 $ rci init ideas/spread

@@ -12,7 +12,7 @@ import pytest
 
 from research_ci.api.evals import Market
 from research_ci.eval.statistics.ic import rank_ic
-from research_ci.eval.statistics.shuffled import Prepared, QuantileSpread, RankCorrelation
+from research_ci.eval.statistics.shuffled import QuantileSpread, RankCorrelation
 from research_ci.eval.statistics.spread import quantile_spread
 from research_ci.eval.structure.filters import kept_without_top, without_top
 from research_ci.eval.synthetic import HOUR_NS, market
@@ -29,11 +29,7 @@ def _target(top: float, net: bool) -> Statistic:
     plugin = ClusterMean("cluster", net, top)
     form = plugin.batched(HOUR, COSTS)
     assert form is not None
-
-    def batched(table: pl.DataFrame) -> Prepared:
-        return form(table.rename({"y": "value"}))
-
-    return Statistic(lambda table: plugin.reduce(table.rename({"y": "value"}), HOUR, COSTS), batched)
+    return Statistic(lambda table: plugin.reduce(table, HOUR, COSTS), form)
 
 
 STATISTICS = {
@@ -62,7 +58,7 @@ def _tables(seed: int) -> Iterator[tuple[str, pl.DataFrame]]:
         "NaN scores",
         table.with_columns(score=pl.when(flip < 0.05).then(float("nan")).otherwise(pl.col("score").round(1))),
     )
-    yield "NaN labels", table.with_columns(y=pl.when(flip < 0.02).then(float("nan")).otherwise(pl.col("y")))
+    yield "NaN outcomes", table.with_columns(y=pl.when(flip < 0.02).then(float("nan")).otherwise(pl.col("y")))
     yield "rows out of order", table.filter(flip < 0.5).sample(fraction=1.0, shuffle=True, seed=seed)
     yield "missing clusters", table.with_columns(cluster=pl.when(flip < 0.1).then(None).otherwise(pl.col("cluster")))
     yield (

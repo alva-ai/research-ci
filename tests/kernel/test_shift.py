@@ -77,9 +77,8 @@ def test_events_move_with_their_gaps_and_only_the_scored_rows_count() -> None:
     index = Shift(events, 3 * HOUR_NS).index(1)
     shifted = with_scores(events, events["score"].to_numpy()[index])
     assert shifted["score"].is_nan().sum() == events["score"].is_nan().sum()
-    labels = shifted.rename({"y": "value"})
-    got = ClusterMean(net=False).reduce(labels, pd.Timedelta(hours=3), FlatCosts(0, 0))
-    want = labels.filter(pl.col("score").is_finite()).group_by("t").agg(pl.col("value").mean()).sort("t")
+    got = ClusterMean(net=False).reduce(shifted, pd.Timedelta(hours=3), FlatCosts(0, 0))
+    want = shifted.filter(pl.col("score").is_finite()).group_by("t").agg(pl.col("y").mean().alias("value")).sort("t")
     assert got.equals(want.select("t", "value"))
 
 

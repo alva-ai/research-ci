@@ -11,8 +11,9 @@ def test_every_plugin_with_its_kind_options_and_declarations() -> None:
     assert {"toy.data", "toy.pairs", "toy.carry", "ref.mean", "ref.carry", "ref.flat_costs"} <= set(found)
     data = found["toy.data"]
     assert (data["kind"], data["origin"]) == ("data", "registry")
-    assert data["fields"] == ["close", "funding_rate", "funding_interval_hours"] and data["reference"] is True
-    assert data["levels"] == {"fields": ("close",), "factor": 5.0, "window": 24, "mask": "24h"}
+    assert data["sources"] == {"candles": ["close"], "funding": ["funding_rate", "funding_interval_hours"]}
+    assert data["reference"] is True
+    assert data["levels"] == {"columns": ("close",), "factor": 5.0, "window": 24, "mask": "24h"}
     assert data["doc"].startswith("Replays as of any time")
     assert (found["toy.pairs"]["kind"], found["toy.carry"]["kind"]) == ("universe", "consumer")
     assert [o["name"] for o in found["toy.carry"]["options"]] == ["k", "commission_bps", "slippage_bps"]
@@ -20,7 +21,9 @@ def test_every_plugin_with_its_kind_options_and_declarations() -> None:
     assert (mean["kind"], mean["per"], mean["rolls"]) == ("target", "entry", True)
     assert mean["origin"] == "entry point of research-ci"
     carry = found["ref.carry"]
-    assert carry["kind"] == "label" and carry["signature"] == "ref.carry(price: str = 'close', flow: str | None = None)"
+    assert (
+        carry["kind"] == "outcome" and carry["signature"] == "ref.carry(price: str = 'close', flow: str | None = None)"
+    )
     assert found["ref.flat_costs"]["options"][0] == {
         "name": "commission_bps",
         "type": "float",

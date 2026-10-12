@@ -1,5 +1,5 @@
 """Synthetic markets and sources the engine builds to check methods: evaluation tables whose information is
-known, and field tables whose faults are known."""
+known, and sources whose faults are known."""
 
 import math
 from collections.abc import Mapping
@@ -9,7 +9,7 @@ import numpy as np
 import polars as pl
 
 from research_ci.api.evals import Market, Source
-from research_ci.kernel.tables import field_table
+from research_ci.kernel.tables import source_tables
 from research_ci.kernel.time.clock import TIME
 
 HOUR_NS = 3_600 * 10**9
@@ -18,7 +18,7 @@ START_NS = 1_767_225_600 * 10**9
 
 def market(m: Market, seed: int) -> pl.DataFrame:
     """A synthetic evaluation table, one row per inst and time. Columns ``t``, ``inst``, ``cluster``, ``group``,
-    ``score`` and ``y``; the score follows the label across the insts at each time, or, for a series, over each
+    ``score`` and ``y``; the score follows the outcome ``y`` across the insts at each time, or, for a series, over each
     inst's times."""
     rng = np.random.default_rng(seed)
     cluster = np.arange(m.insts) % m.clusters
@@ -46,54 +46,46 @@ def market(m: Market, seed: int) -> pl.DataFrame:
     return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))
 
 
-def source(s: Source, seed: int) -> pl.DataFrame:
-    """A synthetic field table of hourly prices and settled flows. ``price`` is hourly, known at its event; ``flow``
-    comes at each settlement, known ``lag`` hours later, some of it revised one settlement after that as vintage 1."""
+def sources(s: Source, seed: int) -> dict[str, pl.DataFrame]:
+    """Synthetic sources of hourly prices and settled flows. ``prices`` holds an hourly ``price`` known at its event;
+    ``flows`` a ``flow`` at each settlement, known ``lag`` hours later, some of it revised one settlement after that as
+    vintage 1."""
     rng = np.random.default_rng(seed)
     names = _named("e", np.arange(s.insts))
     hours = np.arange(1, s.hours + 1, dtype=np.int64)
     walk = 100 * np.exp(np.cumsum(rng.normal(0, 0.003, (s.insts, s.hours)), axis=1))
     price_t = START_NS + np.tile(hours, s.insts) * HOUR_NS
-    rows = [
-        pl.DataFrame(
-            {
-                "inst": np.repeat(names, s.hours),
-                "field": "price",
-                "event_time": price_t,
-                "available_at": price_t,
-                "value": walk.ravel(),
-                "vintage": 0,
-            }
-        )
-    ]
+    prices = pl.DataFrame(
+        {
+            "inst": np.repeat(names, s.hours),
+            "event_time": price_t,
+            "available_at": price_t,
+            "vintage": 0,
+            "price": walk.ravel(),
+        }
+    )
     settles = hours[hours % s.settle == 0]
     level = rng.normal(0.0002, 0.0001, s.insts)
     flow = level[:, None] + rng.normal(0, 0.00005, (s.insts, len(settles)))
     flow_t = START_NS + np.tile(settles, s.insts) * HOUR_NS
-    lag = s.lag * HOUR_NS
-    rows.append(
-        pl.DataFrame(
-            {
-                "inst": np.repeat(names, len(settles)),
-                "field": "flow",
-                "event_time": flow_t,
-                "available_at": flow_t + lag,
-                "value": flow.ravel(),
-                "vintage": 0,
-            }
-        )
+    flows = pl.DataFrame(
+        {
+            "inst": np.repeat(names, len(settles)),
+            "event_time": flow_t,
+            "available_at": flow_t + s.lag * HOUR_NS,
+            "vintage": 0,
+            "flow": flow.ravel(),
+        }
     )
     revised = rng.random(flow.size) < s.revised
     if revised.any():
-        first = rows[-1].filter(pl.Series(revised))
+        first = flows.filter(pl.Series(revised))
         later = pl.col("available_at") + s.settle * HOUR_NS
-        rows.append(first.with_columns(available_at=later, value=pl.col("value") * 1.01, vintage=pl.lit(1)))
-    frame = pl.concat(rows).with_columns(
-        pl.col("event_time").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"),
-        pl.col("available_at").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC"),
-        source=pl.lit("synthetic"),
-    )
-    return field_table(frame)
+        flows = pl.concat(
+            [flows, first.with_columns(available_at=later, flow=pl.col("flow") * 1.01, vintage=pl.lit(1))]
+        )
+    timed = [pl.col(c).cast(pl.Datetime("ns")).dt.replace_time_zone("UTC") for c in ("event_time", "available_at")]
+    return source_tables({"prices": prices.with_columns(timed), "flows": flows.with_columns(timed)})
 
 
 def hand(columns: Mapping[str, list[Any]], t: int = 0) -> pl.DataFrame:

@@ -1,6 +1,6 @@
 """The built-in statistics on many shuffles at once.
 
-A null world moves scores between the rows of one decision time and leaves everything else in place: each row's label,
+A null world moves scores between the rows of one decision time and leaves everything else in place: each row's outcome,
 its cluster, and which scores tie stay what they are, and only the row a score comes from changes. Each form here does
 the work that does not change once per table, then takes a matrix of shuffles, one per row of ``index`` (row ``i``
 takes the score of row ``index[i]``), and returns the statistic at each decision time for each shuffle, as the
@@ -252,9 +252,9 @@ class QuantileSpread:
 @dataclass(frozen=True)
 class TopClusterMean:
     """The reference target ``ref.mean`` with ``top`` on many shuffles: at each time, the rows holding a score whose
-    ordinal rank from the top (ties in table order) is within ``top`` of them, their ``value`` less the round trip of
-    ``costs`` when ``net``, averaged per ``cluster``, then over clusters. ``costs`` prices each row on its own, as the
-    cost model's ``round_trip`` does per candidate row."""
+    ordinal rank from the top (ties in table order) is within ``top`` of them, their outcome ``y`` less the round trip
+    of ``costs`` when ``net``, averaged per ``cluster``, then over clusters. ``costs`` prices each row on its own, as
+    the cost model's ``round_trip`` does per candidate row."""
 
     top: float
     cluster: str
@@ -263,7 +263,7 @@ class TopClusterMean:
 
     def __call__(self, table: pl.DataFrame) -> Prepared:
         layout = _Layout(table)
-        value = pl.col("value") - pl.Series(self.costs.round_trip(table)) if self.net else pl.col("value")
+        value = pl.col("y") - pl.Series(self.costs.round_trip(table)) if self.net else pl.col("y")
         v = table.select(value.alias("v"))["v"]
         valid = ~v.is_null().to_numpy()[layout.order]
         v = np.where(valid, v.fill_null(0.0).to_numpy()[layout.order], 0.0)
@@ -326,7 +326,7 @@ class _Free:
 _NONE = _Free()
 FIVE = {"score": [5.0, 1.0, 4.0, 2.0, 3.0], "y": [0.5, 0.1, 0.4, 0.2, 0.3]}
 REVERSED = [1, 0, 3, 2, 4]
-CLUSTERED = {"score": [5.0, 4.0, 3.0, 2.0, 1.0], "value": [0.5, 0.3, 0.1, 0.2, 0.4], "c": ["a", "a", "b", "b", "c"]}
+CLUSTERED = {"score": [5.0, 4.0, 3.0, 2.0, 1.0], "y": [0.5, 0.3, 0.1, 0.2, 0.4], "c": ["a", "a", "b", "b", "c"]}
 
 
 def _once(
@@ -357,7 +357,7 @@ CASES = [
         "tied scores enter the top in table order",
         lambda: _once(
             TopClusterMean(0.5, "c", False, _NONE),
-            {"score": [2.0, 2.0, 2.0, 1.0], "value": [0.1, 0.2, 0.9, 0.0], "c": ["a", "b", "c", "d"]},
+            {"score": [2.0, 2.0, 2.0, 1.0], "y": [0.1, 0.2, 0.9, 0.0], "c": ["a", "b", "c", "d"]},
         ),
         0.15,
     ),
