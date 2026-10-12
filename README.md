@@ -26,6 +26,7 @@ A backtest framework for research: an alpha claim counts only after it passes CI
 | [docs/design.md](docs/design.md) | The full design: principles, architecture, lifecycle, the contract, the data and feat layers, time and leaks, holdout and labels, judging, the challenger, trust, layers, plugins, key decisions and why, prior art, roadmap |
 | [docs/walkthroughs.md](docs/walkthroughs.md) | One idea from the contract to a passed feat layer, with what every command printed |
 | [docs/catalog.md](docs/catalog.md) | At a glance, generated from the code: every step of each stage's floor and default lists, slot by slot, with its role, how an idea's lab evals plug in and what holds them to their tests, and every eval function with where it is used and what backs it |
+| [examples/README.md](examples/README.md) | One idea run end to end in about 40 seconds on a synthetic market, from a fresh ledger: every slot of every layer, and a submission that FAILED, one TAINTED and one PASSED, with the lab and the cards it wrote |
 
 ## Why
 

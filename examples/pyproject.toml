@@ -1,0 +1,18 @@
+[project]
+name = "toy-lab"
+version = "0.1.0"
+description = "A lab for the example: toy plugins on synthetic data, and one idea run end to end."
+requires-python = ">=3.11"
+dependencies = ["research-ci"]
+
+[project.entry-points."research_ci.plugins"]
+"toy.data" = "toy_lab:ToyData"
+"toy.pairs" = "toy_lab:ToyPairs"
+"toy.data.relaunch" = "toy_lab:ToyRelaunched"
+
+[tool.uv.sources]
+research-ci = { path = "..", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.8,<0.13"]
+build-backend = "uv_build"
