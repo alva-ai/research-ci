@@ -17,7 +17,7 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
     data = spec["data"]
     add(
         "data",
-        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['entities']} entities · "
+        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['insts']} insts · "
         f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
     )
     if "universe" in spec:

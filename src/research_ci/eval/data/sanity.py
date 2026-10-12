@@ -1,5 +1,5 @@
 """Sanity of the fields a source declares as levels, such as prices: a level is positive, it changes now and then, and
-it does not jump to another level for a moment and back. Each check returns the rows it flags (``entity``,
+it does not jump to another level for a moment and back. Each check returns the rows it flags (``inst``,
 ``field``, ``event_time``). A lasting jump is not flagged here: the baseline calls it a level shift, and admission asks
 the independent source about it."""
 
@@ -10,8 +10,8 @@ from research_ci.api.evals import Case, Source
 from research_ci.eval.data.baseline import events
 from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 
-KEYS = ["entity", "field", "event_time"]
-BY = ["entity", "field"]
+KEYS = ["inst", "field", "event_time"]
+BY = ["inst", "field"]
 
 
 def nonpositive(fields: pl.DataFrame, levels: tuple[str, ...]) -> pl.DataFrame:
@@ -21,7 +21,7 @@ def nonpositive(fields: pl.DataFrame, levels: tuple[str, ...]) -> pl.DataFrame:
 
 def stale(fields: pl.DataFrame, levels: tuple[str, ...], runs: float) -> pl.DataFrame:
     """Events repeating the value before them in a long run. The run of one value lasts longer than ``runs`` of the
-    entity's usual spacings; the first event of the run, the last one that changed, is kept."""
+    inst's usual spacings; the first event of the run, the last one that changed, is kept."""
     e = events(_levels(fields, levels))
     new = (pl.col("value") != pl.col("value").shift(1)).fill_null(True)
     e = e.with_columns(run=new.cum_sum().over(BY))
@@ -54,14 +54,14 @@ def _apart(ratio: pl.Expr, k: float) -> pl.Expr:
 
 def _hours(flagged: pl.DataFrame) -> list[tuple[str, int]]:
     t = (pl.col("event_time").dt.epoch("ns") - START_NS) // HOUR_NS
-    return [(str(e), int(h)) for e, h in flagged.select("entity", t).sort("entity", "event_time").rows()]
+    return [(str(e), int(h)) for e, h in flagged.select("inst", t).sort("inst", "event_time").rows()]
 
 
-def _set(entity: str, hours: range, value: float | None = None, k: float = 1.0) -> pl.DataFrame:
-    """A synthetic source with ``entity``'s prices in ``hours`` set to ``value``, or times ``k``."""
+def _set(inst: str, hours: range, value: float | None = None, k: float = 1.0) -> pl.DataFrame:
+    """A synthetic source with ``inst``'s prices in ``hours`` set to ``value``, or times ``k``."""
     f = source(Source(), 0)
     t = (pl.col("event_time").dt.epoch("ns") - START_NS) // HOUR_NS
-    hit = (pl.col("entity") == entity) & (pl.col("field") == "price") & t.is_between(hours.start, hours.stop - 1)
+    hit = (pl.col("inst") == inst) & (pl.col("field") == "price") & t.is_between(hours.start, hours.stop - 1)
     new = pl.lit(value) if value is not None else pl.col("value") * k
     return f.with_columns(value=pl.when(hit).then(new).otherwise("value"))
 
@@ -70,7 +70,7 @@ def _held(hours: range) -> pl.DataFrame:
     """e0's price held at its value of the hour before ``hours`` throughout them."""
     f = source(Source(), 0)
     t = (pl.col("event_time").dt.epoch("ns") - START_NS) // HOUR_NS
-    price = (pl.col("entity") == "e0") & (pl.col("field") == "price")
+    price = (pl.col("inst") == "e0") & (pl.col("field") == "price")
     held = f.filter(price & (t == hours.start - 1))["value"][0]
     return f.with_columns(
         value=pl.when(price & t.is_between(hours.start, hours.stop - 1)).then(pl.lit(held)).otherwise("value")

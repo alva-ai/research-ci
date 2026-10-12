@@ -43,7 +43,7 @@ UNDOCUMENTED = {
 TARGETS: dict[str, tuple[str, str, type]] = {
     "cross": ("ref.mean", '{"cluster": "<cluster column>", "top": 0.2}', ClusterMean),
     "series": ("ref.timing", "", SignedMean),
-    "events": ("ref.mean", '{"cluster": "entity"}', ClusterMean),
+    "events": ("ref.mean", '{"cluster": "inst"}', ClusterMean),
 }
 
 

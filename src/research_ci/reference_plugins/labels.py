@@ -12,22 +12,22 @@ TIME = pl.Datetime("ns", "UTC")
 
 
 class HoldingReturn:
-    """``p(t + h) / p(t) - 1`` of the candidate's own entity, each price as it was first known at that moment.
+    """``p(t + h) / p(t) - 1`` of the candidate's own inst, each price as it was first known at that moment.
 
     A price is current until the next one is due: no row when the latest price at ``t`` or ``t + h`` is as old as the
-    entity's usual spacing between prices, because the series has stopped or the data does not reach that time."""
+    inst's usual spacing between prices, because the series has stopped or the data does not reach that time."""
 
     def __init__(self, price: str = "close") -> None:
         self.price = price
 
     def values(self, fields: pl.DataFrame, candidates: pl.DataFrame, horizon: pd.Timedelta) -> pl.DataFrame:
         prices = _known(fields, self.price)
-        rows = candidates.select(pl.col("t").cast(TIME), "entity")
+        rows = candidates.select(pl.col("t").cast(TIME), "inst")
         rows = rows.with_columns(end=pl.col("t") + pl.duration(nanoseconds=int(horizon.value)))
-        rows = _level(rows, prices, "entity", "t", "p0")
-        rows = _level(rows, prices, "entity", "end", "p1")
-        out = rows.drop_nulls(["p0", "p1"]).select("t", "entity", (pl.col("p1") / pl.col("p0") - 1).alias("value"))
-        return out.sort("t", "entity")
+        rows = _level(rows, prices, "inst", "t", "p0")
+        rows = _level(rows, prices, "inst", "end", "p1")
+        out = rows.drop_nulls(["p0", "p1"]).select("t", "inst", (pl.col("p1") / pl.col("p0") - 1).alias("value"))
+        return out.sort("t", "inst")
 
     def cases(self) -> Sequence[LabelCase]:
         prices = [(0, 100.0), (1, 104.0), (2, 110.0), (3, 99.0), (4, 121.0)]
@@ -44,9 +44,9 @@ class Markout:
         self.price = price
 
     def values(self, fields: pl.DataFrame, candidates: pl.DataFrame, horizon: pd.Timedelta) -> pl.DataFrame:
-        base = HoldingReturn(self.price).values(fields, candidates.select("t", "entity"), horizon)
-        sides = candidates.select(pl.col("t").cast(TIME), "entity", pl.col("side").cast(pl.Float64))
-        return base.join(sides, on=["t", "entity"]).select("t", "entity", pl.col("value") * pl.col("side"))
+        base = HoldingReturn(self.price).values(fields, candidates.select("t", "inst"), horizon)
+        sides = candidates.select(pl.col("t").cast(TIME), "inst", pl.col("side").cast(pl.Float64))
+        return base.join(sides, on=["t", "inst"]).select("t", "inst", pl.col("value") * pl.col("side"))
 
     def cases(self) -> Sequence[LabelCase]:
         prices = [("x", self.price, h, v) for h, v in [(0, 100.0), (1, 98.0), (2, 95.0), (3, 97.0)]]
@@ -73,7 +73,7 @@ class PairCarry:
         self, fields: pl.DataFrame, candidates: pl.DataFrame, horizons: Sequence[pd.Timedelta]
     ) -> Iterator[pl.DataFrame]:
         prices = _known(fields, self.price)
-        start = candidates.select(pl.col("t").cast(TIME), "entity", "long", "short")
+        start = candidates.select(pl.col("t").cast(TIME), "inst", "long", "short")
         for leg in ("long", "short"):
             start = _level(start, prices, leg, "t", f"p_{leg}0")
         flows = None if self.flow is None else _cumulative(fields, self.flow)
@@ -99,7 +99,7 @@ class PairCarry:
             flow = (pl.col("c_short1") - pl.col("c_short0")) - (pl.col("c_long1") - pl.col("c_long0"))
             rows = rows.with_columns(flow.alias("flow"))
             parts.append("flow")
-        return rows.select("t", "entity", pl.sum_horizontal(parts).alias("value"), *parts).sort("t", "entity")
+        return rows.select("t", "inst", pl.sum_horizontal(parts).alias("value"), *parts).sort("t", "inst")
 
     def cases(self) -> Sequence[LabelCase]:
         a = [100, 101, 99, 102, 103, 101, 104, 105, 103, 106, 107, 105, 108]
@@ -121,30 +121,30 @@ class PairCarry:
 
 
 def _known(fields: pl.DataFrame, name: str) -> pl.DataFrame:
-    """Each entity's latest level by event time, as a step function of when it became known (first vintages), with
-    the entity's usual spacing between levels."""
+    """Each inst's latest level by event time, as a step function of when it became known (first vintages), with
+    the inst's usual spacing between levels."""
     rows = fields.filter(pl.col("field") == name).sort("vintage")
-    rows = rows.unique(subset=["entity", "event_time"], keep="first", maintain_order=True).sort(
+    rows = rows.unique(subset=["inst", "event_time"], keep="first", maintain_order=True).sort(
         "available_at", "event_time"
     )
-    rows = rows.filter(pl.col("event_time") == pl.col("event_time").cum_max().over("entity"))
-    out = rows.select("entity", pl.col("available_at").alias("known_at"), "value")
-    out = out.unique(subset=["entity", "known_at"], keep="last", maintain_order=True)
-    spacing = pl.col("known_at").diff().median().over("entity")
+    rows = rows.filter(pl.col("event_time") == pl.col("event_time").cum_max().over("inst"))
+    out = rows.select("inst", pl.col("available_at").alias("known_at"), "value")
+    out = out.unique(subset=["inst", "known_at"], keep="last", maintain_order=True)
+    spacing = pl.col("known_at").diff().median().over("inst")
     return out.with_columns(seen=pl.col("known_at"), spacing=spacing).sort("known_at")
 
 
 def _cumulative(fields: pl.DataFrame, name: str) -> pl.DataFrame:
     rows = fields.filter(pl.col("field") == name).sort("vintage")
-    rows = rows.unique(subset=["entity", "event_time"], keep="first", maintain_order=True).sort("available_at")
-    out = rows.select("entity", pl.col("available_at").alias("known_at"), pl.col("value").cum_sum().over("entity"))
-    return out.unique(subset=["entity", "known_at"], keep="last", maintain_order=True).sort("known_at")
+    rows = rows.unique(subset=["inst", "event_time"], keep="first", maintain_order=True).sort("available_at")
+    out = rows.select("inst", pl.col("available_at").alias("known_at"), pl.col("value").cum_sum().over("inst"))
+    return out.unique(subset=["inst", "known_at"], keep="last", maintain_order=True).sort("known_at")
 
 
 def _level(rows: pl.DataFrame, known: pl.DataFrame, by: str, at: str, name: str) -> pl.DataFrame:
     indexed = rows.with_row_index("_row")
-    query = indexed.select("_row", pl.col(by).alias("entity"), pl.col(at).alias("_at")).sort("_at")
-    hit = query.join_asof(known, left_on="_at", right_on="known_at", by="entity", check_sortedness=False)
+    query = indexed.select("_row", pl.col(by).alias("inst"), pl.col(at).alias("_at")).sort("_at")
+    hit = query.join_asof(known, left_on="_at", right_on="known_at", by="inst", check_sortedness=False)
     age = pl.col("_at") - pl.col("seen")
     current = (age < pl.col("spacing")) | (pl.col("spacing").is_null() & (age == pl.duration(nanoseconds=0)))
     value = pl.when(current).then(pl.col("value")).otherwise(None)
@@ -154,8 +154,8 @@ def _level(rows: pl.DataFrame, known: pl.DataFrame, by: str, at: str, name: str)
 
 def _running(rows: pl.DataFrame, known: pl.DataFrame, by: str, at: str, name: str) -> pl.DataFrame:
     indexed = rows.with_row_index("_row")
-    query = indexed.select("_row", pl.col(by).alias("entity"), pl.col(at).alias("_at")).sort("_at")
-    hit = query.join_asof(known, left_on="_at", right_on="known_at", by="entity", check_sortedness=False)
+    query = indexed.select("_row", pl.col(by).alias("inst"), pl.col(at).alias("_at")).sort("_at")
+    hit = query.join_asof(known, left_on="_at", right_on="known_at", by="inst", check_sortedness=False)
     hit = hit.select("_row", pl.col("value").fill_null(0.0).alias(name))
     return indexed.join(hit, on="_row").drop("_row")
 
@@ -170,18 +170,18 @@ def _at(hour: int) -> datetime:
 def _fields(rows: list[tuple[str, str, int, float]]) -> pl.DataFrame:
     frame = pl.DataFrame(
         [(e, f, _at(h), _at(h), v, 0, "") for e, f, h, v in rows],
-        schema=["entity", "field", "event_time", "available_at", "value", "vintage", "source"],
+        schema=["inst", "field", "event_time", "available_at", "value", "vintage", "source"],
         orient="row",
     )
     return frame.with_columns(pl.col("event_time").cast(TIME), pl.col("available_at").cast(TIME))
 
 
 def _cands(rows: list[tuple]) -> pl.DataFrame:
-    names = ["t", "entity", "long", "short"][: len(rows[0])]
+    names = ["t", "inst", "long", "short"][: len(rows[0])]
     frame = pl.DataFrame([(_at(r[0]), *r[1:]) for r in rows], schema=names, orient="row")
     return frame.with_columns(pl.col("t").cast(TIME))
 
 
 def _rows(rows: list[tuple], values: list[str]) -> pl.DataFrame:
-    frame = pl.DataFrame([(_at(r[0]), *r[1:]) for r in rows], schema=["t", "entity", *values], orient="row")
+    frame = pl.DataFrame([(_at(r[0]), *r[1:]) for r in rows], schema=["t", "inst", *values], orient="row")
     return frame.with_columns(pl.col("t").cast(TIME))

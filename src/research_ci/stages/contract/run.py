@@ -141,7 +141,7 @@ class _Derivation:
             "source": source.name,
             "hash": digest,
             "rows": explore.height,
-            "entities": explore["entity"].n_unique(),
+            "insts": explore["inst"].n_unique(),
             "first": iso(self.start),
             "explore_end": iso(self.explore_end),
             "age_days": round(age, 1),
@@ -204,7 +204,7 @@ class _Derivation:
         target: TargetPlugin = self._plugin(use)
         found = label_values(labels[label.name], fields, cands, [span(h) for h in label.horizons])
         rows = tuple(
-            (h, v.join(cands, on=["t", "entity"], how="inner", suffix="_candidate"))
+            (h, v.join(cands, on=["t", "inst"], how="inner", suffix="_candidate"))
             for h, v in zip(label.horizons, found, strict=True)
         )
         return floor.Decisive(effect, label, use, target, rows)

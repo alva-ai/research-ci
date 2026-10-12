@@ -16,7 +16,7 @@ def _table() -> pl.DataFrame:
         for sym, pairs in (("A", 3), ("B", 3), ("C", 3), ("D", 1), ("E", 1)):
             for k in range(pairs):
                 rows.append((h * HOUR, f"{sym}:{k}", sym, "x" if k == 0 else "y"))
-    frame = pl.DataFrame(rows, schema=["t", "entity", "symbol", "venues"], orient="row")
+    frame = pl.DataFrame(rows, schema=["t", "inst", "symbol", "venues"], orient="row")
     return frame.with_columns(pl.col("t").cast(TIME))
 
 
@@ -58,7 +58,7 @@ def test_shuffles_are_uniform_over_clusters() -> None:
     table = _table()
     perm = Permutation(table, None, "symbol", HOUR)
     first = table.filter(pl.col("t") == pl.col("t").min()).with_row_index("row")
-    rows = first.filter(pl.col("entity") == "A:0")["row"].to_list()
+    rows = first.filter(pl.col("inst") == "A:0")["row"].to_list()
     counts: Counter[str] = Counter()
     for seed in range(600):
         idx = perm.index(seed)
@@ -76,14 +76,14 @@ def test_rows_inside_a_moved_cluster_are_shuffled_too_and_held_within_a_block() 
     same, total = 0, 0
     for seed in range(200):
         idx = perm.index(seed)
-        source = table["entity"].to_numpy()[idx]
-        for i, entity in enumerate(table["entity"].to_list()):
-            if entity.startswith(("A", "B", "C")):
-                same += entity.split(":")[1] == source[i].split(":")[1]
+        source = table["inst"].to_numpy()[idx]
+        for i, inst in enumerate(table["inst"].to_list()):
+            if inst.startswith(("A", "B", "C")):
+                same += inst.split(":")[1] == source[i].split(":")[1]
                 total += 1
         moved = table.with_columns(source=pl.Series(source))
-        first = moved.filter(pl.col("t") == pl.col("t").min()).sort("entity")["source"].to_list()
-        second = moved.filter(pl.col("t") == pl.col("t").min() + pl.duration(hours=1)).sort("entity")["source"]
+        first = moved.filter(pl.col("t") == pl.col("t").min()).sort("inst")["source"].to_list()
+        second = moved.filter(pl.col("t") == pl.col("t").min() + pl.duration(hours=1)).sort("inst")["source"]
         assert first == second.to_list()
     assert abs(same / total - 1 / 3) < 0.05
 
@@ -97,23 +97,23 @@ def _sorted_by_hash(
         pl.int_range(table.height, dtype=pl.Int64).alias("row"),
         pl.col("t").dt.epoch("ns").alias("t"),
         key(bucket).alias("b"),
-        (key(cluster) if cluster else pl.col("entity").cast(pl.String)).alias("c"),
-        pl.col("entity").cast(pl.String),
-    ).sort("t", "b", "c", "entity")
+        (key(cluster) if cluster else pl.col("inst").cast(pl.String)).alias("c"),
+        pl.col("inst").cast(pl.String),
+    ).sort("t", "b", "c", "inst")
     new = (pl.col("t") != pl.col("t").shift(1)) | (pl.col("b") != pl.col("b").shift(1))
-    frame = frame.with_columns(inst=(new | (pl.col("c") != pl.col("c").shift(1))).fill_null(True).cum_sum() - 1)
-    inst = frame.group_by("inst", maintain_order=True).agg(
+    frame = frame.with_columns(seg=(new | (pl.col("c") != pl.col("c").shift(1))).fill_null(True).cum_sum() - 1)
+    seg = frame.group_by("seg", maintain_order=True).agg(
         pl.col("t").first(), pl.col("b").first(), pl.col("c").first(), pl.len().alias("size")
     )
-    block = ((pl.col("t") - inst["t"].min()) // block_ns).alias("block")
-    rows, of = frame["row"].to_numpy(), frame["inst"].to_numpy()
-    start = np.concatenate([[0], np.cumsum(inst["size"].to_numpy())[:-1]]).astype(np.int64)
-    group = inst.select(pl.struct("t", "b", "size").rank("dense"))["t"].to_numpy()
-    order = np.lexsort((inst.select(pl.col("c").rank("dense"))["c"].to_numpy(), group))
-    hashed = inst.select(block, "b", "c").select(pl.struct("block", "b", "c").hash(seed))["block"].to_numpy()
+    block = ((pl.col("t") - seg["t"].min()) // block_ns).alias("block")
+    rows, of = frame["row"].to_numpy(), frame["seg"].to_numpy()
+    start = np.concatenate([[0], np.cumsum(seg["size"].to_numpy())[:-1]]).astype(np.int64)
+    group = seg.select(pl.struct("t", "b", "size").rank("dense"))["t"].to_numpy()
+    order = np.lexsort((seg.select(pl.col("c").rank("dense"))["c"].to_numpy(), group))
+    hashed = seg.select(block, "b", "c").select(pl.struct("block", "b", "c").hash(seed))["block"].to_numpy()
     source = np.empty_like(order)
     source[order] = np.lexsort((hashed, group))
-    inner = frame.select(block, "b", "c", "entity").select(pl.struct(pl.all()).hash(seed + 1))["block"].to_numpy()
+    inner = frame.select(block, "b", "c", "inst").select(pl.struct(pl.all()).hash(seed + 1))["block"].to_numpy()
     by = np.lexsort((inner, of))
     offset = np.empty(table.height, dtype=np.int64)
     offset[by] = np.arange(table.height) - start[of[by]]
@@ -134,7 +134,7 @@ def test_a_shuffle_is_the_one_sorting_every_row_by_its_hash_gives() -> None:
             for k in range(n)
             if rng.random() > 0.2
         ]
-        frame = pl.DataFrame(rows, schema=["t", "entity", "symbol", "venues"], orient="row", strict=False)
+        frame = pl.DataFrame(rows, schema=["t", "inst", "symbol", "venues"], orient="row", strict=False)
         table = frame.with_columns(pl.col("t").cast(TIME)).sample(fraction=1.0, shuffle=True, seed=trial)
         for bucket, cluster, block in ((None, "symbol", HOUR), ("venues", "symbol", 4 * HOUR), (None, None, HOUR)):
             perm = Permutation(table, bucket, cluster, block)

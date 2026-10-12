@@ -12,7 +12,7 @@ from research_ci.api.contract import span
 
 @dataclass(frozen=True)
 class PermuteWithin:
-    """Shuffle scores across entities inside each bucket of ``bucket_by`` at each decision time (``"time"``: one
+    """Shuffle scores across insts inside each bucket of ``bucket_by`` at each decision time (``"time"``: one
     bucket per decision time); the labels stay.
 
     ``clusters`` names a column whose members move together, so dependence inside a cluster survives. ``block``
@@ -27,8 +27,8 @@ class PermuteWithin:
 
 @dataclass(frozen=True)
 class ShiftInTime:
-    """Shift every entity's scores along its own decision times, circularly, by one offset per shuffle, the same for
-    every entity; the labels stay. The scores' own autocorrelation and what they share across entities survive; only
+    """Shift every inst's scores along its own decision times, circularly, by one offset per shuffle, the same for
+    every inst; the labels stay. The scores' own autocorrelation and what they share across insts survive; only
     their alignment with the labels goes. H0: the scores carry no timing information.
 
     The offset is at least ``min_shift`` and at most the length less ``min_shift``, so a shifted score never lands
@@ -58,7 +58,7 @@ class Null:
     """One alternative explanation ("it is only X") and the world that keeps X.
 
     ``explains`` is the id of an alternative in the contract. ``keeps`` names the column X lives in (``"time"``: only
-    when a decision happens), the world's own bucket unless told otherwise, or ``entity`` for a ``ShiftInTime``. In feat
+    when a decision happens), the world's own bucket unless told otherwise, or ``inst`` for a ``ShiftInTime``. In feat
     a world judges the evals it names in ``evals``, any eval of the layer (a lab eval, a library eval, or a default
     diagnostic), or, when it names none, the decisive effect itself; what it judges must reach ``z ≥ 2`` at every
     horizon, or the submission fails there. It draws its shuffles a batch at a time, up to ``reps``, until each of its
@@ -81,7 +81,7 @@ class Null:
             raise ValueError("a null world needs at least 20 repetitions")
         object.__setattr__(self, "evals", tuple(self.evals))
         if self.keeps is None:
-            kept = self.world.bucket_by if isinstance(self.world, PermuteWithin) else "entity"
+            kept = self.world.bucket_by if isinstance(self.world, PermuteWithin) else "inst"
             object.__setattr__(self, "keeps", kept)
 
 

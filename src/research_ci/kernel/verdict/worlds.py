@@ -16,7 +16,7 @@ from research_ci.kernel.verdict.shift import Shift
 @dataclass(frozen=True)
 class World:
     """A null world as the engine runs it: scores shuffled within ``bucket`` (``None``: each decision time), whole
-    ``clusters`` at a time, the same way within ``block``; or, with ``shift``, each entity's scores shifted in time by
+    ``clusters`` at a time, the same way within ``block``; or, with ``shift``, each inst's scores shifted in time by
     at least that much (``ShiftInTime``). It claims to keep what lives in ``keeps``. It judges the evals named in
     ``evals``, or every eval when empty."""
 
@@ -73,7 +73,7 @@ def shuffler(table: pl.DataFrame, w: World, h_ns: int) -> tuple[Index, int | Non
 
 def floor_world(clusters: str, reps: int, shape: str = "cross") -> World:
     """The engine's world for the universe's shape: scores shuffled across clusters at each decision time
-    (``cross``), or each entity's scores shifted in time by at least the horizon (``series`` and ``events``)."""
+    (``cross``), or each inst's scores shifted in time by at least the horizon (``series`` and ``events``)."""
     if shape != "cross":
         return World(
             name="floor",
@@ -81,11 +81,11 @@ def floor_world(clusters: str, reps: int, shape: str = "cross") -> World:
             bucket=None,
             clusters=None,
             block=None,
-            keeps="entity",
+            keeps="inst",
             evals=(),
             reps=reps,
             by="engine",
-            note="each entity's scores shifted in time by at least the horizon, the same offset for every entity",
+            note="each inst's scores shifted in time by at least the horizon, the same offset for every inst",
             shift="horizon",
         )
     return World(

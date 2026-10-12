@@ -26,7 +26,7 @@ LAG = pd.Timedelta("1h")
 
 
 def features(fields, candidates):
-    means = [pl.col("value").rolling_mean_by("known_at", window_size=h).over("entity").alias(h) for h in HORIZONS]
+    means = [pl.col("value").rolling_mean_by("known_at", window_size=h).over("inst").alias(h) for h in HORIZONS]
     for name, horizons in GROUPS.items():
         for h in horizons:
             pass
@@ -39,7 +39,7 @@ def features(fields, candidates):
     for k in range(len(HORIZONS)):
         pass
     renamed = {c: c.upper() for c in candidates.columns}
-    venues = candidates.to_pandas()["entity"].map({"a:X": 1})
+    venues = candidates.to_pandas()["inst"].map({"a:X": 1})
     exprs = [pl.col("value").mean(), pl.col("value").std()]
     exprs = exprs + [pl.col("value").max()]
     exprs += [pl.col("value").min()]
@@ -53,7 +53,7 @@ def features(fields, candidates):
             pass
     for w in "8h 24h".split():
         pass
-    return candidates.select("t", "entity", pl.lit(1.0).alias("score"))
+    return candidates.select("t", "inst", pl.lit(1.0).alias("score"))
 
 
 def helper(cols, times):
@@ -82,7 +82,7 @@ BAD = {
     "map with a function": "    x = df.to_pandas()['score'].map(helper)\n",
     "for over a column": "    for v in df['score']:\n        pass\n",
     "for over a parameter": "    for t in times:\n        pass\n",
-    "for over group_by": "    for key, group in df.group_by('entity'):\n        pass\n",
+    "for over group_by": "    for key, group in df.group_by('inst'):\n        pass\n",
     "for over range of the height": "    for i in range(df.height):\n        pass\n",
     "comprehension over a series": "    x = [v * 2 for v in df['score'].to_list()]\n",
     "while": "    i = 0\n    while i < df.height:\n        i += 1\n",

@@ -53,7 +53,7 @@ def test_obligations_fail_when_the_method_is_wrong() -> None:
 SIX = pl.DataFrame(
     {
         "t": [datetime(2026, 1, 1)] * 6,
-        "entity": list("abcdef"),
+        "inst": list("abcdef"),
         "score": [6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
         "y": [0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
     }
@@ -69,7 +69,7 @@ def test_a_case_takes_frames_in_and_frames_or_numbers_out() -> None:
     instants; an expected number reads a one-row frame of t and value as its value, and any other frame as its rows."""
     aware = pl.DataFrame({"t": [datetime(2026, 1, 1, tzinfo=UTC)], "value": [0.4]})
     naive = pl.DataFrame({"value": [0.4], "t": [datetime(2026, 1, 1)]})
-    flagged = pl.DataFrame({"entity": ["b", "a"], "n": [2, 1]})
+    flagged = pl.DataFrame({"inst": ["b", "a"], "n": [2, 1]})
     cases = [
         Case("a number from a one-row frame", _thirds, 0.4, given=SIX),
         Case("a frame, times naive or aware, columns in any order", _thirds, naive, given=SIX),

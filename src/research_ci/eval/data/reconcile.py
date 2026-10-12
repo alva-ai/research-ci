@@ -17,7 +17,7 @@ from research_ci.kernel.verdict.check import Check
 REQUEST_SCHEMA = {
     "rid": pl.Int64,
     "kind": pl.String,
-    "entity": pl.String,
+    "inst": pl.String,
     "field": pl.String,
     "start": TIME,
     "end": TIME,
@@ -34,10 +34,10 @@ def requests(
     draw = pl.int_range(pl.len(), dtype=pl.UInt32).shuffle(seed=seed).over("field")
     picked = (
         full.filter(draw < per_field)
-        .sort("field", "entity", "event_time", "vintage")
+        .sort("field", "inst", "event_time", "vintage")
         .select(
             pl.lit("sample").alias("kind"),
-            "entity",
+            "inst",
             "field",
             (pl.col("event_time") - tol).alias("start"),
             (pl.col("event_time") + tol).alias("end"),
@@ -46,7 +46,7 @@ def requests(
     a = anomalies
     if a.height > max_anomalies:
         order = pl.int_range(pl.len(), dtype=pl.UInt32).shuffle(seed=seed).over("kind")
-        a = a.filter(order < max(1, max_anomalies // 3)).sort("kind", "entity", "field", "start")
+        a = a.filter(order < max(1, max_anomalies // 3)).sort("kind", "inst", "field", "start")
     gap = a.filter(pl.col("kind") == "gap").with_columns(start=pl.col("start") + tol, end=pl.col("end") - tol)
     rest = a.filter(pl.col("kind") != "gap").with_columns(start=pl.col("start") - tol, end=pl.col("end") + tol)
     out = pl.concat([picked, gap.select(picked.columns), rest.select(picked.columns)])
@@ -59,7 +59,7 @@ def compare(
     """One result per request: ``match``, ``mismatch`` or ``unanswered``. A sample request matches when the source
     has our value within ``tol_ns`` of our time; a gap matches when the source has nothing inside it; a window
     around other anomalies matches when every row we have there is at the source too."""
-    keys = ["entity", "field"]
+    keys = ["inst", "field"]
     answered = ref.answered.select("rid") if "rid" in ref.answered.columns else pl.DataFrame(schema={"rid": pl.Int64})
     r = reqs.with_columns(
         lo=pl.col("start").dt.epoch("ns"),
@@ -112,13 +112,13 @@ def compare(
         .then(pl.lit("the source agrees"))
         .otherwise(pl.lit("faithful: the source has it"))
     )
-    columns = ["rid", "kind", "entity", "field", "status", "detail"]
+    columns = ["rid", "kind", "inst", "field", "status", "detail"]
     return out.sort("rid").select(*columns[:4], status.alias("status"), detail.alias("detail")).to_dicts()
 
 
 def summarize(results: list[dict[str, Any]], fields: list[str]) -> tuple[Check, dict[str, str], dict[str, Any]]:
     """The check, each field's grade, and counts. The counts are per field and per anomaly kind."""
-    schema = {"kind": pl.String, "field": pl.String, "status": pl.String, "entity": pl.String, "detail": pl.String}
+    schema = {"kind": pl.String, "field": pl.String, "status": pl.String, "inst": pl.String, "detail": pl.String}
     frame = pl.DataFrame(results, schema=schema) if results else pl.DataFrame(schema=schema)
     frame = frame.with_columns(group=pl.when(pl.col("kind") == "sample").then("field").otherwise("kind"))
     counts = frame.group_by("group", "status").len()
@@ -144,7 +144,7 @@ def summarize(results: list[dict[str, Any]], fields: list[str]) -> tuple[Check, 
         detail += f" ({unanswered} it could not check)"
     if bad.height:
         first = bad.row(0, named=True)
-        detail += f"; first mismatch {first['entity']} {first['field']}: {first['detail']}"
+        detail += f"; first mismatch {first['inst']} {first['field']}: {first['detail']}"
     status = "fail" if bad.height else ("pass" if checked.height else "warn")
     rows = counts.sort("group", "status").group_by("group", maintain_order=True).agg("status", "len")
     table = {g: dict(zip(s, n, strict=True)) for g, s, n in rows.iter_rows()}
@@ -155,11 +155,11 @@ STATUSES = ("match", "mismatch", "unanswered")
 
 
 def _timed(rows: pl.DataFrame, at: str, value: str) -> pl.DataFrame:
-    """``entity``, ``field``, the event time in ns and the value, in the order given."""
+    """``inst``, ``field``, the event time in ns and the value, in the order given."""
     if rows.is_empty() or "event_time" not in rows.columns:
-        return pl.DataFrame(schema={"entity": pl.String, "field": pl.String, at: pl.Int64, value: pl.Float64})
+        return pl.DataFrame(schema={"inst": pl.String, "field": pl.String, at: pl.Int64, value: pl.Float64})
     when = pl.col("event_time").dt.convert_time_zone("UTC").cast(TIME).dt.epoch("ns").alias(at)
-    return rows.select("entity", "field", when, pl.col("value").cast(pl.Float64).alias(value))
+    return rows.select("inst", "field", when, pl.col("value").cast(pl.Float64).alias(value))
 
 
 def _text(x: pl.Expr) -> pl.Expr:
@@ -176,7 +176,7 @@ def _statuses(
     _, anomalies = baseline(ours)
     reqs = requests(ours, anomalies, 20, 10, TOL_NS, 0)
     answered = reqs.select("rid") if answer else reqs.select("rid").head(0)
-    ref = Reference(theirs.select("entity", "field", "event_time", "value"), answered)
+    ref = Reference(theirs.select("inst", "field", "event_time", "value"), answered)
     found = pl.DataFrame(compare(reqs, ours, ref, TOL_NS))
     found = found.filter(pl.col("kind") == kind) if kind is not None else found
     return {f: set(s) for f, s in found.group_by("field").agg(pl.col("status").unique()).iter_rows()}

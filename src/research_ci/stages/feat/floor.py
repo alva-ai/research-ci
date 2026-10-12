@@ -4,12 +4,12 @@ Before anything runs, and before the submission is counted: ``SCREEN`` refuses a
 the checks of the lab's evals (``stages/lab.py``) refuse a ``feat.py`` without a lab eval (slot 3) or with one that
 fails its tests (slot 4); ``COVERED`` refuses a contract alternative without a null world (slot 3). ``FLOORS`` checks
 the scores, the premises of slot 1: they must rank what the universe's shape compares (the candidates at each time, each
-entity's times, or events) and read nothing ahead of their time; a submission that fails one is TAINTED or FAILED and
+inst's times, or events) and read nothing ahead of their time; a submission that fails one is TAINTED or FAILED and
 nothing is judged. ``JUDGE`` holds the decisive test, the one bar, fixed by the contract (slot 1): the contract's
 decisive effect, computed with the submitted scores, must beat the engine's floor world with ``z ≥ z_need``, which rises
 with the submission count; it passes at the horizons whose z against the family's null reaches the bar. The floor world
 follows the shape: for ``cross``, chance and timing, scores shuffled across clusters at each decision time, the same way
-within a horizon; for ``series`` and ``events``, chance, each entity's scores shifted in time by at least the horizon.
+within a horizon; for ``series`` and ``events``, chance, each inst's scores shifted in time by at least the horizon.
 Next to it slot 2, the default diagnostics and the library evals ``feat.py`` lists, judged in the floor world and shown,
 never deciding; and slot 3, the lab evals of ``feat.py``, judged in the floor world, and the null worlds of
 ``nulls/feat.py``, each judging the evals it names or, naming none, the decisive effect: each must reach ``z ≥ 2``
@@ -61,12 +61,12 @@ from research_ci.validation.calibration import EVENTS, calibrate
 FEAT_FILE = "feat.py"
 NULLS_FILE = Path("nulls") / "feat.py"
 EXAMPLE = Path("research") / "example.py"
-SCORE_COLUMNS = ("t", "entity", "score")
+SCORE_COLUMNS = ("t", "inst", "score")
 NO_TRIAL = "; no submission was spent"
 EXPLORED = "; nothing was recorded"
 SHAPE = (
     "a features file defines features(fields, candidates), which gets polars DataFrames and returns a DataFrame "
-    "(polars or pandas) or a polars LazyFrame with columns t, entity, score; research/example.py shows one"
+    "(polars or pandas) or a polars LazyFrame with columns t, inst, score; research/example.py shows one"
 )
 EVALS_FORMAT = FORMAT["feat"]
 Features = Callable[[pl.DataFrame, pl.DataFrame], Any]
@@ -74,8 +74,8 @@ Tables = dict[str, dict[str, tuple[pl.DataFrame, int]]]
 RANKS: dict[str, tuple[str, str]] = {
     "cross": ("the scores do not rank the candidates", "give two or more candidates distinct scores at each time"),
     "series": (
-        "the scores do not time the entities",
-        "give each entity's scores two or more distinct values over time",
+        "the scores do not time the insts",
+        "give each inst's scores two or more distinct values over time",
     ),
     "events": (
         "the scores mark no events",
@@ -113,7 +113,7 @@ class FeatSettings:
 @dataclass
 class Frozen:
     """What feat reads: the treated data and the candidates the data layer froze, and one evaluation table per label
-    and horizon (``t``, ``entity``, ``y`` and its components, the candidate columns) on every ``stride``-th decision
+    and horizon (``t``, ``inst``, ``y`` and its components, the candidate columns) on every ``stride``-th decision
     time whose label is complete before the explore data ends."""
 
     contract: Contract
@@ -197,12 +197,12 @@ def screen_file(seen: Seen) -> Found:
 
 def ranks(seen: Seen) -> Found:
     """The scores must rank what the shape compares: the candidates, with two or more distinct values, at half the
-    decision times or more (cross); each entity's decision times, with two or more distinct values over time, for half
-    the entities or more (series); or mark events, some of the candidate rows and not all (events)."""
+    decision times or more (cross); each inst's decision times, with two or more distinct values over time, for half
+    the insts or more (series); or mark events, some of the candidate rows and not all (events)."""
     assert seen.scores is not None
     cands = seen.frozen.candidates
     finite = seen.scores.filter(pl.col("score").is_finite())
-    by = "entity" if seen.shape == "series" else "t"
+    by = "inst" if seen.shape == "series" else "t"
     distinct = finite.group_by(by).agg(pl.col("score").n_unique().alias("k"))
     total = cands[by].n_unique()
     share = distinct.filter(pl.col("k") >= 2).height / total if total else 0.0
@@ -213,7 +213,7 @@ def ranks(seen: Seen) -> Found:
         detail = f"{scored}: {finite.height:,} of {cands.height:,} are events"
     elif seen.shape == "series":
         failed = share < 0.5
-        detail = f"{scored}; varies over time for {share:.0%} of entities"
+        detail = f"{scored}; varies over time for {share:.0%} of insts"
     else:
         failed = share < 0.5
         detail = f"{scored}; ranks candidates at {share:.0%} of decision times"
@@ -237,7 +237,7 @@ def nothing_ahead(seen: Seen) -> Found:
                 continue
             seconds.append(cost.seconds)
             before = seen.scores.filter(pl.col("t") <= lit_time(cut))
-            mismatch = pr._frame_mismatch(before, cut_scores, ["t", "entity"], ["score"])
+            mismatch = pr._frame_mismatch(before, cut_scores, ["t", "inst"], ["score"])
             if mismatch:
                 problems.append(f"{iso(cut)}: {mismatch}")
     leak = bool(problems)
@@ -606,7 +606,7 @@ def _joined(a: Found, b: Found) -> Found:
 
 def _calibrate(frozen: Frozen, s: FeatSettings) -> list[dict[str, Any]]:
     """Each decisive effect in the floor world, on its shortest horizon: a stand-in that carries only what the world
-    keeps (each decision time's level, or for a shift in time each entity's) must die as often as chance allows, and a
+    keeps (each decision time's level, or for a shift in time each inst's) must die as often as chance allows, and a
     planted signal must live; for events both are events, at a share of the rows. A shift with fewer offsets than
     calibration shuffles draws each offset once."""
     floor = floor_world(frozen, s)
@@ -672,14 +672,13 @@ def _scores(raw: Any, cands: pl.DataFrame) -> pl.DataFrame:
     try:
         out = frame.select(
             pl.col("t").dt.convert_time_zone("UTC").cast(TIME),
-            pl.col("entity").cast(pl.String),
+            pl.col("inst").cast(pl.String),
             pl.col("score").cast(pl.Float64),
         )
     except pl.exceptions.PolarsError as exc:
         raise FeatError(
-            f"features must return t as a timezone-aware datetime, entity as text, and score as a number: {exc}; "
-            f"{SHAPE}"
+            f"features must return t as a timezone-aware datetime, inst as text, and score as a number: {exc}; {SHAPE}"
         ) from exc
-    if out.select(pl.struct("t", "entity").is_duplicated().any()).item():
+    if out.select(pl.struct("t", "inst").is_duplicated().any()).item():
         raise FeatError("features return more than one score for some candidate at some time")
-    return out.join(cands.select("t", "entity"), on=["t", "entity"], how="semi").sort("t", "entity")
+    return out.join(cands.select("t", "inst"), on=["t", "inst"], how="semi").sort("t", "inst")

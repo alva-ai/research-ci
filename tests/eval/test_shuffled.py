@@ -51,7 +51,7 @@ STATISTICS = {
 
 def _tables(seed: int) -> Iterator[tuple[str, pl.DataFrame]]:
     rng = np.random.default_rng(seed)
-    table = market(Market(times=30, entities=25, clusters=7, ic=0.2), seed)
+    table = market(Market(times=30, insts=25, clusters=7, ic=0.2), seed)
     flip = pl.Series(rng.random(table.height))
     yield "plain", table
     yield "ties", table.with_columns(pl.col("score").round(0), pl.col("y").round(1))
@@ -103,7 +103,7 @@ def test_judging_with_the_forms_gives_the_numbers_of_judging_shuffle_by_shuffle(
 
 
 def test_every_form_gives_its_statistic_at_every_time_of_a_shuffle() -> None:
-    table = market(Market(times=20, entities=25, clusters=7, ic=0.2), 9).with_columns(pl.col("score").round(0))
+    table = market(Market(times=20, insts=25, clusters=7, ic=0.2), 9).with_columns(pl.col("score").round(0))
     perm = Permutation(table, None, "cluster", HOUR_NS)
     index = np.stack([perm.index(s) for s in range(5)])
     score = table["score"].to_numpy()
@@ -119,7 +119,7 @@ def test_every_form_gives_its_statistic_at_every_time_of_a_shuffle() -> None:
 
 
 def test_each_shuffle_of_a_lane_is_drawn_once_for_every_request_that_reads_it() -> None:
-    table = market(Market(times=30, entities=25, clusters=7), 0)
+    table = market(Market(times=30, insts=25, clusters=7), 0)
     drawn: list[int] = []
     perm = Permutation(table, None, "cluster", HOUR_NS)
 
@@ -135,7 +135,7 @@ def test_each_shuffle_of_a_lane_is_drawn_once_for_every_request_that_reads_it() 
 
 
 def test_a_form_that_does_not_give_its_statistic_is_not_used() -> None:
-    table = market(Market(times=30, entities=25, clusters=7, ic=0.2), 0)
+    table = market(Market(times=30, insts=25, clusters=7, ic=0.2), 0)
     wrong = Statistic(rank_ic, QuantileSpread(0.2))
     lanes = _lanes(table, None)
     found = judge_all([Request(wrong, lanes, 25, 3, "max")])[0]

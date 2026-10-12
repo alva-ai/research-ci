@@ -11,16 +11,16 @@ rejects in one sentence (``h0``), and it can veto. It can never pass what the de
 anything, the engine runs the tests of every lab eval an idea lists, and a layer whose lab evals do not all pass them is
 refused; ``rci eval check <file>`` runs them any time, for free.
 
-In ``data.py`` an eval gets the explore data, a FieldTable, and returns the rows it flags (``entity``,
+In ``data.py`` an eval gets the explore data, a FieldTable, and returns the rows it flags (``inst``,
 ``event_time``, optionally ``field``); no rows means it found nothing. ``on_fail`` is what the engine does with them:
-masks them (``mask``, the default), drops their entities (``drop_entities``), asks a person (``ask``), or, for a lab
+masks them (``mask``, the default), drops their insts (``drop_insts``), asks a person (``ask``), or, for a lab
 eval, blocks the data check (``block``): it judges the data after the treatments found before it, and any row it
 flags there is a veto. ``covers`` names the (category, field) pairs it
 claims to catch: the engine plants pits of those categories in clean copies of the data, the built-in ones and those of
 ``PITS`` in the eval's module, and the eval must flag every pit that moves the contract's decisive number by the
 materiality threshold. Evals only add to the data check; they cannot waive a step.
 
-In ``feat.py`` an eval gets the evaluation table of one horizon (``t``, ``entity``, ``score``, ``y`` and its
+In ``feat.py`` an eval gets the evaluation table of one horizon (``t``, ``inst``, ``score``, ``y`` and its
 components ``y_<part>``, the candidate columns) and returns one value per decision time (``t``, ``value``); the
 engine averages the values by blocks of the horizon and compares the average with the same in the floor world and the
 idea's null worlds that name it, as a z score. A library eval is shown next to the decisive test; a lab eval must reach
@@ -48,14 +48,14 @@ Layer = Literal["data", "feat"]
 Combine = Literal["max", "each"]
 Origin = Literal["library", "lab"]
 LIBRARY = "research_ci.eval"
-TABLE_KEYS = ("t", "entity", "score", "y")
-ON_FAIL = ("mask", "drop_entities", "ask", "block")
+TABLE_KEYS = ("t", "inst", "score", "y")
+ON_FAIL = ("mask", "drop_insts", "ask", "block")
 COMBINE = ("max", "each")
 FORMAT: dict[str, str] = {
     "data": (
         "data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=[(category, field)]), ...], "
-        "with at least one lab eval: fn(fields) returns the rows it flags (entity, event_time, optionally field), "
-        "on_fail is mask (the default), drop_entities, ask, or block (a lab eval only: any row it flags in the data "
+        "with at least one lab eval: fn(fields) returns the rows it flags (inst, event_time, optionally field), "
+        "on_fail is mask (the default), drop_insts, ask, or block (a lab eval only: any row it flags in the data "
         "after the treatments before it blocks the data), and covers names the pits it claims to catch; a lab eval "
         "is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), and "
         "h0 names in one sentence the H0 it rejects; an eval of the engine's library (`rci methods`; its options with "
@@ -64,7 +64,7 @@ FORMAT: dict[str, str] = {
     "feat": (
         "feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=(...), combine='max'), ...], "
         "with at least one lab eval: fn(table) returns t, value for each decision time from the evaluation table "
-        "(t, entity, score, y, y_<component>, and the candidate columns); a lab eval is a function of the idea's own "
+        "(t, inst, score, y, y_<component>, and the candidate columns); a lab eval is a function of the idea's own "
         "in evals/<name>.py with CASES in its module (`rci eval check <file>`), h0 names in one sentence the H0 it "
         "rejects, and it must reach z ≥ 2 at every horizon it covers; an eval of the engine's library "
         "(`rci methods`; its options with functools.partial) sets no h0 and is shown"
@@ -109,7 +109,7 @@ class Eval:
             raise ValueError(f"eval {name!r}: covers is a list of (category, field) pairs")
         object.__setattr__(self, "covers", covers)
         if self.on_fail is not None and self.on_fail not in ON_FAIL:
-            raise ValueError(f"eval {name!r}: on_fail is mask, drop_entities, ask or block")
+            raise ValueError(f"eval {name!r}: on_fail is mask, drop_insts, ask or block")
         if self.combine is not None and self.combine not in COMBINE:
             raise ValueError(f"eval {name!r}: combine is max or each")
         if self.horizons is not None:
@@ -178,7 +178,7 @@ def _check_h0(e: Eval, layer: Layer) -> None:
     if source_of(e.of) == "library" and e.on_fail == "block":
         raise ValueError(
             f"the library eval {e.name!r} sets on_fail='block': only a lab eval, with its h0, can block the data; "
-            "use mask, drop_entities, or ask, or write a lab eval of your own in evals/<name>.py"
+            "use mask, drop_insts, or ask, or write a lab eval of your own in evals/<name>.py"
         )
 
 
@@ -202,14 +202,14 @@ class Case:
 
 @dataclass(frozen=True)
 class Market:
-    """A synthetic evaluation table: ``entities`` candidates in ``clusters`` (and the clusters in ``groups``) at
+    """A synthetic evaluation table: ``insts`` candidates in ``clusters`` (and the clusters in ``groups``) at
     ``times`` hourly decision times. Each label is a group level (share ``group_share`` of its variance), a cluster
     shock (``cluster_share``) and its own noise, Student-t with ``tail`` degrees of freedom (``None``: normal). The
-    score's rank correlation with the label is about ``ic``: across the entities at each time (``shape="cross"``), or
-    over time within each entity (``"series"``, judged against a world that shifts the scores in time)."""
+    score's rank correlation with the label is about ``ic``: across the insts at each time (``shape="cross"``), or
+    over time within each inst (``"series"``, judged against a world that shifts the scores in time)."""
 
     times: int = 120
-    entities: int = 100
+    insts: int = 100
     clusters: int = 20
     groups: int = 4
     cluster_share: float = 0.3
@@ -219,31 +219,31 @@ class Market:
     shape: Literal["cross", "series"] = "cross"
 
     def __post_init__(self) -> None:
-        if not 0 < self.clusters <= self.entities or self.groups < 1 or self.times < 2:
-            raise ValueError("a market needs at least two times and no more clusters than entities")
+        if not 0 < self.clusters <= self.insts or self.groups < 1 or self.times < 2:
+            raise ValueError("a market needs at least two times and no more clusters than insts")
         if self.shape not in ("cross", "series"):
             raise ValueError("a market's shape is cross or series")
         if self.cluster_share + self.group_share >= 1 or min(self.cluster_share, self.group_share) < 0:
-            raise ValueError("the cluster and group shares must leave room for each entity's own noise")
+            raise ValueError("the cluster and group shares must leave room for each inst's own noise")
         if not -1 < self.ic < 1:
             raise ValueError("ic is a correlation")
 
 
 @dataclass(frozen=True)
 class Source:
-    """A synthetic field table: ``entities`` entities with an hourly ``price`` (a random walk) and a ``flow`` settled
+    """A synthetic field table: ``insts`` insts with an hourly ``price`` (a random walk) and a ``flow`` settled
     every ``settle`` hours and known ``lag`` hours after it; a share ``revised`` of the flows gets a second vintage one
     settlement later."""
 
-    entities: int = 12
+    insts: int = 12
     hours: int = 24 * 14
     settle: int = 8
     lag: int = 0
     revised: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.entities < 2 or self.hours < 4 * self.settle or self.settle < 1 or self.lag < 0:
-            raise ValueError("a source needs two entities and a few settlements")
+        if self.insts < 2 or self.hours < 4 * self.settle or self.settle < 1 or self.lag < 0:
+            raise ValueError("a source needs two insts and a few settlements")
         if not 0 <= self.revised <= 1:
             raise ValueError("revised is a share")
 

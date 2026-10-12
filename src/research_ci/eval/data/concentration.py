@@ -115,7 +115,7 @@ def _top(k: float, seed: int) -> tuple[str, float]:
 def _blamed(seed: int) -> list[str]:
     """The clusters above half the noise on a market of three clusters of three, when c0 has labels thirty times as
     large."""
-    table = _scaled(30.0, seed, Market(entities=9, clusters=3, groups=1))
+    table = _scaled(30.0, seed, Market(insts=9, clusters=3, groups=1))
     return shares(table, "cluster", HOUR_NS, label="y").filter(pl.col("share") > 0.5)["cluster"].to_list()
 
 
@@ -130,7 +130,7 @@ CLUSTERS = ("c0", "c1", "c2", "c3")
 def _direct(seed: int, h_ns: int) -> float:
     """The largest gap between the algebra and leaving each cluster out and computing again, on a market where some
     clusters are missing at some times."""
-    table = market(Market(entities=12, clusters=4, groups=1), seed).filter(
+    table = market(Market(insts=12, clusters=4, groups=1), seed).filter(
         ~((pl.col("cluster") == "c1") & (pl.col("t").dt.hour() < 6))
     )
     se2 = block_se(_mean(table), h_ns) ** 2

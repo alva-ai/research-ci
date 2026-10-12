@@ -54,18 +54,18 @@ from research_ci.api import Case, Pit
 
 def drifting_legs(fields):
     """Venues of one symbol whose hourly returns do not move with the symbol's other venues."""
-    close = fields.filter(pl.col("field") == "close").sort("entity", "event_time")
-    r = close.with_columns(r=(pl.col("value") / pl.col("value").shift(1).over("entity")).log())
-    r = r.with_columns(symbol=pl.col("entity").str.split(":").list.last())
+    close = fields.filter(pl.col("field") == "close").sort("inst", "event_time")
+    r = close.with_columns(r=(pl.col("value") / pl.col("value").shift(1).over("inst")).log())
+    r = r.with_columns(symbol=pl.col("inst").str.split(":").list.last())
     mean = r.group_by("symbol", "event_time").agg(pl.col("r").mean().alias("m"))
     r = r.join(mean, on=["symbol", "event_time"])
-    corr = r.group_by("entity").agg(pl.corr("r", "m").alias("c"))
-    bad = corr.filter(pl.col("c") < 0.8)["entity"]
-    return close.filter(pl.col("entity").is_in(bad.implode())).select("entity", "event_time")
+    corr = r.group_by("inst").agg(pl.corr("r", "m").alias("c"))
+    bad = corr.filter(pl.col("c") < 0.8)["inst"]
+    return close.filter(pl.col("inst").is_in(bad.implode())).select("inst", "event_time")
 
 
 def nothing(fields):
-    return fields.head(0).select("entity", "event_time")
+    return fields.head(0).select("inst", "event_time")
 
 
 def _venues(apart):
@@ -74,14 +74,14 @@ def _venues(apart):
     t = pl.datetime_range(start, start + timedelta(hours=47), "1h", eager=True)
     closes = {"a:X": walks[0], "b:X": walks[0], "c:X": walks[1] if apart else walks[0]}
     return pl.concat(
-        [pl.DataFrame({"entity": e, "field": "close", "event_time": t, "value": v}) for e, v in closes.items()]
+        [pl.DataFrame({"inst": e, "field": "close", "event_time": t, "value": v}) for e, v in closes.items()]
     )
 
 
 def _wander(fields, field, rng):
     """One venue's closes walking off on their own: the same moves, in another order."""
-    entity = sorted(fields.filter(pl.col("field") == field)["entity"].unique().to_list())[0]
-    hit = (pl.col("entity") == entity) & (pl.col("field") == field)
+    inst = sorted(fields.filter(pl.col("field") == field)["inst"].unique().to_list())[0]
+    hit = (pl.col("inst") == inst) & (pl.col("field") == field)
     rows = fields.filter(hit).sort("event_time")
     moves = rng.permutation(np.diff(np.log(rows["value"].to_numpy())))
     walk = rows["value"][0] * np.exp(np.concatenate([[0.0], np.cumsum(moves)]))
@@ -89,7 +89,7 @@ def _wander(fields, field, rng):
 
 
 CASES = [
-    Case("a venue moving apart is flagged", lambda: drifting_legs(_venues(True))["entity"].unique().to_list(), ["c:X"]),
+    Case("a venue moving apart is flagged", lambda: drifting_legs(_venues(True))["inst"].unique().to_list(), ["c:X"]),
     Case("venues moving together are not", drifting_legs, 0, given=_venues(False)),
     Case("nothing flags nothing", nothing, 0, given=_venues(True)),
 ]
@@ -101,7 +101,7 @@ from evals.legs import drifting_legs, nothing
 
 EVALS = [
     Eval(drifting_legs, name="drifting legs", h0="every venue of a symbol moves with the others",
-         covers=[("swap", "close")], on_fail="drop_entities"),
+         covers=[("swap", "close")], on_fail="drop_insts"),
     {lazy}
 ]
 """
@@ -281,7 +281,7 @@ def test_the_default_list_decides_which_checks_run_and_which_pits_calibrate(tmp_
     )
 
 
-SPLIT = "split entities at identity breaks"
+SPLIT = "split insts at identity breaks"
 
 
 def test_a_ticker_relaunched_for_another_asset_is_split_and_a_person_decides(tmp_path: Path, monkeypatch) -> None:
@@ -294,9 +294,9 @@ def test_a_ticker_relaunched_for_another_asset_is_split_and_a_person_decides(tmp
     assert split["rows"] > 0 and split["largest"] >= spec["materiality"]
     assert spec["verdict"]["status"] == "decide" and any(d.startswith(SPLIT) for d in spec["decide"])
     panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    z = panel.filter(pl.col("entity").str.starts_with("c:Z")).group_by("entity").agg(pl.col("event_time").min())
+    z = panel.filter(pl.col("inst").str.starts_with("c:Z")).group_by("inst").agg(pl.col("event_time").min())
     assert dict(z.iter_rows())["c:Z#2"] == pd.Timestamp("2026-01-07T18:00Z")
-    assert set(z["entity"]) == {"c:Z", "c:Z#2"}
+    assert set(z["inst"]) == {"c:Z", "c:Z#2"}
     assert all(p["mde"] < p["mde_before"] / 100 for p in spec["power"] if p["horizon"] == "24h")
     assert SPLIT in card
     with pytest.raises(WorkflowError, match="asks a person"):
@@ -323,7 +323,7 @@ MASK = "mask b:Z before the relaunch"
 def _mask_b_z(seen: Seen) -> Found:
     """Masks b:Z's closes over the hours before c:Z is delisted, when the labels of c:Z's pairs read the relaunch."""
     hours = pl.col("event_time").is_between(START + pd.Timedelta(hours=140), START + pd.Timedelta(hours=146))
-    rows = seen.fields.filter((pl.col("entity") == "b:Z") & (pl.col("field") == "close") & hours)
+    rows = seen.fields.filter((pl.col("inst") == "b:Z") & (pl.col("field") == "close") & hours)
     return Found(treatments=[tr.mask_rows(MASK, f"{rows.height} rows", rows, seen.fields)])
 
 
@@ -347,13 +347,13 @@ def _from_scratch(spec: dict) -> dict[str, float]:
     start = int(panel.select(pl.col("available_at").min().dt.epoch("ns")).item())
     end = to_ns(pd.Timestamp("2026-01-15T00:00:00Z"))
     times = [from_ns(t) for t in pw.decision_grid(HOUR_NS, 0, start, end)]
-    cands = ToyPairs().candidates(panel, times).join(excluded, on=["t", "entity"], how="anti")
+    cands = ToyPairs().candidates(panel, times).join(excluded, on=["t", "inst"], how="anti")
     label = plugins.load(Use("ref.carry", {"flow": "funding_rate"}))
     target = plugins.load(Use("ref.mean", {"cluster": "symbol", "top": 0.34}))
     costs = plugins.load(Use("ref.flat_costs", {"commission_bps": 1, "slippage_bps": 1, "legs": 2}))
     out = {}
     for h in ("8h", "24h"):
-        rows = label.values(panel, cands, span(h)).join(cands, on=["t", "entity"], suffix="_candidate")
+        rows = label.values(panel, cands, span(h)).join(cands, on=["t", "inst"], suffix="_candidate")
         per_t = target.reduce(rows, span(h), costs)
         out[h] = pw.power(pw.block_se(per_t, span_ns(span(h))), end - start, span_ns(span(h))).mde
     return out
@@ -376,22 +376,22 @@ def test_prices_at_zero_are_masked(tmp_path: Path, monkeypatch) -> None:
     assert "mask levels at zero or below" in card and "inf" in card
 
 
-def test_an_entity_shorter_than_the_longest_horizon_is_dropped(tmp_path: Path, monkeypatch) -> None:
+def test_an_inst_shorter_than_the_longest_horizon_is_dropped(tmp_path: Path, monkeypatch) -> None:
     _, spec, _ = _checked(tmp_path, monkeypatch, ToyShort)
-    short = _treatment(spec, "drop entities too short for the horizon")
+    short = _treatment(spec, "drop insts too short for the horizon")
     assert short["rows"] == 24
     assert "c:Y" in {c["name"]: c for c in spec["checks"]}["coverage"]["detail"]
     panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    assert "c:Y" not in set(panel["entity"])
+    assert "c:Y" not in set(panel["inst"])
 
 
 def test_dropping_a_short_series_a_split_made_does_the_same_with_or_without_the_split() -> None:
-    fields = source(Source(entities=3), 0)
+    fields = source(Source(insts=3), 0)
     at = pl.lit(START_NS + 330 * HOUR_NS).cast(pl.Datetime("ns")).dt.replace_time_zone("UTC")
-    splits = pl.DataFrame({"entity": ["e0"], "to": ["e0#2"]}).with_columns(at=at)
-    split = tr.split_entities("split", "", splits, fields)
+    splits = pl.DataFrame({"inst": ["e0"], "to": ["e0#2"]}).with_columns(at=at)
+    split = tr.split_insts("split", "", splits, fields)
     short = cv.short_lived(split.apply(fields), 24 * HOUR_NS)
-    assert short["entity"].to_list() == ["e0#2"]
+    assert short["inst"].to_list() == ["e0#2"]
     drop = tr.drop_spans("drop", "", data_defaults._origins(short, fields), fields)
     alone, both = drop.apply(fields), drop.apply(split.apply(fields))
     assert drop.rows == fields.height - alone.height > 0
@@ -404,11 +404,11 @@ from research_ci.api import Case, Eval
 
 
 def zeros(fields):
-    flagged = [(e, t) for e, f, t, v in fields.select("entity", "field", "event_time", "value").iter_rows() if v == 0]
-    return pl.DataFrame(flagged, schema=["entity", "event_time"], orient="row")
+    flagged = [(e, t) for e, f, t, v in fields.select("inst", "field", "event_time", "value").iter_rows() if v == 0]
+    return pl.DataFrame(flagged, schema=["inst", "event_time"], orient="row")
 
 
-CASES = [Case("no zeros, no flags", zeros, 0, given=pl.DataFrame({"entity": ["a"], "field": ["close"],
+CASES = [Case("no zeros, no flags", zeros, 0, given=pl.DataFrame({"inst": ["a"], "field": ["close"],
                                                                    "event_time": [0], "value": [1.0]}))]
 EVALS = [Eval(zeros, h0="no value is zero", covers=[("spike", "close")])]
 """

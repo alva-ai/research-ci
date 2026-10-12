@@ -44,8 +44,8 @@ def top_minus_bottom(seen: Seen) -> Found:
 
 
 def timing_ic(seen: Seen) -> Found:
-    """Time-series rank IC: each entity's score and label ranked over its own decision times, their product averaged
-    over the entities at each time."""
+    """Time-series rank IC: each inst's score and label ranked over its own decision times, their product averaged
+    over the insts at each time."""
     return seen.judge(ts_ic)
 
 

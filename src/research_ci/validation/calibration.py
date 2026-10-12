@@ -2,9 +2,9 @@
 what the world keeps, and pass one that adds a known amount of real information.
 
 A world claims to keep the label's level in each value of a column (``keeps``) at each decision time, or only the
-level at each time; a world that shifts the scores in time keeps each entity's own level over time instead. The
+level at each time; a world that shifts the scores in time keeps each inst's own level over time instead. The
 stand-in is that level of the label plus noise; the planted output adds the label's residual around it, a signal of
-what the world destroys (which candidates do better at a time, or when an entity does better), sized so the eval
+what the world destroys (which candidates do better at a time, or when an inst does better), sized so the eval
 moves by 1.5 times its smallest detectable effect. For events, both are kept only at the share ``events`` of the rows
 where they are highest, as events, and missing elsewhere, so a planted output marks the rows that do better. Which rows
 those are varies from draw to draw, so its move is the mean over ``SIZED`` draws; and events that follow the label
@@ -135,9 +135,9 @@ def _batched(evaluate: Evaluate, table: pl.DataFrame, within: bool = True, other
 
 def _kept(keeps: str | None, shifts: bool) -> list[str]:
     """The columns of the label's level a world keeps: each decision time's (and each value of ``keeps`` there), or,
-    for a shift in time, each entity's."""
+    for a shift in time, each inst's."""
     if shifts:
-        return ["entity"] + ([keeps] if keeps not in (None, "time", "entity") else [])
+        return ["inst"] + ([keeps] if keeps not in (None, "time", "inst") else [])
     return ["t"] if keeps is None or keeps == "time" else ["t", keeps]
 
 
@@ -177,10 +177,10 @@ def _calibrated(bucket: str | None) -> bool:
 
 
 def _shifted(events: float) -> bool:
-    """On a series of three entities, a world shifting the scores in time, with scores on every row or at events."""
-    table = market(Market(times=240, entities=3, clusters=3, shape="series", tail=None), seed=0).drop("score")
+    """On a series of three insts, a world shifting the scores in time, with scores on every row or at events."""
+    table = market(Market(times=240, insts=3, clusters=3, shape="series", tail=None), seed=0).drop("score")
     shuffle = Shift(table, HOUR_NS).index
-    found = calibrate(_signed, table, HOUR_NS, "entity", shuffle, 40, 20, 2.0, shifts=True, events=events)
+    found = calibrate(_signed, table, HOUR_NS, "inst", shuffle, 40, 20, 2.0, shifts=True, events=events)
     return found["ok"]
 
 

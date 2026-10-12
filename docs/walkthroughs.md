@@ -55,13 +55,13 @@ polars function in `evals/<name>.py` (copy `evals/example.py`) with its tests in
 and, for a data eval, `PITS`, optional. List it with the H0 it rejects, in one sentence: `from evals.<name> import
 <eval>`, then `EVALS = [Eval(<eval>, h0="<the H0>")]`. In feat it, and each null world, must reach z ≥ 2 at every
 horizon it covers, or the claim fails there; it never passes what the decisive test failed. In data, `on_fail` says
-what is done with the rows it flags: `mask`, `drop_entities`, `ask`, or `block` (any row it flags, after the
+what is done with the rows it flags: `mask`, `drop_insts`, `ask`, or `block` (any row it flags, after the
 treatments before it, blocks the data). The
 engine runs the tests before anything heavy and refuses a layer with a lab eval that fails them; run
 `rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's library (`rci methods`):
 shown, never vetoing, with no `h0`.
 
-Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
+Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `inst`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with
 `fields.lazy() ... .collect()` for a longer pipeline; pandas is fine for dates; any library runs. Row-by-row code
 (`iter_rows`, `.rows()`, `map_elements`, loops over data) runs too, with a warning on the card that names each line.
@@ -100,10 +100,10 @@ label: Label(<label name>, Use(name, {options}), horizons=(...))
     `side * (p(t + h) / p(t) - 1)` for event rows: candidates carry a `side` column (+1 bought, -1 sold).
     from an entry point of research-ci
   ref.return(price: str = 'close')
-    `p(t + h) / p(t) - 1` of the candidate's own entity, each price as it was first known at that moment.
+    `p(t + h) / p(t) - 1` of the candidate's own inst, each price as it was first known at that moment.
     from an entry point of research-ci
 target: Effect(on=<label name>, target=Use(name, {options}))
-  ref.mean(cluster: str = 'entity', net: bool = True, top: float | None = None)
+  ref.mean(cluster: str = 'inst', net: bool = True, top: float | None = None)
     The mean label per decision time, each cluster weighted equally; with `net`, after each candidate's round trip.
     per: entry · rolls: yes
     from an entry point of research-ci
@@ -150,7 +150,7 @@ claim      Cross-venue funding spreads persist long enough to pay the round trip
 decisive   carry: beats random significantly · target ref.mean(cluster=symbol, top=0.34)
 decisions  every 1h from execution · 335 decision times
            decide on the hour; fill both legs at the close known then
-data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.3 days old
+data       toy.data afa06051cf36 · 3,780 rows · 9 insts · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.3 days old
 universe   toy.pairs · median 9 candidates in 3 symbol clusters per decision · membership pit
 costs      ref.flat_costs(commission_bps=1, legs=2, slippage_bps=1) · median round trip 8.0 bp
 labels     carry: ref.carry · H 8h 24h
@@ -233,7 +233,7 @@ The agent tries the data check before it has written anything for it. The data l
 
 ```text
 $ rci data check -i ideas/carry
-error: slot 3, lab evals: there is no data.py, and the data layer needs at least one, a test of the claim written for this idea, which can veto it: write a function of your own in evals/<name>.py with its CASES next to it (`rci eval check evals/<name>.py` runs them for free) and list it with the H0 it rejects; data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=[(category, field)]), ...], with at least one lab eval: fn(fields) returns the rows it flags (entity, event_time, optionally field), on_fail is mask (the default), drop_entities, ask, or block (a lab eval only: any row it flags in the data after the treatments before it blocks the data), and covers names the pits it claims to catch; a lab eval is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), and h0 names in one sentence the H0 it rejects; an eval of the engine's library (`rci methods`; its options with functools.partial) sets no h0; nothing was recorded
+error: slot 3, lab evals: there is no data.py, and the data layer needs at least one, a test of the claim written for this idea, which can veto it: write a function of your own in evals/<name>.py with its CASES next to it (`rci eval check evals/<name>.py` runs them for free) and list it with the H0 it rejects; data.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', on_fail=..., covers=[(category, field)]), ...], with at least one lab eval: fn(fields) returns the rows it flags (inst, event_time, optionally field), on_fail is mask (the default), drop_insts, ask, or block (a lab eval only: any row it flags in the data after the treatments before it blocks the data), and covers names the pits it claims to catch; a lab eval is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), and h0 names in one sentence the H0 it rejects; an eval of the engine's library (`rci methods`; its options with functools.partial) sets no h0; nothing was recorded
 ```
 
 `rci init` wrote the skeleton of a lab eval, with a feat eval and a data eval and the tests next to them. The engine refuses an eval from it while its marker line is there, so it is never used as it is:
@@ -254,22 +254,22 @@ T = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def ranks_label(table: pl.DataFrame) -> pl.DataFrame:
-    """A feat eval. table: the evaluation table of one horizon (t, entity, score, y, the label's parts y_<part>, and
+    """A feat eval. table: the evaluation table of one horizon (t, inst, score, y, the label's parts y_<part>, and
     the candidate columns). It returns one value per decision time (t, value); here the rank correlation of score and
     label. TODO: what yours measures, such as the score against one part of the label, y_<part>."""
     return table.group_by("t").agg(pl.corr("score", "y", method="spearman").alias("value")).sort("t")
 
 
 def flags(fields: pl.DataFrame) -> pl.DataFrame:
-    """A data eval. fields: the explore data (entity, field, event_time, available_at, value, vintage, source). It
-    returns the rows it flags (entity, event_time, optionally field); none means it found nothing. TODO: what yours
+    """A data eval. fields: the explore data (inst, field, event_time, available_at, value, vintage, source). It
+    returns the rows it flags (inst, event_time, optionally field); none means it found nothing. TODO: what yours
     catches; here a value of FIELD at zero or below."""
-    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("inst", "field", "event_time")
 
 
 FIELD = "TODO"
-FOUR = pl.DataFrame({"t": [T] * 4, "entity": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]})
-ROWS = pl.DataFrame({"entity": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
+FOUR = pl.DataFrame({"t": [T] * 4, "inst": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]})
+ROWS = pl.DataFrame({"inst": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
 
 # The tests the engine runs before the eval judges anything, worked by hand; a failed one refuses the layer.
 CASES = [
@@ -296,12 +296,12 @@ import polars as pl
 from research_ci.api import Case
 
 T = datetime(2026, 1, 1, tzinfo=UTC)
-TWO = pl.DataFrame({"entity": ["a:X", "a:X"], "field": ["close", "close"], "event_time": [T, T], "value": [101.0, 0.0]})
+TWO = pl.DataFrame({"inst": ["a:X", "a:X"], "field": ["close", "close"], "event_time": [T, T], "value": [101.0, 0.0]})
 
 
 def closes_at_zero(fields: pl.DataFrame) -> pl.DataFrame:
     """The closes at zero or below, as the rows to flag."""
-    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("inst", "field", "event_time")
 
 
 CASES = [Case("of a close above zero and one at zero, the one at zero is flagged", closes_at_zero, 1, given=TWO)]
@@ -331,10 +331,10 @@ pits that a data eval claims in covers, built in or in PITS, are planted by `rci
 ```text
 $ rci data check -i ideas/carry
 DataCard · carry · v1
-data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.3 days old
+data       toy.data afa06051cf36 · 3,780 rows · 9 insts · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.3 days old
 1 floor · the source's admission, and what the engine weighs on every idea's data
 source     toy.data · admission 032a0e19d535 · not yet admitted: approving this card admits it for every idea [!]
-           code b3b6e8b74f9c · 9 entities · 6,750 rows
+           code b3b6e8b74f9c · 9 insts · 6,750 rows
            ok   values are finite: none: values null, NaN or infinite
            ok   known no earlier than the event: none: rows known before their event time
            ok   no long gaps: none: gaps longer than 3× the usual spacing
@@ -356,7 +356,7 @@ calibrate  ok   carry at 8h vs floor: stand-ins die 97% (needs ≥ 92%) · a sig
 checks     default  [!]  data is current: latest data is 259.3 days old
            default  ok   level sanity: no declared level at zero or below, stale, or spiking
            default  ok   identity breaks: no declared level comes back 5x away after a long gap
-           default  ok   coverage: every entity covers 24h
+           default  ok   coverage: every inst covers 24h
            default  ok   hedged legs are one asset: every candidate row holds (close within 1.2x and returns correlated ≥ 0.3)
            default  [!]  influence concentration: more than 50% of the noise from one symbol: Z 55% at carry 24h; shown, not treated
 clusters   share of the noise that goes away without each symbol, largest first
@@ -418,7 +418,7 @@ Nothing is registered before features exist. What can pass the claim is already 
 
 ```text
 $ rci methods
-feat eval: feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=(...), combine='max'), ...], with at least one lab eval: fn(table) returns t, value for each decision time from the evaluation table (t, entity, score, y, y_<component>, and the candidate columns); a lab eval is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), h0 names in one sentence the H0 it rejects, and it must reach z ≥ 2 at every horizon it covers; an eval of the engine's library (`rci methods`; its options with functools.partial) sets no h0 and is shown
+feat eval: feat.py defines EVALS = [Eval(fn, h0='<the H0 it rejects>', label=..., horizons=(...), combine='max'), ...], with at least one lab eval: fn(table) returns t, value for each decision time from the evaluation table (t, inst, score, y, y_<component>, and the candidate columns); a lab eval is a function of the idea's own in evals/<name>.py with CASES in its module (`rci eval check <file>`), h0 names in one sentence the H0 it rejects, and it must reach z ≥ 2 at every horizon it covers; an eval of the engine's library (`rci methods`; its options with functools.partial) sets no h0 and is shown
   from research_ci.eval.statistics.ic import rank_ic
     rank_ic(table: pl.DataFrame, label: str = 'y') -> pl.DataFrame
     Spearman correlation of score and label at each decision time.
@@ -451,13 +451,13 @@ lab eval: a function of the idea's own, in a module such as `evals/<name>.py`, w
       On markets with `market.ic` of information, the statistic must beat the floor world at least `rate` of the time.
     Recovers(of, market, expect, tol, markets=20)
       Averaged over `markets` seeds and decision times, the statistic must come within `tol` of `expect`.
-    Market(times=120, entities=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0)
-      A synthetic evaluation table: `entities` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times.
-    Source(entities=12, hours=336, settle=8, lag=0, revised=0.0)
-      A synthetic field table: `entities` entities with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later.
+    Market(times=120, insts=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0)
+      A synthetic evaluation table: `insts` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times.
+    Source(insts=12, hours=336, settle=8, lag=0, revised=0.0)
+      A synthetic field table: `insts` insts with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later.
     Pit(category, plant, note='')
-      A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one entity where the field varies.
-  for example: CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars DataFrame of the evaluation table (t, entity, score, y) and thirds(SIX) returns t, value
+      A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one inst where the field varies.
+  for example: CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars DataFrame of the evaluation table (t, inst, score, y) and thirds(SIX) returns t, value
 ```
 
 The claim is about funding, so the agent asks whether the pairs it ranks highest earn more of the funding part of the carry, `y_flow`, than those it ranks lowest: the top third less the bottom third, and the top half less the bottom half. A fifth of nine candidates is one, so the engine's default spread says little here:
@@ -549,7 +549,7 @@ null world: nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every a
       reps      the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default
       note      free text kept with the world in the submission's record
     PermuteWithin(bucket_by: str, clusters: str | None = None, block: str | None = None)
-      bucket_by  shuffle the scores across entities inside each bucket of this column; "time" is one bucket per decision time
+      bucket_by  shuffle the scores across insts inside each bucket of this column; "time" is one bucket per decision time
       clusters   a column whose members move together and are shuffled as one
       block      repeat the same shuffle for every decision time inside a block this long; "horizon" uses each label horizon
   for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), evals=("<eval>",))]
@@ -580,10 +580,10 @@ FIELD = "TODO"  # a field of the data; `rci plugins` lists the fields a data plu
 
 
 def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
-    """One score per candidate row (t, entity, score), for every decision time at once.
+    """One score per candidate row (t, inst, score), for every decision time at once.
 
-    fields: entity, field, event_time, available_at, value, vintage, source; all of the frozen data.
-    candidates: t, entity, and the universe's columns (such as the legs long and short, the cluster and the groups).
+    fields: inst, field, event_time, available_at, value, vintage, source; all of the frozen data.
+    candidates: t, inst, and the universe's columns (such as the legs long and short, the cluster and the groups).
     Both are polars DataFrames. A score at t may use only rows with available_at <= t; join_asof on available_at gives
     the latest of them. Return a polars DataFrame or LazyFrame, or a pandas DataFrame.
     """
@@ -591,26 +591,26 @@ def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
     known = (
         fields.lazy()
         .filter(pl.col("field") == FIELD)
-        .select("entity", pl.col("available_at").alias("known_at"), "value")
+        .select("inst", pl.col("available_at").alias("known_at"), "value")
         .sort("known_at")
     )
-    # TODO: transform each entity's series with expressions, for example
-    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("entity"))
-    #   known.with_columns(pl.col("value").diff().over("entity").alias("change"))
+    # TODO: transform each inst's series with expressions, for example
+    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("inst"))
+    #   known.with_columns(pl.col("value").diff().over("inst").alias("change"))
     scored = (
         candidates.lazy()
         .sort("t")
-        .join_asof(known, left_on="t", right_on="known_at", by="entity", check_sortedness=False)
+        .join_asof(known, left_on="t", right_on="known_at", by="inst", check_sortedness=False)
     )
-    # Candidates with two legs: look each leg up by its own column instead of entity, then take the difference:
-    #   leg = known.rename({"entity": "long", "known_at": "long_at", "value": "long_value"})
+    # Candidates with two legs: look each leg up by its own column instead of inst, then take the difference:
+    #   leg = known.rename({"inst": "long", "known_at": "long_at", "value": "long_value"})
     #   scored = candidates.lazy().sort("t").join_asof(leg, left_on="t", right_on="long_at", by="long",
     #                                                  check_sortedness=False)
     # Ranks within each decision time: pl.col("score").rank().over("t").
     # pandas is fine for dates (pd.Timedelta, offsets, calendars), and any library runs. Whole-column polars
     # expressions like these are usually much faster than going row by row, which runs too, with a warning on the card;
     # the card also shows the time and peak memory the features took.
-    return scored.select("t", "entity", pl.col("value").alias("score")).collect()
+    return scored.select("t", "inst", pl.col("value").alias("score")).collect()
 ```
 
 The engine refuses to run the example as it is. Any other file runs: research code is free. The engine reads every features file, with `feat.py`, `nulls/feat.py`, and the research modules they import, for row-by-row code, and the card shows what it finds as one warning that names each line; it never refuses the file and never costs a trial. This file loops over rows:
@@ -621,9 +621,9 @@ import polars as pl
 
 
 def features(fields, candidates):
-    rows = candidates.sort("t", "entity")
-    scores = [(t, e, s) for t, e, s in rows.select("t", "entity", "spread_h").iter_rows()]
-    return pl.DataFrame(scores, schema=["t", "entity", "score"], orient="row")
+    rows = candidates.sort("t", "inst")
+    scores = [(t, e, s) for t, e, s in rows.select("t", "inst", "spread_h").iter_rows()]
+    return pl.DataFrame(scores, schema=["t", "inst", "score"], orient="row")
 ```
 
 ```text
@@ -649,7 +649,7 @@ import polars as pl
 
 
 def features(fields, candidates):
-    return candidates.select("t", "entity", pl.col("spread_h").alias("score"))
+    return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 ```
 
 `rci feat explore` runs the checks a submission must pass and records nothing. This file averages each venue's funding over the whole period, so its early scores change when later data is cut away:
@@ -660,11 +660,11 @@ import polars as pl
 
 
 def features(fields, candidates):
-    rate = fields.filter(pl.col("field") == "funding_rate").group_by("entity").agg(pl.col("value").mean())
-    short = rate.rename({"entity": "short", "value": "s"})
-    long = rate.rename({"entity": "long", "value": "l"})
+    rate = fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg(pl.col("value").mean())
+    short = rate.rename({"inst": "short", "value": "s"})
+    long = rate.rename({"inst": "long", "value": "l"})
     rows = candidates.join(short, on="short").join(long, on="long")
-    return rows.select("t", "entity", (pl.col("s") - pl.col("l")).alias("score"))
+    return rows.select("t", "inst", (pl.col("s") - pl.col("l")).alias("score"))
 ```
 
 ```text
@@ -686,7 +686,7 @@ import polars as pl
 
 
 def features(fields, candidates):
-    return candidates.select("t", "entity", (pl.struct("t", "entity").hash(7) / 2.0**64).alias("score"))
+    return candidates.select("t", "inst", (pl.struct("t", "inst").hash(7) / 2.0**64).alias("score"))
 ```
 
 ```text

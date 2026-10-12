@@ -1,10 +1,10 @@
-"""``ShiftInTime`` on the evaluation table: each entity's scores move along its own decision times, circularly, by one
-offset per seed, the same for every entity; the labels stay.
+"""``ShiftInTime`` on the evaluation table: each inst's scores move along its own decision times, circularly, by one
+offset per seed, the same for every inst; the labels stay.
 
-An offset counts decision times: the ``k``-th of an entity's rows, in time order, takes the score of its row ``k``
+An offset counts decision times: the ``k``-th of an inst's rows, in time order, takes the score of its row ``k``
 places earlier, the first ones those of its last rows. Positions ``m`` or more apart are at least ``m`` of the table's
 shortest spacing between decision times apart, so an offset of at least ``m = ceil(min_shift / spacing)`` and at most
-the shortest entity's row count less ``m`` keeps every score at least ``min_shift`` away from its own row, either way
+the shortest inst's row count less ``m`` keeps every score at least ``min_shift`` away from its own row, either way
 round. A seed picks one of those offsets from a fixed random order of them, so the seeds below their count draw each
 once.
 """
@@ -26,10 +26,10 @@ class Shift:
         frame = table.select(
             pl.int_range(table.height, dtype=pl.Int64).alias("row"),
             pl.col("t").dt.epoch("ns").alias("t"),
-            pl.col("entity").cast(pl.String),
-        ).sort("entity", "t")
+            pl.col("inst").cast(pl.String),
+        ).sort("inst", "t")
         frame = frame.with_columns(
-            pos=pl.int_range(pl.len(), dtype=pl.Int64).over("entity"), size=pl.len().over("entity").cast(pl.Int64)
+            pos=pl.int_range(pl.len(), dtype=pl.Int64).over("inst"), size=pl.len().over("inst").cast(pl.Int64)
         )
         times = np.unique(frame["t"].to_numpy())
         gaps = np.diff(times)
@@ -52,7 +52,7 @@ class Shift:
         if not self.distinct:
             raise ValueError(
                 f"no shift in time fits: an offset of at least {self.min_steps} decision times each way needs every "
-                f"entity to have {2 * self.min_steps} or more, and the shortest has {self.length}"
+                f"inst to have {2 * self.min_steps} or more, and the shortest has {self.length}"
             )
         return int(self.offsets[seed % self.distinct])
 

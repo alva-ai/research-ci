@@ -3,10 +3,10 @@ import polars as pl
 
 from research_ci.kernel.time.clock import TIME
 
-KEY = ["entity", "field", "event_time", "vintage"]
-REQUIRED = ["entity", "field", "event_time", "available_at", "value"]
-COLUMNS = ["entity", "field", "event_time", "available_at", "value", "vintage", "source"]
-PANEL_KEYS = ["time", "entity"]
+KEY = ["inst", "field", "event_time", "vintage"]
+REQUIRED = ["inst", "field", "event_time", "available_at", "value"]
+COLUMNS = ["inst", "field", "event_time", "available_at", "value", "vintage", "source"]
+PANEL_KEYS = ["time", "inst"]
 
 
 class SchemaError(ValueError):
@@ -27,10 +27,10 @@ def field_table(df: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
         if not isinstance(dtype, pl.Datetime) or dtype.time_zone is None:
             raise SchemaError(f"{col} must be a timezone-aware datetime column, got {dtype}")
     if frame.select(pl.any_horizontal(pl.col(KEY + ["available_at"]).is_null()).any()).item():
-        raise SchemaError("entity, field, event_time, available_at and vintage must not be null")
+        raise SchemaError("inst, field, event_time, available_at and vintage must not be null")
     try:
         frame = frame.select(
-            pl.col("entity").cast(pl.String),
+            pl.col("inst").cast(pl.String),
             pl.col("field").cast(pl.String),
             pl.col("event_time").dt.convert_time_zone("UTC").cast(TIME),
             pl.col("available_at").dt.convert_time_zone("UTC").cast(TIME),
@@ -51,9 +51,9 @@ def field_table(df: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
 
 def _key_checks(frame: pl.DataFrame) -> tuple[int, bool]:
     """How many rows share their key with another, and whether a revision is available before the vintage it revises:
-    both from one sort of the key, with entity and field as codes."""
+    both from one sort of the key, with inst and field as codes."""
     keyed = frame.select(
-        pl.col("entity").cast(pl.Categorical).to_physical().alias("e"),
+        pl.col("inst").cast(pl.Categorical).to_physical().alias("e"),
         pl.col("field").cast(pl.Categorical).to_physical().alias("f"),
         pl.col("event_time").dt.epoch("ns").alias("t"),
         pl.col("vintage").alias("v"),

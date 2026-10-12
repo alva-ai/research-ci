@@ -43,7 +43,7 @@ ALL = "all applied"
 SPLITS = "splits applied"
 RAW = ""
 EVALS_FORMAT = FORMAT["data"]
-FLAGS = ("entity", "event_time")
+FLAGS = ("inst", "event_time")
 EXAMPLES = 3
 
 
@@ -132,13 +132,13 @@ def pits_caught(seen: Seen) -> Found:
 
 def library_evals(seen: Seen) -> Found:
     """Each library eval ``data.py`` lists, on the explore data, like a check of the default list: the rows it flags
-    are masked, their entities dropped, or a person asked, as its ``on_fail`` says."""
+    are masked, their insts dropped, or a person asked, as its ``on_fail`` says."""
     return _evals(seen, "library")
 
 
 def lab_evals(seen: Seen) -> Found:
     """Each lab eval ``data.py`` lists, a test of the claim's data, on the explore data: the rows it flags are masked,
-    their entities dropped, or a person asked, as its ``on_fail`` says. One with ``on_fail="block"`` judges the data
+    their insts dropped, or a person asked, as its ``on_fail`` says. One with ``on_fail="block"`` judges the data
     after the treatments found before it (``Seen.prior``), so it vetoes only a problem they leave: any row it flags
     there is a veto, and the check is BLOCKED with the eval, its H0, how many rows, and a few of them. One that missed
     a pit it covers is a failed check that says which pit, and how to fix it; it flags nothing."""
@@ -174,12 +174,10 @@ def _evals(seen: Seen, by: str) -> Found:
             reason = f"{flagged.height:,} rows flagged"
             found.treatments.append(tr.mask_rows(f"eval {e.name}: mask", reason, flagged, seen.fields))
             found.checks.append(Check(e.name, "warn", f"{detail}; masked", by))
-        elif e.on_fail == "drop_entities":
-            ents = flagged["entity"].unique().to_list()
-            found.treatments.append(
-                tr.drop_entities(f"eval {e.name}: drop", f"{len(ents)} entities", ents, seen.fields)
-            )
-            found.checks.append(Check(e.name, "warn", f"{detail}; their {len(ents)} entities dropped", by))
+        elif e.on_fail == "drop_insts":
+            ents = flagged["inst"].unique().to_list()
+            found.treatments.append(tr.drop_insts(f"eval {e.name}: drop", f"{len(ents)} insts", ents, seen.fields))
+            found.checks.append(Check(e.name, "warn", f"{detail}; their {len(ents)} insts dropped", by))
         else:
             found.decide.append(f"eval {e.name} flagged {flagged.height:,} rows")
             found.checks.append(Check(e.name, "warn", f"{detail}; a person decides", by))
@@ -193,8 +191,8 @@ def _after(prior: Sequence[tr.Treatment]) -> str:
 
 
 def _examples(flagged: pl.DataFrame) -> list[str]:
-    """A few flagged rows as the card shows them: entity, field when given, and event time."""
-    columns = [c for c in ("entity", "field") if c in flagged.columns]
+    """A few flagged rows as the card shows them: inst, field when given, and event time."""
+    columns = [c for c in ("inst", "field") if c in flagged.columns]
     first = flagged.sort([*columns, "event_time"]).head(EXAMPLES)
     at = pl.col("event_time")
     when = at.dt.strftime("%Y-%m-%dT%H:%MZ") if isinstance(first.schema["event_time"], pl.Datetime) else at
@@ -341,14 +339,14 @@ def _pit_resolution(numbers: tr.Numbers, fields: pl.DataFrame, prior: Sequence[t
 
 
 def _pits(seen: Seen, numbers: tr.Numbers, e: Eval, mde: dict[str, float]) -> list[Check]:
-    """Every pit of the kinds ``e`` covers, planted in a copy of the data without the entities it flags, with two seeds
+    """Every pit of the kinds ``e`` covers, planted in a copy of the data without the insts it flags, with two seeds
     (``seeds``): each must be flagged, unless it moves the decisive number by less than the threshold."""
     try:
         own = ev.pits_of(e.of)
     except ev.EvalsError as exc:
         raise DataError(f"{exc}; nothing was recorded") from exc
-    flagged = set(_flagged(e, seen.fields)["entity"].unique().to_list())
-    clean = seen.fields.filter(~pl.col("entity").is_in(sorted(flagged)))
+    flagged = set(_flagged(e, seen.fields)["inst"].unique().to_list())
+    clean = seen.fields.filter(~pl.col("inst").is_in(sorted(flagged)))
     base = numbers.recompute(clean)
     out: list[Check] = []
     threshold = seen.settings.materiality

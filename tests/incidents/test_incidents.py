@@ -24,7 +24,7 @@ def _at(text: str) -> pl.Expr:
 def _requests(ours: pl.DataFrame, venue: pl.DataFrame) -> dict[str, set[str]]:
     _, anomalies = baseline(ours, ("close",), 5.0, 24)
     reqs = rc.requests(ours, anomalies, 10, 10, TOL, 0)
-    ref = Reference(venue.select("entity", "field", "event_time", "value"), reqs.select("rid"))
+    ref = Reference(venue.select("inst", "field", "event_time", "value"), reqs.select("rid"))
     out: dict[str, set[str]] = {}
     for r in rc.compare(reqs, ours, ref, TOL):
         out.setdefault(r["kind"], set()).add(r["status"])
@@ -52,5 +52,5 @@ def test_a_ticker_reused_for_a_new_contract_leaves_a_gap_until_it_is_split() -> 
     gaps = merged.filter(pl.col("kind") == "gap")
     assert gaps.height == 1 and gaps["start"][0].month == 4 and gaps["end"][0].month == 7
     later = pl.col("event_time") >= _at("2026-07-14T06:00:00Z")
-    split = funding.with_columns(entity=pl.when(later).then(pl.col("entity") + "#2").otherwise("entity"))
+    split = funding.with_columns(inst=pl.when(later).then(pl.col("inst") + "#2").otherwise("inst"))
     assert baseline(split)[1].filter(pl.col("kind") == "gap").is_empty()

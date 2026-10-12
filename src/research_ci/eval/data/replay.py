@@ -1,6 +1,6 @@
 """Replaying a data plugin as of past times. A plugin that builds, repairs or filters its rows with information from
 later gives a different answer at ``T`` than its full fetch cut at ``T``. The engine picks where to look: inside every
-hole of the full output, just before entities first appear, and at random."""
+hole of the full output, just before insts first appear, and at random."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from research_ci.kernel.time.clock import from_ns, lit_time
 from research_ci.kernel.verdict.check import Check
 
 Fetch = Callable[[int, list[str]], pl.DataFrame]
-KEY = ["entity", "field", "event_time", "vintage"]
+KEY = ["inst", "field", "event_time", "vintage"]
 DAY_NS = 86_400 * 10**9
 
 
@@ -24,7 +24,7 @@ DAY_NS = 86_400 * 10**9
 class Cut:
     at: int
     why: str
-    entities: tuple[str, ...]
+    insts: tuple[str, ...]
 
 
 def cut_points(
@@ -33,54 +33,54 @@ def cut_points(
     holes: int = 200,
     late: int = 40,
     randoms: int = 5,
-    random_entities: int = 20,
+    random_insts: int = 20,
     hole_factor: float = 1.5,
 ) -> list[Cut]:
-    """Cut points: holes, before new entities, and random times. Inside every hole (an event missing where the usual
-    spacing expects one), at its first missing slot; a day before each week's newly appearing entities, so rows a plugin
-    dropped from before an entity's start show up; and at random times for random entities."""
+    """Cut points: holes, before new insts, and random times. Inside every hole (an event missing where the usual
+    spacing expects one), at its first missing slot; a day before each week's newly appearing insts, so rows a plugin
+    dropped from before an inst's start show up; and at random times for random insts."""
     e = events(full)
     first = int(full.select(pl.col("available_at").min().dt.epoch("ns")).item())
     last = int(full.select(pl.col("available_at").max().dt.epoch("ns")).item())
     found = e.filter((pl.col("n") >= 3) & (pl.col("gap") > hole_factor * pl.col("spacing")))
     found = found.select(
-        "entity", "field", (pl.col("prev").dt.epoch("ns") + pl.col("spacing").cast(pl.Int64)).alias("at")
-    ).unique(["entity", "at"])
+        "inst", "field", (pl.col("prev").dt.epoch("ns") + pl.col("spacing").cast(pl.Int64)).alias("at")
+    ).unique(["inst", "at"])
     holed = _sample(found, holes, rng).select(
-        "at", pl.format("hole in {}", "field").alias("why"), pl.concat_list("entity").alias("entity")
+        "at", pl.format("hole in {}", "field").alias("why"), pl.concat_list("inst").alias("inst")
     )
-    starts = full.group_by("entity").agg(pl.col("event_time").min().dt.epoch("ns").alias("t"))
+    starts = full.group_by("inst").agg(pl.col("event_time").min().dt.epoch("ns").alias("t"))
     starts = starts.filter(pl.col("t") > first + DAY_NS).with_columns(week=(pl.col("t") - first) // (7 * DAY_NS))
-    weeks = starts.group_by("week").agg(pl.col("entity").sort(), pl.col("t").min()).sort("week")
+    weeks = starts.group_by("week").agg(pl.col("inst").sort(), pl.col("t").min()).sort("week")
     before = _sample(weeks, late, rng).select(
         pl.max_horizontal(pl.lit(first), pl.col("t") - DAY_NS).alias("at"),
-        pl.format("before {} entities start", pl.col("entity").list.len()).alias("why"),
-        "entity",
+        pl.format("before {} insts start", pl.col("inst").list.len()).alias("why"),
+        "inst",
     )
-    names = full["entity"].unique().sort()
-    k = min(random_entities, names.len())
+    names = full["inst"].unique().sort()
+    k = min(random_insts, names.len())
     ats = rng.integers(first + (last - first) // 10, last - (last - first) // 10, size=randoms)
     picked = np.sort(rng.permuted(np.tile(np.arange(names.len()), (randoms, 1)), axis=1)[:, :k], axis=1)
     drawn = pl.DataFrame({"_c": np.repeat(np.arange(randoms), k), "_i": picked.ravel()})
-    drawn = drawn.with_columns(entity=pl.lit(names).gather("_i")).group_by("_c", maintain_order=True).agg("entity")
-    random = drawn.select(pl.Series("at", ats), pl.lit("random").alias("why"), "entity")
+    drawn = drawn.with_columns(inst=pl.lit(names).gather("_i")).group_by("_c", maintain_order=True).agg("inst")
+    random = drawn.select(pl.Series("at", ats), pl.lit("random").alias("why"), "inst")
     found_cuts = pl.concat([f.cast({"at": pl.Int64}) for f in (holed, before, random)]).sort("at", "why")
     return [Cut(int(at), why, tuple(ents)) for at, why, ents in found_cuts.iter_rows()]
 
 
 def replay(fetch: Fetch, full: pl.DataFrame, cuts: Sequence[Cut]) -> tuple[Check, list[dict[str, Any]]]:
     """Each cut's fetch must equal the full fetch cut there. For each cut, the plugin's fetch as of ``at`` for the cut's
-    entities must equal the full fetch cut at ``at``."""
+    insts must equal the full fetch cut at ``at``."""
     results = []
     for cut in cuts:
         try:
-            got = fetch(cut.at, list(cut.entities))
+            got = fetch(cut.at, list(cut.insts))
         except Exception as exc:  # noqa: BLE001
             results.append(_result(cut, error=f"{type(exc).__name__}: {exc}"[:200]))
             continue
         after = got.filter(pl.col("available_at") > lit_time(cut.at)).height
         got = got.filter(pl.col("available_at") <= lit_time(cut.at))
-        want = full.filter(pl.col("entity").is_in(list(cut.entities)) & (pl.col("available_at") <= lit_time(cut.at)))
+        want = full.filter(pl.col("inst").is_in(list(cut.insts)) & (pl.col("available_at") <= lit_time(cut.at)))
         results.append(_result(cut, *_compare(got, want), after=after))
     bad = [r for r in results if r["status"] == "fail"]
     if not results:
@@ -101,7 +101,7 @@ def _compare(got: pl.DataFrame, want: pl.DataFrame) -> tuple[int, int, int, list
     x, y = both["a"].to_numpy(), both["b"].to_numpy()
     same = (np.isnan(x) & np.isnan(y)) | np.isclose(x, y, rtol=1e-9, atol=1e-12)
     changed = both.filter(pl.Series(~same))
-    differ = sorted(set(only_replay["entity"]) | set(only_full["entity"]) | set(changed["entity"]))
+    differ = sorted(set(only_replay["inst"]) | set(only_full["inst"]) | set(changed["inst"]))
     return only_replay.height, only_full.height, changed.height, differ
 
 
@@ -118,12 +118,12 @@ def _result(
     return {
         "at": from_ns(cut.at).strftime("%Y-%m-%dT%H:%MZ"),
         "why": cut.why,
-        "entities": len(cut.entities),
+        "insts": len(cut.insts),
         "only_replay": only_replay,
         "only_full": only_full,
         "changed": changed,
         "after_cut": after,
-        "differ": differ or ([] if not error else list(cut.entities[:3])),
+        "differ": differ or ([] if not error else list(cut.insts[:3])),
         "error": error,
         "status": "fail" if failed else "pass",
     }
@@ -135,8 +135,8 @@ def _sample(frame: pl.DataFrame, k: int, rng: np.random.Generator) -> pl.DataFra
     return frame.sample(k, seed=int(rng.integers(0, 2**31)))
 
 
-def _cut(rows: pl.DataFrame, at: int, entities: list[str]) -> pl.DataFrame:
-    return rows.filter(pl.col("entity").is_in(entities) & (pl.col("available_at") <= lit_time(at)))
+def _cut(rows: pl.DataFrame, at: int, insts: list[str]) -> pl.DataFrame:
+    return rows.filter(pl.col("inst").is_in(insts) & (pl.col("available_at") <= lit_time(at)))
 
 
 def _honest(seed: int) -> str:
@@ -150,7 +150,7 @@ def _hindsight(seed: int) -> str:
     times the source still had them."""
     original = source(Source(), seed)
     t = pl.col("event_time").dt.epoch("ns")
-    window = (pl.col("entity") == "e0") & (pl.col("field") == "price")
+    window = (pl.col("inst") == "e0") & (pl.col("field") == "price")
     window = window & t.is_between(START_NS + 100 * HOUR_NS, START_NS + 109 * HOUR_NS)
     full = original.filter(~window)
     learned = START_NS + 130 * HOUR_NS
@@ -164,7 +164,7 @@ def _hindsight(seed: int) -> str:
 def _ahead(seed: int) -> str:
     full = source(Source(lag=2), seed)
     cuts = cut_points(full, np.random.default_rng(seed))
-    return replay(lambda at, ents: full.filter(pl.col("entity").is_in(ents)), full, cuts)[0].status
+    return replay(lambda at, ents: full.filter(pl.col("inst").is_in(ents)), full, cuts)[0].status
 
 
 CASES = [

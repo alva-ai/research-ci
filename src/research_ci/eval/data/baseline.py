@@ -9,26 +9,24 @@ from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import TIME
 from research_ci.kernel.verdict.check import Check
 
-ANOMALY_SCHEMA = {"kind": pl.String, "entity": pl.String, "field": pl.String, "start": TIME, "end": TIME}
+ANOMALY_SCHEMA = {"kind": pl.String, "inst": pl.String, "field": pl.String, "start": TIME, "end": TIME}
 
 
 def first_vintages(fields: pl.DataFrame) -> pl.DataFrame:
     """One row per event: its first vintage. That is the vintage a decision at the time would have seen."""
     return (
-        fields.sort("vintage")
-        .unique(["entity", "field", "event_time"], keep="first")
-        .sort("entity", "field", "event_time")
+        fields.sort("vintage").unique(["inst", "field", "event_time"], keep="first").sort("inst", "field", "event_time")
     )
 
 
 def events(fields: pl.DataFrame) -> pl.DataFrame:
     """First vintages with each event's spacing and its typical size. The spacing is to the previous event of the same
-    entity and field."""
-    gap = pl.col("event_time").diff().over("entity", "field").dt.total_nanoseconds()
+    inst and field."""
+    gap = pl.col("event_time").diff().over("inst", "field").dt.total_nanoseconds()
     return (
         first_vintages(fields)
-        .with_columns(prev=pl.col("event_time").shift(1).over("entity", "field"), gap=gap)
-        .with_columns(spacing=pl.col("gap").median().over("entity", "field"), n=pl.len().over("entity", "field"))
+        .with_columns(prev=pl.col("event_time").shift(1).over("inst", "field"), gap=gap)
+        .with_columns(spacing=pl.col("gap").median().over("inst", "field"), n=pl.len().over("inst", "field"))
     )
 
 
@@ -80,7 +78,7 @@ def level_shift_anomalies(
 def _shifts(e: pl.DataFrame, shift_ratio: float, window: int) -> pl.DataFrame:
     """Events of declared levels ``shift_ratio`` or more from the median of the last ``window`` events whose next
     ``window`` stay there, flagged where they start."""
-    level, by = pl.col("value"), ["entity", "field"]
+    level, by = pl.col("value"), ["inst", "field"]
     e = e.with_columns(
         before=level.rolling_median(window, min_samples=1).shift(1).over(by),
         after=level.rolling_median(window).shift(-(window - 1)).over(by),
@@ -98,7 +96,7 @@ def _ratio(a: str, b: str, k: float) -> pl.Expr:
 
 def _anomalies(rows: pl.DataFrame, kind: str) -> pl.DataFrame:
     return rows.select(
-        pl.lit(kind).alias("kind"), "entity", "field", pl.col("prev").alias("start"), pl.col("event_time").alias("end")
+        pl.lit(kind).alias("kind"), "inst", "field", pl.col("prev").alias("start"), pl.col("event_time").alias("end")
     ).cast(ANOMALY_SCHEMA)  # type: ignore[arg-type]
 
 
@@ -130,9 +128,9 @@ def _caught(pit: str, kind: str, seeds: int = 10) -> int:
 
 
 def _moved(k: float, hours: int) -> int:
-    """Shifts flagged when entity e0's price is times ``k`` for ``hours`` hours from hour 100."""
+    """Shifts flagged when inst e0's price is times ``k`` for ``hours`` hours from hour 100."""
     t = pl.col("event_time").dt.epoch("ns")
-    hit = (pl.col("entity") == "e0") & (pl.col("field") == "price")
+    hit = (pl.col("inst") == "e0") & (pl.col("field") == "price")
     hit = hit & t.is_between(START_NS + 100 * HOUR_NS, START_NS + (99 + hours) * HOUR_NS)
     fields = source(Source(), 0)
     return _kinds(fields.with_columns(value=pl.when(hit).then(pl.col("value") * k).otherwise("value"))).get("shift", 0)

@@ -79,10 +79,10 @@ def per_t(frame: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
 
 def norm_candidates(df: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
     frame = pl.from_pandas(df) if isinstance(df, pd.DataFrame) else df
-    missing = {"t", "entity"} - set(frame.columns)
+    missing = {"t", "inst"} - set(frame.columns)
     if missing:
-        raise DeriveError(f"the universe must return columns t and entity; missing {', '.join(sorted(missing))}")
-    return frame.with_columns(pl.col("t").dt.convert_time_zone("UTC").cast(TIME), pl.col("entity").cast(pl.String))
+        raise DeriveError(f"the universe must return columns t and inst; missing {', '.join(sorted(missing))}")
+    return frame.with_columns(pl.col("t").dt.convert_time_zone("UTC").cast(TIME), pl.col("inst").cast(pl.String))
 
 
 def quantile_times(times: pl.Series, k: int) -> list[int]:

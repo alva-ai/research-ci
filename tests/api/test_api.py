@@ -131,7 +131,7 @@ def test_evals_and_nulls_are_validated() -> None:
         evals_of(types.SimpleNamespace(EVALS=[Eval(ic, label="carry")]), "data")
     with pytest.raises(ValueError, match="EVALS must be a list"):
         evals_of(types.SimpleNamespace(EVALS=ic), "data")
-    with pytest.raises(ValueError, match="on_fail is mask, drop_entities, ask or block"):
+    with pytest.raises(ValueError, match="on_fail is mask, drop_insts, ask or block"):
         Eval(ic, on_fail="drop")  # type: ignore[arg-type]
 
 

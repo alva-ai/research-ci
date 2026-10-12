@@ -12,7 +12,7 @@ A universe says which question its scores answer, `Universe(use, clusters, shape
 | --- | --- | --- | --- | --- |
 | `cross` (the default) | which candidates do better than the others at the same decision time | `PermuteWithin(time, clusters=<cluster column>, block=horizon)` | `Use("ref.mean", {"cluster": "<cluster column>", "top": 0.2})` | rank ic, rank ic without top {clusters}, top minus bottom fifth |
 | `series` | when one or a few assets do better: timing, long or short | `ShiftInTime(min_shift=horizon)` | `Use("ref.timing")` | ts ic |
-| `events` | what follows an event; the scores exist only at the event rows | `ShiftInTime(min_shift=horizon)` | `Use("ref.mean", {"cluster": "entity"})` | mean at events |
+| `events` | what follows an event; the scores exist only at the event rows | `ShiftInTime(min_shift=horizon)` | `Use("ref.mean", {"cluster": "inst"})` | mean at events |
 
 | Target | Role |
 | --- | --- |
@@ -61,8 +61,8 @@ Lists: `stages/data/floor.py`, `stages/data/defaults.py`, `stages/data/source.py
 | data is current | Warns when the newest row is too old | warns | default | — |
 | level shifts *(levels)* | Masks level jumps the source did not confirm | treats | default | `data.baseline.level_shift_anomalies` |
 | level sanity *(levels)* | Masks levels at zero, stuck, or spiking | treats | default | `data.sanity.{nonpositive, stale, spikes}` |
-| identity breaks *(levels)* | Splits an entity that returns at another level | treats | default | `data.identity.{breaks, renames}` |
-| coverage | Drops entities shorter than the longest horizon | treats | default | `data.coverage.{short_lived, thin}` |
+| identity breaks *(levels)* | Splits an inst that returns at another level | treats | default | `data.identity.{breaks, renames}` |
+| coverage | Drops insts shorter than the longest horizon | treats | default | `data.coverage.{short_lived, thin}` |
 | hedge guard *(hedge)* | Drops candidates whose legs are not one asset | treats | default | `data.invariants.{hedged_legs, hedge_check}` |
 | influence concentration | Shows the clusters most of the noise rests on | warns | default | `data.concentration.shares` |
 | library evals *(data.py)* | Masks, drops, or asks about what one flags | treats | floor | — |
@@ -106,7 +106,7 @@ A lab eval is a function of the idea's own, in a module such as `evals/<name>.py
 
 | Layer | Listed in | An eval gets | It returns | Eval(fn, ...) adds | It vetoes when |
 | --- | --- | --- | --- | --- | --- |
-| data | `data.py` | the explore data, a FieldTable | the rows it flags: entity, event_time, optionally field | h0, on_fail (mask, drop_entities, ask, block), covers | with on_fail block, it flags any row of the data after the treatments before it: BLOCKED |
+| data | `data.py` | the explore data, a FieldTable | the rows it flags: inst, event_time, optionally field | h0, on_fail (mask, drop_insts, ask, block), covers | with on_fail block, it flags any row of the data after the treatments before it: BLOCKED |
 | feat | `feat.py` | the evaluation table of one horizon | t, value per decision time | h0, label, horizons, combine (max, each) | it, or a null world that judges it, is below z 2.00 at a horizon it covers: the claim fails there |
 
 | Declaration | Means |
@@ -116,11 +116,11 @@ A lab eval is a function of the idea's own, in a module such as `evals/<name>.py
 | `Size(of, market=Market(), markets=100)` | On markets with no information, the statistic must beat the floor world (z ≥ 2) no more often than chance allows, over `markets` seeds. |
 | `Power(of, market=Market(), markets=40, rate=0.8)` | On markets with `market.ic` of information, the statistic must beat the floor world at least `rate` of the time. |
 | `Recovers(of, market, expect, tol, markets=20)` | Averaged over `markets` seeds and decision times, the statistic must come within `tol` of `expect`. |
-| `Market(times=120, entities=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0, shape='cross')` | A synthetic evaluation table: `entities` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times. |
-| `Source(entities=12, hours=336, settle=8, lag=0, revised=0.0)` | A synthetic field table: `entities` entities with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later. |
-| `Pit(category, plant, note='')` | A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one entity where the field varies. |
+| `Market(times=120, insts=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0, shape='cross')` | A synthetic evaluation table: `insts` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times. |
+| `Source(insts=12, hours=336, settle=8, lag=0, revised=0.0)` | A synthetic field table: `insts` insts with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later. |
+| `Pit(category, plant, note='')` | A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one inst where the field varies. |
 
-For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars DataFrame of the evaluation table (t, entity, score, y) and thirds(SIX) returns t, value`.
+For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars DataFrame of the evaluation table (t, inst, score, y) and thirds(SIX) returns t, value`.
 
 A null world, in `nulls/feat.py`, one for every alternative of the contract:
 
@@ -128,14 +128,14 @@ A null world, in `nulls/feat.py`, one for every alternative of the contract:
 | --- | --- |
 | `Null.explains` | the id of the contract's alternative this world answers |
 | `Null.world` | a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay |
-| `Null.keeps` | the column the alternative lives in; None means the world's bucket_by, or entity for a ShiftInTime |
+| `Null.keeps` | the column the alternative lives in; None means the world's bucket_by, or inst for a ShiftInTime |
 | `Null.evals` | the names of the evals this world judges, any eval of the layer; () means the decisive effect |
 | `Null.reps` | the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default |
 | `Null.note` | free text kept with the world in the submission's record |
-| `PermuteWithin.bucket_by` | shuffle the scores across entities inside each bucket of this column; "time" is one bucket per decision time |
+| `PermuteWithin.bucket_by` | shuffle the scores across insts inside each bucket of this column; "time" is one bucket per decision time |
 | `PermuteWithin.clusters` | a column whose members move together and are shuffled as one |
 | `PermuteWithin.block` | repeat the same shuffle for every decision time inside a block this long; "horizon" uses each label horizon |
-| `ShiftInTime.min_shift` | shift each entity's scores along its decision times, by one offset for all entities, at least this far either way round; "horizon" uses each label horizon |
+| `ShiftInTime.min_shift` | shift each inst's scores along its decision times, by one offset for all insts, at least this far either way round; "horizon" uses each label horizon |
 
 ## Slot 4: tests of lab evals
 
@@ -169,8 +169,8 @@ What the engine runs on its own, with worked examples like the library's, that n
 | `validation/calibration.py` | `calibrate` | Stand-ins die as often as chance allows; planted signals live. | 4 ex |
 | `stages/data/treatments.py` | `apply_all` | The field table after every field treatment. | — |
 | | `apply_candidates` | The candidates after every candidate treatment. | — |
-| | `drop_candidates` | Drop candidate rows (`t`, `entity`). | — |
-| | `drop_entities` | Drop every row of the named entities. | 1 ex |
+| | `drop_candidates` | Drop candidate rows (`t`, `inst`). | — |
+| | `drop_insts` | Drop every row of the named insts. | 1 ex |
 | | `drop_spans` | Drop the rows each span covers. | 1 ex |
 | | `mask_rows` | Drop the flagged rows. | 1 ex |
 | | `mask_windows` | Drop the flagged field's rows within `around_ns` of each window. | 1 ex |
@@ -179,7 +179,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `se` | No noise can be measured on a number that is not finite somewhere. | — |
 | | `smaller` | The finer of two resolutions. | — |
 | | `spans` | When each removed row was current in `fields`. | 6 ex |
-| | `split_entities` | Rename each split entity's rows from the split on. | 1 ex |
+| | `split_insts` | Rename each split inst's rows from the split on. | 1 ex |
 | | `touched` | Label rows whose window meets a span of a leg. | 6 ex |
 
 ## Eval library
@@ -216,25 +216,25 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `first_vintages` | One row per event: its first vintage. | inside eval | 7 ex |
 | | `level_shift_anomalies` | The baseline's level shifts alone, from the declared levels only. | data | — |
 | `concentration` | `shares` | Each cluster's share of the noise, between 0 and 1. | contract, data | 7 ex |
-| `coverage` | `short_lived` | Entities whose events span less than `horizon_ns`. | data, research code | 2 ex |
+| `coverage` | `short_lived` | Insts whose events span less than `horizon_ns`. | data, research code | 2 ex |
 | | `thin` | Decision times with some candidates but fewer than `floor`. | data, research code | 1 ex |
 | `identity` | `breaks` | Declared levels that come back elsewhere after a long gap. | data, research code | 6 ex |
-| | `renames` | What the split calls each new series: `entity`, `at`, `to`. | data, research code | 1 ex |
+| | `renames` | What the split calls each new series: `inst`, `at`, `to`. | data, research code | 1 ex |
 | `invariants` | `hedge_check` | The card's hedged-legs line, naming the pairs most often apart. | data | — |
 | | `hedged_legs` | Per candidate row: the legs' price ratio, correlation, and `ok`. | data | 1 ex |
 | `pits` | `duplicate` | A duplicate: one event repeated a millisecond later. | data, research code | 1 ex |
 | | `gap` | A gap: ten usual spacings missing from a random time. | data, research code | 1 ex |
 | | `leak` | A leak: each event carries the value of the next. | data, research code | 1 ex |
-| | `level_break` | A level break: one entity's field half again as large. | data, research code | 1 ex |
-| | `shift` | A shift: one entity's events stamped one usual spacing late. | data, research code | 1 ex |
-| | `spike` | A spike: one event of one entity's field, ten times larger. | data, research code | 1 ex |
-| | `swap` | A swap: one entity's series replaced by another entity's. | data, research code | 1 ex |
-| | `target` | An entity whose `field` has enough rows for a pit. | research code | 1 ex |
-| | `unit` | A unit error: one entity's field a thousand times larger. | data, research code | 1 ex |
+| | `level_break` | A level break: one inst's field half again as large. | data, research code | 1 ex |
+| | `shift` | A shift: one inst's events stamped one usual spacing late. | data, research code | 1 ex |
+| | `spike` | A spike: one event of one inst's field, ten times larger. | data, research code | 1 ex |
+| | `swap` | A swap: one inst's series replaced by another inst's. | data, research code | 1 ex |
+| | `target` | An inst whose `field` has enough rows for a pit. | research code | 1 ex |
+| | `unit` | A unit error: one inst's field a thousand times larger. | data, research code | 1 ex |
 | `reconcile` | `compare` | One result per request: `match`, `mismatch` or `unanswered`. | data | 5 ex |
 | | `requests` | Point requests for random rows, and window requests for anomalies. | data | 5 ex |
 | | `summarize` | The check, each field's grade, and counts. | data | — |
-| `replay` | `cut_points` | Cut points: holes, before new entities, and random times. | data | 3 ex |
+| `replay` | `cut_points` | Cut points: holes, before new insts, and random times. | data | 3 ex |
 | | `replay` | Each cut's fetch must equal the full fetch cut there. | data | 3 ex |
 | `sanity` | `nonpositive` | Events of a declared level at zero or below. | data, research code | 3 ex |
 | | `spikes` | Events of a declared level that jump and come back. | data, research code | 5 ex |
@@ -245,7 +245,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
 | `ic` | `rank_ic` | Spearman correlation of score and label at each decision time. | feat, research code | 3 ex · 3 prop |
-| | `ts_ic` | Rank correlation of score and label over time, per entity. | feat, research code | 3 ex · 3 prop |
+| | `ts_ic` | Rank correlation of score and label over time, per inst. | feat, research code | 3 ex · 3 prop |
 | `spread` | `quantile_spread` | Mean label of the top `share` less the bottom `share`. | feat, research code | 3 ex · 2 prop |
 
 ### structure
@@ -260,7 +260,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
 | `synthetic` | `hand` | A small evaluation table worked by hand, at one time. | worked examples | — |
-| | `market` | A synthetic evaluation table, one row per entity and time. | worked examples | — |
+| | `market` | A synthetic evaluation table, one row per inst and time. | worked examples | — |
 | | `source` | A synthetic field table of hourly prices and settled flows. | worked examples | — |
 
 ## Legend

@@ -15,8 +15,8 @@ import pandas as pd
 import polars as pl
 
 ENTRY_POINTS = "research_ci.plugins"
-FIELD_COLUMNS = ("entity", "field", "event_time", "available_at", "value", "vintage", "source")
-UNIVERSE_COLUMNS = ("t", "entity", "long", "short")
+FIELD_COLUMNS = ("inst", "field", "event_time", "available_at", "value", "vintage", "source")
+UNIVERSE_COLUMNS = ("t", "inst", "long", "short")
 
 
 @runtime_checkable
@@ -25,8 +25,8 @@ class DataPlugin(Protocol):
     never from the agent. The engine normalizes them, checks them, and keeps the snapshot.
 
     ``fetch(as_of=T)`` returns what the plugin would have returned had it run at ``T``: only rows known by then, built
-    only from what was known by then, including any repair the plugin applies. ``entities`` limits the fetch to those
-    entities. Before a plugin's data is used, the engine replays it at cut points of its own choosing and compares
+    only from what was known by then, including any repair the plugin applies. ``insts`` limits the fetch to those
+    insts. Before a plugin's data is used, the engine replays it at cut points of its own choosing and compares
     each replay with the full fetch; a plugin that cannot fetch as of a time cannot be admitted.
 
     A class attribute ``levels`` (``research_ci.api.Levels``) names the fields whose values are levels and how large and
@@ -37,16 +37,16 @@ class DataPlugin(Protocol):
     """
 
     def fetch(
-        self, as_of: pd.Timestamp | None = None, entities: Sequence[str] | None = None
+        self, as_of: pd.Timestamp | None = None, insts: Sequence[str] | None = None
     ) -> pl.DataFrame | pd.DataFrame: ...
 
 
-REQUEST_COLUMNS = ("entity", "field", "start", "end")
+REQUEST_COLUMNS = ("inst", "field", "start", "end")
 
 
 @dataclass(frozen=True)
 class Reference:
-    """What an independent source holds for a batch of requests: ``rows`` (``entity``, ``field``, ``event_time``,
+    """What an independent source holds for a batch of requests: ``rows`` (``inst``, ``field``, ``event_time``,
     ``value``) found in each request's ``[start, end]``, and ``answered``, the requests it could check at all. A
     request left out of ``answered`` (a field the source has no history of, a span too old) checks nothing."""
 
@@ -69,8 +69,8 @@ class ReferenceSource(Protocol):
 @runtime_checkable
 class UniversePlugin(Protocol):
     """The candidates at each decision time, computed only from ``fields``: ``UNIVERSE_COLUMNS`` plus cluster, group
-    and score columns. ``t`` is the decision time; ``long`` and ``short`` name the FieldTable entities of the legs
-    (empty for single-entity candidates).
+    and score columns. ``t`` is the decision time; ``long`` and ``short`` name the FieldTable insts of the legs
+    (empty for single-inst candidates).
 
     A plugin whose legs are always one asset on two venues says so with a class attribute ``hedge``
     (``research_ci.api.Hedge``): the field that prices both legs and how closely they must track. The engine then
@@ -98,10 +98,10 @@ class ConsumerResult:
     ``net`` has one row per decision time: ``t``, ``net`` (what the period ending at ``t`` earned, as a fraction of
     the starting capital; the run's result is the sum) and optional component columns (``flow``, ``price``,
     ``fees``) that must add up to ``net``. ``marked`` names the components booked every period on the positions
-    held; the others are booked only when trades happen. ``positions`` holds ``t``, ``entity``, ``weight``
+    held; the others are booked only when trades happen. ``positions`` holds ``t``, ``inst``, ``weight``
     (fraction of capital per leg) after the decision at ``t``, plus the columns a label needs for every position
     held (such as ``long`` and ``short``), also when that pair is no longer a candidate; ``trades`` holds ``t``,
-    ``entity``,
+    ``inst``,
     ``from_weight``, ``to_weight``. ``turnover`` is the traded notional over capital. ``checks`` are the consumer's
     own consistency checks. ``policies`` states accounting rules people must see, such as a cap on gains.
     """
@@ -117,7 +117,7 @@ class ConsumerResult:
 
 @runtime_checkable
 class ConsumerPlugin(Protocol):
-    """Runs the strategy's own logic on ``fields``. With ``scores`` (``t``, ``entity``, ``score``) the strategy ranks
+    """Runs the strategy's own logic on ``fields``. With ``scores`` (``t``, ``inst``, ``score``) the strategy ranks
     and weights candidates by that score instead of its own, and a candidate without a score is not opened.
 
     It must be deterministic for the same inputs and read nothing but ``fields``. With ``fresh`` it computes the
@@ -132,7 +132,7 @@ class ConsumerPlugin(Protocol):
 @dataclass(frozen=True)
 class LabelCase:
     """A worked example the label's author computed by hand: small ``fields`` and ``candidates``, a horizon, and the
-    rows the label must return (``t``, ``entity``, ``value`` and any component columns). The engine also mutates the
+    rows the label must return (``t``, ``inst``, ``value`` and any component columns). The engine also mutates the
     example's inputs and requires the output to move, so an example that exercises nothing does not count."""
 
     fields: pl.DataFrame
@@ -143,7 +143,7 @@ class LabelCase:
 
 @runtime_checkable
 class LabelPlugin(Protocol):
-    """What happened after each decision: one row per candidate and decision time (``t``, ``entity``, ``value``, and
+    """What happened after each decision: one row per candidate and decision time (``t``, ``inst``, ``value``, and
     optional component columns such as ``flow`` and ``price`` that add up to ``value``), before costs.
 
     A row for ``t`` may use data known up to ``t + horizon`` and nothing later; the engine checks this by cutting the
@@ -160,7 +160,7 @@ class LabelPlugin(Protocol):
 @runtime_checkable
 class CostModel(Protocol):
     """The cost of trading: ``round_trip`` per candidate row (entering and leaving, as a fraction of one leg's
-    notional) and ``fees`` of a trade table (``t``, ``entity``, ``from_weight``, ``to_weight``) as a fraction of
+    notional) and ``fees`` of a trade table (``t``, ``inst``, ``from_weight``, ``to_weight``) as a fraction of
     capital. The engine reconciles ``fees`` with what the consumer charged."""
 
     def round_trip(self, candidates: pl.DataFrame) -> pl.Series: ...

@@ -30,12 +30,12 @@ def universe_pit(
     """Candidates before the cut equal those from all data. With the data cut at ``cut``, the candidates at
     ``cut - margin`` must equal those from all data. The margin lets a plugin that needs the next bar to finish one
     still pass; ``universe_causal`` covers shorter look-aheads."""
-    values = [c for c, d in full.schema.items() if c not in ("t", "entity") and d.is_numeric()]
+    values = [c for c, d in full.schema.items() if c not in ("t", "inst") and d.is_numeric()]
     bad = []
     for cut in cuts:
         t = cut - margin_ns
         part = candidates(truncated(fields, cut), [t]).filter(pl.col("t") == lit_time(t))
-        mismatch = _frame_mismatch(part, full.filter(pl.col("t") == lit_time(t)), ["t", "entity"], values)
+        mismatch = _frame_mismatch(part, full.filter(pl.col("t") == lit_time(t)), ["t", "inst"], values)
         if mismatch:
             bad.append(f"{_iso(t)}: {mismatch}")
     if bad:
@@ -48,9 +48,9 @@ def universe_causal(candidates: Candidates, fields: pl.DataFrame, full: pl.DataF
     the candidates at ``t`` must not move."""
     later = pl.col("available_at") > lit_time(t)
     moved = fields.with_columns(pl.when(later).then(pl.col("value") * 1.01 + 1e-6).otherwise(pl.col("value")))
-    values = [c for c, d in full.schema.items() if c not in ("t", "entity") and d.is_numeric()]
+    values = [c for c, d in full.schema.items() if c not in ("t", "inst") and d.is_numeric()]
     part = candidates(moved, [t]).filter(pl.col("t") == lit_time(t))
-    mismatch = _frame_mismatch(part, full.filter(pl.col("t") == lit_time(t)), ["t", "entity"], values)
+    mismatch = _frame_mismatch(part, full.filter(pl.col("t") == lit_time(t)), ["t", "inst"], values)
     if mismatch:
         return Check("universe causal", "fail", f"values after {_iso(t)} changed the candidates at it: {mismatch}")
     return Check("universe causal", "pass", f"values after {_iso(t)} leave the candidates at it unchanged")
@@ -66,13 +66,13 @@ def label_cases(name: str, values: Values, cases: Sequence[LabelCase]) -> list[C
     for i, case in enumerate(cases):
         h = span(case.horizon)
         got = values(case.fields, case.candidates, h)
-        columns = [c for c in case.expected.columns if c not in ("t", "entity")]
-        mismatch = _frame_mismatch(got, case.expected, ["t", "entity"], columns)
+        columns = [c for c in case.expected.columns if c not in ("t", "inst")]
+        mismatch = _frame_mismatch(got, case.expected, ["t", "inst"], columns)
         if mismatch:
             wrong.append(f"case {i}: {mismatch}")
             continue
         for mutation, fields, should_move in _mutations(case, h):
-            moved = bool(_frame_mismatch(values(fields, case.candidates, h), case.expected, ["t", "entity"], columns))
+            moved = bool(_frame_mismatch(values(fields, case.candidates, h), case.expected, ["t", "inst"], columns))
             if moved != should_move:
                 blind.append(f"case {i}: {mutation} {'did not change' if should_move else 'changed'} the label")
     checks = [
@@ -95,7 +95,7 @@ def label_truncation(
         if rows.is_empty():
             continue
         a, b = values(truncated(fields, cut), rows, horizon), values(fields, rows, horizon)
-        mismatch = _frame_mismatch(a, b, ["t", "entity"], ["value"])
+        mismatch = _frame_mismatch(a, b, ["t", "inst"], ["value"])
         if mismatch:
             bad.append(f"cut {_iso(cut)}: {mismatch}")
     check = f"label {name}: no data after t + h"
@@ -117,7 +117,7 @@ def consumer_pit(run: Run, fields: pl.DataFrame, full: ConsumerResult, cuts: Seq
         trades = _frame_mismatch(
             part.trades.filter(pl.col("t") <= until),
             full.trades.filter(pl.col("t") <= until),
-            ["t", "entity"],
+            ["t", "inst"],
             ["to_weight"],
         )
         if mismatch or trades:
@@ -198,7 +198,7 @@ def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int)
     shared = [c for c in result.marked if c in result.net.columns and c in labels.columns]
     if not shared:
         return Check("consumer matches labels", "skip", "no component booked every period by both")
-    held = result.positions.join(labels, on=["t", "entity"], how="left")
+    held = result.positions.join(labels, on=["t", "inst"], how="left")
     missing = held.filter(pl.col(shared[0]).is_null()).height
     expected = held.group_by("t").agg(*(pl.col(c).fill_null(0.0).mul(pl.col("weight")).sum() for c in shared))
     expected = expected.with_columns(pl.col("t") + pl.duration(nanoseconds=period_ns))
@@ -258,9 +258,9 @@ def branch_diff(base: ConsumerResult, branch: ConsumerResult, start: int, end: i
     positions it still holds there."""
     window = (pl.col("t") > lit_time(start)) & (pl.col("t") <= lit_time(end))
     diff = float(branch.net.filter(window)["net"].sum()) - float(base.net.filter(window)["net"].sum())
-    a = base.positions.filter(window).select("t", "entity", pl.col("weight").abs().alias("a"))
-    b = branch.positions.filter(window).select("t", "entity", pl.col("weight").abs().alias("b"))
-    both = a.join(b, on=["t", "entity"], how="left").fill_null(0.0)
+    a = base.positions.filter(window).select("t", "inst", pl.col("weight").abs().alias("a"))
+    b = branch.positions.filter(window).select("t", "inst", pl.col("weight").abs().alias("b"))
+    both = a.join(b, on=["t", "inst"], how="left").fill_null(0.0)
     total = float(a["a"].sum())
     overlap = float(both.select(pl.min_horizontal("a", "b")).to_series().sum()) / total if total else 1.0
     return diff, overlap
@@ -271,14 +271,14 @@ def perturb(scores: pl.DataFrame, kind: str, share: float, block_ns: int, seed: 
     the scores of ``share`` of them among themselves at each time. The chosen candidates stay chosen for a whole block.
     """
     block = (pl.col("t").dt.epoch("ns") // block_ns).alias("block")
-    u = pl.struct(pl.col("entity"), block).hash(seed) / float(2**64)
+    u = pl.struct(pl.col("inst"), block).hash(seed) / float(2**64)
     if kind == "drop":
         return scores.filter(u >= share)
-    chosen = scores.with_columns(u.alias("_u"), pl.struct(pl.col("entity"), block).hash(seed + 1).alias("_k"))
+    chosen = scores.with_columns(u.alias("_u"), pl.struct(pl.col("inst"), block).hash(seed + 1).alias("_k"))
     picked = chosen.filter(pl.col("_u") < share)
     shuffled = picked.sort("t", "_k")["score"]
-    moved = picked.sort("t", "entity").with_columns(score=shuffled)
-    return pl.concat([chosen.filter(pl.col("_u") >= share), moved]).drop("_u", "_k").sort("t", "entity")
+    moved = picked.sort("t", "inst").with_columns(score=shuffled)
+    return pl.concat([chosen.filter(pl.col("_u") >= share), moved]).drop("_u", "_k").sort("t", "inst")
 
 
 def total(result: ConsumerResult) -> float:

@@ -38,7 +38,7 @@ class SourceSettings:
     holes: int = 200
     late: int = 40
     randoms: int = 5
-    random_entities: int = 20
+    random_insts: int = 20
     per_field: int = 12
     max_anomalies: int = 60
     tolerance: str = "1s"
@@ -50,7 +50,7 @@ def can_replay(plugin: Any) -> bool:
         params = inspect.signature(plugin.fetch).parameters
     except (TypeError, ValueError):
         return False
-    return "as_of" in params and "entities" in params
+    return "as_of" in params and "insts" in params
 
 
 def declared_levels(plugin: Any) -> tuple[tuple[str, ...], float, int]:
@@ -66,7 +66,7 @@ def declared_levels(plugin: Any) -> tuple[tuple[str, ...], float, int]:
 @dataclass(frozen=True)
 class Seen:
     """What an admission step reads: the data plugin, its full fetch and field names, the settings, the random draws
-    the steps share in order, and the fetch as of a time and entities, ``None`` when the plugin cannot replay. The
+    the steps share in order, and the fetch as of a time and insts, ``None`` when the plugin cannot replay. The
     baseline and the independent source's answers are worked out once, when a step first needs them."""
 
     plugin: Any
@@ -90,7 +90,7 @@ class Seen:
         s = self.settings
         reqs = rc.requests(self.fields, self.baseline[1], s.per_field, s.max_anomalies, self.tolerance, s.seed)
         ref = self.plugin.reference(reqs.select("rid", *REQUEST_COLUMNS))
-        rows = ref.rows if not ref.rows.is_empty() else pl.DataFrame(schema={"entity": pl.String, "field": pl.String})
+        rows = ref.rows if not ref.rows.is_empty() else pl.DataFrame(schema={"inst": pl.String, "field": pl.String})
         ref = Reference(rows, ref.answered)
         return reqs, ref, rc.compare(reqs, self.fields, ref, self.tolerance)
 
@@ -107,35 +107,35 @@ def generic(seen: Seen) -> Found:
 
 
 def replayed(seen: Seen) -> Found:
-    """The plugin's fetch as of past times, for some entities, must equal the full fetch cut at those times."""
+    """The plugin's fetch as of past times, for some insts, must equal the full fetch cut at those times."""
     if seen.fetch is None:
-        return Found([Check("replay as of past times", "fail", "the plugin cannot fetch as of a time and entities")])
+        return Found([Check("replay as of past times", "fail", "the plugin cannot fetch as of a time and insts")])
     s = seen.settings
-    cuts = cut_points(seen.fields, seen.rng, s.holes, s.late, s.randoms, s.random_entities)
+    cuts = cut_points(seen.fields, seen.rng, s.holes, s.late, s.randoms, s.random_insts)
     check, results = replay(seen.fetch, seen.fields, cuts)
     return Found([check], shown={"replay": results})
 
 
 def replay_canary(seen: Seen) -> Found:
-    """Delete, with hindsight, five events of one entity from the full fetch: the replay must notice."""
+    """Delete, with hindsight, five events of one inst from the full fetch: the replay must notice."""
     if seen.fetch is None:
         return Found()
     name = "canary: replay catches a hindsight deletion"
     e = events(seen.fields).filter(pl.col("n") >= 20)
     if e.is_empty():
-        return Found([Check(name, "skip", "no entity with enough events")])
-    entities = e["entity"].unique().sort().to_list()
-    entity = entities[int(seen.rng.integers(len(entities)))]
-    rows = e.filter(pl.col("entity") == entity)
+        return Found([Check(name, "skip", "no inst with enough events")])
+    insts = e["inst"].unique().sort().to_list()
+    inst = insts[int(seen.rng.integers(len(insts)))]
+    rows = e.filter(pl.col("inst") == inst)
     busiest = rows.group_by("field").len().sort(["len", "field"], descending=[True, False])["field"][0]
     times = rows.filter(pl.col("field") == busiest)["event_time"].sort()
     i = int(len(times) * seen.rng.uniform(0.3, 0.7))
     lo, hi = times[i], times[min(i + 4, len(times) - 1)]
-    cut = seen.fields.filter(~((pl.col("entity") == entity) & pl.col("event_time").is_between(lo, hi)))
-    check, _ = replay(seen.fetch, cut, [Cut(int(pd.Timestamp(lo).value), "canary", (entity,))])
+    cut = seen.fields.filter(~((pl.col("inst") == inst) & pl.col("event_time").is_between(lo, hi)))
+    check, _ = replay(seen.fetch, cut, [Cut(int(pd.Timestamp(lo).value), "canary", (inst,))])
     if check.status == "fail":
-        return Found([Check(name, "pass", f"deleting {entity} {busiest} from {lo:%Y-%m-%d %H:%M} was caught")])
-    return Found([Check(name, "fail", f"deleting {entity} {busiest} from {lo:%Y-%m-%d %H:%M} went unnoticed")])
+        return Found([Check(name, "pass", f"deleting {inst} {busiest} from {lo:%Y-%m-%d %H:%M} was caught")])
+    return Found([Check(name, "fail", f"deleting {inst} {busiest} from {lo:%Y-%m-%d %H:%M} went unnoticed")])
 
 
 def agrees(seen: Seen) -> Found:
@@ -146,7 +146,7 @@ def agrees(seen: Seen) -> Found:
         return Found([check], shown={"grades": dict.fromkeys(seen.names, "unverified")})
     reqs, _, results = seen.reconciled
     check, grades, table = rc.summarize(results, seen.names)
-    shifts = reqs.filter(pl.col("kind") == "shift").select("rid", "entity", "field", "end")
+    shifts = reqs.filter(pl.col("kind") == "shift").select("rid", "inst", "field", "end")
     ok = {r["rid"] for r in results if r["kind"] == "shift" and r["status"] == "match"}
     shown = {
         "grades": grades,
@@ -172,7 +172,7 @@ def agreement_canary(seen: Seen) -> Found:
     hit = pl.lit(False)
     for r in picked.iter_rows(named=True):
         hit = hit | (
-            (pl.col("entity") == r["entity"])
+            (pl.col("inst") == r["inst"])
             & (pl.col("field") == r["field"])
             & (pl.col("event_time") >= lit_time(int(pd.Timestamp(r["start"]).value)))
             & (pl.col("event_time") <= lit_time(int(pd.Timestamp(r["end"]).value)))
@@ -203,13 +203,13 @@ def admit(use: Use, plugin: Any, fields: pl.DataFrame, settings: SourceSettings 
         "options": dict(use.options),
         "code": code_hash(plugin),
         "rows": fields.height,
-        "entities": fields["entity"].n_unique(),
+        "insts": fields["inst"].n_unique(),
         "fields": names,
         "settings": asdict(s),
     }
 
-    def fetch(at: int, entities: list[str]) -> pl.DataFrame:
-        return field_table(plugin.fetch(as_of=from_ns(at), entities=entities))
+    def fetch(at: int, insts: list[str]) -> pl.DataFrame:
+        return field_table(plugin.fetch(as_of=from_ns(at), insts=insts))
 
     seen = Seen(plugin, fields, names, s, np.random.default_rng(s.seed), fetch if can_replay(plugin) else None)
     found = combined(step.run(seen) for step in STEPS)

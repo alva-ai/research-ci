@@ -1,5 +1,5 @@
 """A universe's shape on the timed toy market: one asset timed (``series``) and events among three assets
-(``events``). Their floor world shifts each entity's scores in time; the data check calibrates the decisive test in it,
+(``events``). Their floor world shifts each inst's scores in time; the data check calibrates the decisive test in it,
 a planted signal passes, noise fails, a peek is tainted, and a lab eval or a ``ShiftInTime`` world of the idea can
 veto."""
 
@@ -22,9 +22,9 @@ import polars as pl
 
 
 def regime(fields, candidates):
-    known = fields.filter(pl.col("field") == "regime").select("entity", pl.col("available_at").alias("at"), "value")
+    known = fields.filter(pl.col("field") == "regime").select("inst", pl.col("available_at").alias("at"), "value")
     rows = candidates.sort("t")
-    return rows.join_asof(known.sort("at"), left_on="t", right_on="at", by="entity", check_sortedness=False)
+    return rows.join_asof(known.sort("at"), left_on="t", right_on="at", by="inst", check_sortedness=False)
 """
 FUTURE = """
 import polars as pl
@@ -32,30 +32,30 @@ import polars as pl
 
 def future(fields, candidates):
     close = fields.filter(pl.col("field") == "close").sort("available_at")
-    later = pl.col("value").shift(-24).over("entity") / pl.col("value") - 1
-    ahead = close.select("entity", pl.col("available_at").alias("t"), later.alias("value"))
-    return candidates.join(ahead, on=["t", "entity"])
+    later = pl.col("value").shift(-24).over("inst") / pl.col("value") - 1
+    ahead = close.select("inst", pl.col("available_at").alias("t"), later.alias("value"))
+    return candidates.join(ahead, on=["t", "inst"])
 """
 FEATURES = {
     "series": {
         "planted": REGIME + "\n\ndef features(fields, candidates):\n"
-        "    return regime(fields, candidates).select('t', 'entity', (pl.col('value') * SCALE).alias('score'))\n",
+        "    return regime(fields, candidates).select('t', 'inst', (pl.col('value') * SCALE).alias('score'))\n",
         "noise": "import polars as pl\n\n\ndef features(fields, candidates):\n"
-        "    noise = pl.struct('t', 'entity').hash(7) / 2.0**64 - 0.5\n"
-        "    return candidates.select('t', 'entity', noise.alias('score'))\n",
+        "    noise = pl.struct('t', 'inst').hash(7) / 2.0**64 - 0.5\n"
+        "    return candidates.select('t', 'inst', noise.alias('score'))\n",
         "peek": FUTURE + "\n\ndef features(fields, candidates):\n"
-        "    return future(fields, candidates).select('t', 'entity', pl.col('value').alias('score'))\n",
+        "    return future(fields, candidates).select('t', 'inst', pl.col('value').alias('score'))\n",
     },
     "events": {
         "planted": REGIME + "\n\ndef features(fields, candidates):\n"
         "    rows = regime(fields, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
-        "    return rows.select('t', 'entity', pl.lit(SCALE).alias('score'))\n",
+        "    return rows.select('t', 'inst', pl.lit(SCALE).alias('score'))\n",
         "noise": "import polars as pl\n\n\ndef features(fields, candidates):\n"
-        "    rows = candidates.filter(pl.struct('t', 'entity').hash(7) / 2.0**64 < 0.06)\n"
-        "    return rows.select('t', 'entity', pl.lit(1.0).alias('score'))\n",
+        "    rows = candidates.filter(pl.struct('t', 'inst').hash(7) / 2.0**64 < 0.06)\n"
+        "    return rows.select('t', 'inst', pl.lit(1.0).alias('score'))\n",
         "peek": FUTURE + "\n\ndef features(fields, candidates):\n"
         "    rows = future(fields, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
-        "    return rows.select('t', 'entity', pl.lit(1.0).alias('score'))\n",
+        "    return rows.select('t', 'inst', pl.lit(1.0).alias('score'))\n",
     },
 }
 DIAGNOSTIC = {"series": "ts ic", "events": "mean at events"}

@@ -19,59 +19,55 @@ H = pd.Timedelta(hours=1)
 def _prices(n: int = 30) -> pl.DataFrame:
     rows = [("a", "close", T0 + i * H, T0 + i * H, 100.0 + i, 0) for i in range(n)]
     rows += [("b", "close", T0 + i * H, T0 + i * H, 200.0 - i, 0) for i in range(n)]
-    return field_table(
-        pd.DataFrame(rows, columns=["entity", "field", "event_time", "available_at", "value", "vintage"])
-    )
+    return field_table(pd.DataFrame(rows, columns=["inst", "field", "event_time", "available_at", "value", "vintage"]))
 
 
 def _at(*rows: tuple) -> pl.DataFrame:
-    names = ["t", "entity", "side"][: len(rows[0])]
+    names = ["t", "inst", "side"][: len(rows[0])]
     return pl.DataFrame([(T0 + h * H, *rest) for h, *rest in rows], schema=names, orient="row").with_columns(
         pl.col("t").cast(TIME)
     )
 
 
-def _by_entity(out: pl.DataFrame) -> dict[str, float]:
-    return dict(zip(out["entity"], out["value"], strict=True))
+def _by_inst(out: pl.DataFrame) -> dict[str, float]:
+    return dict(zip(out["inst"], out["value"], strict=True))
 
 
 def test_holding_return_uses_prices_known_at_t_and_t_plus_h() -> None:
     label = HoldingReturn()
-    two = _by_entity(label.values(_prices(), _at((5, "a"), (5, "b")), 2 * H))
+    two = _by_inst(label.values(_prices(), _at((5, "a"), (5, "b")), 2 * H))
     assert two == {"a": pytest.approx(107 / 105 - 1), "b": pytest.approx(193 / 195 - 1)}
-    assert _by_entity(label.values(_prices(), _at((5, "a")), 4 * H)) == {"a": pytest.approx(109 / 105 - 1)}
+    assert _by_inst(label.values(_prices(), _at((5, "a")), 4 * H)) == {"a": pytest.approx(109 / 105 - 1)}
 
 
 def test_holding_return_has_no_row_until_the_horizon_is_known_and_waits_for_publication() -> None:
     assert HoldingReturn().values(_prices(n=8), _at((5, "a")), 4 * H).is_empty()
     rows = [("a", "px", T0, T0, 100.0, 0), ("a", "px", T0 + H, T0 + 3 * H, 110.0, 0)]
-    late = field_table(
-        pd.DataFrame(rows, columns=["entity", "field", "event_time", "available_at", "value", "vintage"])
-    )
+    late = field_table(pd.DataFrame(rows, columns=["inst", "field", "event_time", "available_at", "value", "vintage"]))
     label = HoldingReturn("px")
-    assert _by_entity(label.values(late, _at((0, "a")), 2 * H)) == {"a": pytest.approx(0.0)}
-    assert _by_entity(label.values(late, _at((0, "a")), 3 * H)) == {"a": pytest.approx(0.1)}
+    assert _by_inst(label.values(late, _at((0, "a")), 2 * H)) == {"a": pytest.approx(0.0)}
+    assert _by_inst(label.values(late, _at((0, "a")), 3 * H)) == {"a": pytest.approx(0.1)}
 
 
 def test_a_price_is_current_until_the_next_is_due() -> None:
     label = HoldingReturn()
     half = _at((5, "a")).with_columns(pl.col("t") + pl.duration(minutes=30))
-    assert _by_entity(label.values(_prices(), half, 2 * H)) == {"a": pytest.approx(107 / 105 - 1)}
-    gap = _prices().filter(~((pl.col("entity") == "a") & pl.col("event_time").is_between(T0 + 10 * H, T0 + 14 * H)))
+    assert _by_inst(label.values(_prices(), half, 2 * H)) == {"a": pytest.approx(107 / 105 - 1)}
+    gap = _prices().filter(~((pl.col("inst") == "a") & pl.col("event_time").is_between(T0 + 10 * H, T0 + 14 * H)))
     out = label.values(gap, _at((7, "a"), (9, "a"), (11, "a"), (15, "a")), 2 * H)
     assert out["t"].to_list() == [T0 + 7 * H, T0 + 15 * H]
     assert out["value"].to_list() == pytest.approx([109 / 107 - 1, 117 / 115 - 1])
 
 
 def test_markout_is_signed_by_side() -> None:
-    out = _by_entity(Markout().values(_prices(), _at((5, "a", 1.0), (5, "b", -1.0)), H))
+    out = _by_inst(Markout().values(_prices(), _at((5, "a", 1.0), (5, "b", -1.0)), H))
     assert out == {"a": pytest.approx(106 / 105 - 1), "b": pytest.approx(-(194 / 195 - 1))}
 
 
 def test_labels_on_explore_data_never_reach_past_the_cutoff() -> None:
     explore = visible(_prices(), Tier.EXPLORE, Tiers(explore_end=to_ns(T0 + 10 * H)))
     label = HoldingReturn()
-    assert _by_entity(label.values(explore, _at((8, "a")), 2 * H)) == {"a": pytest.approx(110 / 108 - 1)}
+    assert _by_inst(label.values(explore, _at((8, "a")), 2 * H)) == {"a": pytest.approx(110 / 108 - 1)}
     assert label.values(explore, _at((8, "a")), 3 * H).is_empty()
 
 
@@ -82,7 +78,7 @@ def test_reference_labels_pass_the_checks_every_label_must_pass(plugin) -> None:
 
 def test_cluster_mean_weights_clusters_equally_after_costs() -> None:
     labels = pl.DataFrame(
-        {"t": [T0, T0, T0], "entity": ["x1", "x2", "y"], "symbol": ["x", "x", "y"], "value": [0.01, 0.03, 0.05]}
+        {"t": [T0, T0, T0], "inst": ["x1", "x2", "y"], "symbol": ["x", "x", "y"], "value": [0.01, 0.03, 0.05]}
     ).with_columns(pl.col("t").cast(TIME))
     out = ClusterMean(cluster="symbol").reduce(labels, H, FlatCosts(5, 5, legs=2))
     assert out["value"].to_list() == [pytest.approx((0.02 + 0.05) / 2 - 0.004)]
@@ -90,7 +86,7 @@ def test_cluster_mean_weights_clusters_equally_after_costs() -> None:
 
 def test_cluster_mean_with_top_counts_only_the_highest_scores() -> None:
     labels = pl.DataFrame(
-        {"t": [T0] * 4, "entity": list("abcd"), "symbol": list("abcd"), "value": [0.4, 0.3, 0.2, 0.1]}
+        {"t": [T0] * 4, "inst": list("abcd"), "symbol": list("abcd"), "value": [0.4, 0.3, 0.2, 0.1]}
     ).with_columns(pl.col("t").cast(TIME))
     top = ClusterMean(cluster="symbol", net=False, top=0.5)
     scored = labels.with_columns(score=pl.Series([1.0, 2.0, 3.0, 4.0]))
@@ -99,7 +95,7 @@ def test_cluster_mean_with_top_counts_only_the_highest_scores() -> None:
 
 
 def test_flat_costs_charge_every_leg_of_every_weight_change() -> None:
-    trades = pl.DataFrame({"t": [T0, T0], "entity": ["p", "q"], "from_weight": [0.0, 0.5], "to_weight": [0.25, 0.0]})
+    trades = pl.DataFrame({"t": [T0, T0], "inst": ["p", "q"], "from_weight": [0.0, 0.5], "to_weight": [0.25, 0.0]})
     assert FlatCosts(5, 5, legs=2).fees(trades) == pytest.approx((0.25 + 0.5) * 2 * 0.001)
 
 
@@ -107,14 +103,14 @@ def test_pair_carry_gives_every_horizon_at_once_as_it_gives_each_alone() -> None
     """``values_each`` shares the levels and running flows at ``t`` between horizons and changes no number."""
 
     def pairs(fields: pl.DataFrame, every: int) -> pl.DataFrame:
-        names = sorted(fields["entity"].unique().to_list())
+        names = sorted(fields["inst"].unique().to_list())
         rows = [(START_NS + h * 3_600 * 10**9, f"{a}>{b}", a, b) for h in range(5, 200, every) for a, b in [names[:2]]]
-        frame = pl.DataFrame(rows, schema=["t", "entity", "long", "short"], orient="row")
+        frame = pl.DataFrame(rows, schema=["t", "inst", "long", "short"], orient="row")
         return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))
 
     horizons = [4 * H, 24 * H, 72 * H]
     for seed, flow in ((0, "flow"), (1, None)):
-        fields = source(Source(entities=4, hours=240, lag=1, revised=0.3), seed)
+        fields = source(Source(insts=4, hours=240, lag=1, revised=0.3), seed)
         label, cands = PairCarry("price", flow), pairs(fields, 3 + seed)
         each = list(label.values_each(fields, cands, horizons))
         assert len(each) == 3 and all(

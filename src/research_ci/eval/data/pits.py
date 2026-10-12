@@ -1,5 +1,5 @@
-"""Built-in pits: generic ways to break one field of one entity in a copy of a field table. Each picks, at random, an
-entity whose field actually varies, so a pit never lands where it changes nothing."""
+"""Built-in pits: generic ways to break one field of one inst in a copy of a field table. Each picks, at random, an
+inst whose field actually varies, so a pit never lands where it changes nothing."""
 
 from collections.abc import Callable
 
@@ -15,18 +15,18 @@ NS = pl.Duration("ns")
 
 
 def target(fields: pl.DataFrame, field: str, rng: np.random.Generator, exclude: str | None = None) -> str:
-    """An entity whose ``field`` has enough rows for a pit. It has at least 20 rows of ``field`` and more than two
+    """An inst whose ``field`` has enough rows for a pit. It has at least 20 rows of ``field`` and more than two
     distinct values."""
-    stats = fields.filter(pl.col("field") == field).group_by("entity").agg(pl.len(), pl.col("value").n_unique())
-    other = pl.col("entity").ne_missing(pl.lit(exclude, dtype=pl.String))
-    names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2) & other)["entity"].sort()
+    stats = fields.filter(pl.col("field") == field).group_by("inst").agg(pl.len(), pl.col("value").n_unique())
+    other = pl.col("inst").ne_missing(pl.lit(exclude, dtype=pl.String))
+    names = stats.filter((pl.col("len") >= 20) & (pl.col("value") > 2) & other)["inst"].sort()
     if names.is_empty():
-        raise ValueError(f"no entity where {field} varies enough to plant a pit")
+        raise ValueError(f"no inst where {field} varies enough to plant a pit")
     return str(names[int(rng.integers(names.len()))])
 
 
-def _rows(fields: pl.DataFrame, entity: str, field: str) -> pl.Expr:
-    return (pl.col("entity") == entity) & (pl.col("field") == field)
+def _rows(fields: pl.DataFrame, inst: str, field: str) -> pl.Expr:
+    return (pl.col("inst") == inst) & (pl.col("field") == field)
 
 
 def _scale(fields: pl.DataFrame, field: str, rng: np.random.Generator, k: float, after: bool) -> pl.DataFrame:
@@ -39,17 +39,17 @@ def _scale(fields: pl.DataFrame, field: str, rng: np.random.Generator, k: float,
 
 
 def unit(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A unit error: one entity's field a thousand times larger. It holds throughout."""
+    """A unit error: one inst's field a thousand times larger. It holds throughout."""
     return _scale(fields, field, rng, 1000.0, after=False)
 
 
 def level_break(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A level break: one entity's field half again as large. It holds from a random time on."""
+    """A level break: one inst's field half again as large. It holds from a random time on."""
     return _scale(fields, field, rng, 1.5, after=True)
 
 
 def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A gap: ten usual spacings missing from a random time. The spacings are one entity's, of the field."""
+    """A gap: ten usual spacings missing from a random time. The spacings are one inst's, of the field."""
     e = target(fields, field, rng)
     ev = events(fields.filter(_rows(fields, e, field)))
     spacing = int(ev["spacing"].drop_nulls()[0])
@@ -62,7 +62,7 @@ def gap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFr
 
 
 def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A duplicate: one event repeated a millisecond later. The event is one of an entity's events of the field."""
+    """A duplicate: one event repeated a millisecond later. The event is one of an inst's events of the field."""
     e = target(fields, field, rng)
     rows = fields.filter(_rows(fields, e, field))
     copy = rows.sample(1, seed=int(rng.integers(2**31))).with_columns(
@@ -72,7 +72,7 @@ def duplicate(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.
 
 
 def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A shift: one entity's events stamped one usual spacing late. The events are those of the field."""
+    """A shift: one inst's events stamped one usual spacing late. The events are those of the field."""
     e = target(fields, field, rng)
     spacing = int(events(fields.filter(_rows(fields, e, field)))["spacing"].drop_nulls()[0])
     hit = _rows(fields, e, field)
@@ -84,7 +84,7 @@ def shift(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.Data
 
 
 def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A leak: each event carries the value of the next. The events are one entity's, of the field."""
+    """A leak: each event carries the value of the next. The events are one inst's, of the field."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     rows = fields.filter(hit).sort("event_time").with_columns(pl.col("value").shift(-1)).drop_nulls("value")
@@ -92,7 +92,7 @@ def leak(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataF
 
 
 def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A spike: one event of one entity's field, ten times larger."""
+    """A spike: one event of one inst's field, ten times larger."""
     e = target(fields, field, rng)
     hit = _rows(fields, e, field)
     times = fields.filter(hit)["event_time"].sort()
@@ -103,7 +103,7 @@ def spike(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.Data
 
 
 def swap(fields: pl.DataFrame, field: str, rng: np.random.Generator) -> pl.DataFrame:
-    """A swap: one entity's series replaced by another entity's. The other's series is taken at the same times, rescaled
+    """A swap: one inst's series replaced by another inst's. The other's series is taken at the same times, rescaled
     to start at the same level: a ticker reused for a different asset, which a check on levels alone will not see."""
     a = target(fields, field, rng)
     b = target(fields, field, rng, exclude=a)
@@ -130,17 +130,17 @@ BUILTIN: dict[str, Plant] = {
 
 
 def _touched(name: str, seed: int) -> list[str]:
-    """The entities whose rows a pit changed, planted in prices of a synthetic source."""
+    """The insts whose rows a pit changed, planted in prices of a synthetic source."""
     clean = source(Source(), seed)
     planted = BUILTIN[name](clean, "price", np.random.default_rng(seed))
     keys = clean.columns
     gone, new = clean.join(planted, on=keys, how="anti"), planted.join(clean, on=keys, how="anti")
-    return sorted(set(gone["entity"]) | set(new["entity"]))
+    return sorted(set(gone["inst"]) | set(new["inst"]))
 
 
 CASES = [
     Case(
-        "every pit changes exactly one entity, on every source",
+        "every pit changes exactly one inst, on every source",
         lambda: sorted({name for name in BUILTIN for seed in range(5) if len(_touched(name, seed)) != 1}),
         [],
     ),
