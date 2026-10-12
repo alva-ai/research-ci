@@ -7,8 +7,8 @@ from research_ci.eval.synthetic import hand
 
 
 def quantile_spread(table: pl.DataFrame, share: float = 0.2, label: str = "y") -> pl.DataFrame:
-    """Mean label of the top ``share`` of candidates by score minus that of the bottom ``share``, at each time; a
-    share is ``floor(share * n)`` candidates, at least one."""
+    """Mean label of the top ``share`` less the bottom ``share``. The shares are of the candidates by score, at each
+    time; a share is ``floor(share * n)`` candidates, at least one."""
     rows = table.filter(pl.col("score").is_not_null() & pl.col(label).is_not_null())
     n = pl.len().over("t")
     k = (n * share + 1e-9).floor().clip(lower_bound=1)

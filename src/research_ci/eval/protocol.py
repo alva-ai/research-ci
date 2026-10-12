@@ -27,8 +27,9 @@ def truncated(fields: pl.DataFrame, t: int) -> pl.DataFrame:
 def universe_pit(
     candidates: Candidates, fields: pl.DataFrame, full: pl.DataFrame, cuts: Sequence[int], margin_ns: int
 ) -> Check:
-    """With the data cut at ``cut``, the candidates at ``cut - margin`` must equal those from all data. The margin
-    lets a plugin that needs the next bar to finish one still pass; ``universe_causal`` covers shorter look-aheads."""
+    """Candidates before the cut equal those from all data. With the data cut at ``cut``, the candidates at
+    ``cut - margin`` must equal those from all data. The margin lets a plugin that needs the next bar to finish one
+    still pass; ``universe_causal`` covers shorter look-aheads."""
     values = [c for c, d in full.schema.items() if c not in ("t", "entity") and d.is_numeric()]
     bad = []
     for cut in cuts:
@@ -43,7 +44,8 @@ def universe_pit(
 
 
 def universe_causal(candidates: Candidates, fields: pl.DataFrame, full: pl.DataFrame, t: int) -> Check:
-    """Change every value that becomes known after ``t``: the candidates at ``t`` must not move."""
+    """Candidates at ``t`` ignore every value known after ``t``. Every value that becomes known after ``t`` is changed:
+    the candidates at ``t`` must not move."""
     later = pl.col("available_at") > lit_time(t)
     moved = fields.with_columns(pl.when(later).then(pl.col("value") * 1.01 + 1e-6).otherwise(pl.col("value")))
     values = [c for c, d in full.schema.items() if c not in ("t", "entity") and d.is_numeric()]
@@ -55,8 +57,9 @@ def universe_causal(candidates: Candidates, fields: pl.DataFrame, full: pl.DataF
 
 
 def label_cases(name: str, values: Values, cases: Sequence[LabelCase]) -> list[Check]:
-    """The author's worked examples must come out as written, and must move when their inputs move: shifted in time,
-    perturbed inside the window, or missing a field. Perturbing data after the window must change nothing."""
+    """Worked examples hold as written and move with their inputs. The author's worked examples must come out as
+    written, and must move when their inputs move: shifted in time, perturbed inside the window, or missing a field.
+    Perturbing data after the window must change nothing."""
     if not cases:
         return [Check(f"label {name}: worked examples", "fail", "the label gives no worked examples")]
     wrong, blind = [], []
@@ -83,7 +86,8 @@ def label_cases(name: str, values: Values, cases: Sequence[LabelCase]) -> list[C
 def label_truncation(
     name: str, values: Values, fields: pl.DataFrame, cands: pl.DataFrame, horizon: pd.Timedelta, cuts: Sequence[int]
 ) -> Check:
-    """Labels whose window ends by ``cut`` must be the same when the data stops at ``cut``."""
+    """Data stopping at ``cut`` leaves labels ending by it unchanged. Labels whose window ends by ``cut`` must be the
+    same when the data stops at ``cut``."""
     h = int(horizon.value)
     bad = []
     for cut in cuts:
@@ -101,7 +105,8 @@ def label_truncation(
 
 
 def consumer_pit(run: Run, fields: pl.DataFrame, full: ConsumerResult, cuts: Sequence[int], margin_ns: int) -> Check:
-    """A run on data cut at ``cut`` must match the full run for every period ending before ``cut - margin``."""
+    """Cut data gives the full run's periods before the cut. A run on data cut at ``cut`` must match the full run for
+    every period ending before ``cut - margin``."""
     bad = []
     for cut in cuts:
         part = run(truncated(fields, cut), None)
@@ -123,8 +128,8 @@ def consumer_pit(run: Run, fields: pl.DataFrame, full: ConsumerResult, cuts: Seq
 
 
 def causal(run: Run, fields: pl.DataFrame, base: ConsumerResult, at: int, period_ns: int) -> Check:
-    """Change every value that becomes known in ``(at, at + period]``: nothing up to ``at`` may move, and something
-    after it must."""
+    """Changes known after ``at`` must move only what comes after. Every value that becomes known in
+    ``(at, at + period]`` is changed: nothing up to ``at`` may move, and something after it must."""
     window = (pl.col("available_at") > lit_time(at)) & (pl.col("available_at") <= lit_time(at + period_ns))
     moved = fields.with_columns(pl.when(window).then(pl.col("value") * 1.01 + 1e-6).otherwise(pl.col("value")))
     diff = _diff(run(moved, None).net, base.net).filter(pl.col("d").abs() > 1e-12)
@@ -137,8 +142,9 @@ def causal(run: Run, fields: pl.DataFrame, base: ConsumerResult, at: int, period
 
 
 def busiest(fields: pl.DataFrame, times: list[int], period: int) -> int:
-    """A decision time in the middle third whose next period brings the most kinds of field, so a causality test
-    there touches every input, including sparse ones such as settlements."""
+    """A decision time whose next period brings the most fields. It is the one in the middle third whose next period
+    brings the most kinds of field, so a causality test there touches every input, including sparse ones such as
+    settlements."""
     middle = times[len(times) // 3 : 2 * len(times) // 3] or times
     t0 = times[0]
     at = fields.select(pl.col("available_at").dt.epoch("ns").alias("a"), "field")
@@ -156,7 +162,7 @@ def deterministic(a: ConsumerResult, b: ConsumerResult) -> Check:
 
 
 def adds_up(result: ConsumerResult) -> list[Check]:
-    """Components add up to net, and the consumer's own checks pass."""
+    """Components add up to net; the consumer's own checks pass."""
     present = [c for c in COMPONENTS if c in result.net.columns]
     if present:
         gap = result.net.select((pl.sum_horizontal(present) - pl.col("net")).abs().max()).item()
@@ -172,7 +178,8 @@ def adds_up(result: ConsumerResult) -> list[Check]:
 
 
 def fees_match(result: ConsumerResult, costs: CostModel) -> Check:
-    """What the consumer charged must be what the cost model says its trades cost."""
+    """The consumer charges what the cost model says. What the consumer charged must be what the cost model says its
+    trades cost."""
     if "fees" not in result.net.columns:
         return Check("fees match the cost model", "warn", "the consumer reports no fees")
     charged = -float(result.net["fees"].sum())
@@ -183,10 +190,11 @@ def fees_match(result: ConsumerResult, costs: CostModel) -> Check:
 
 
 def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int) -> Check:
-    """The consumer and the label are written independently; on the positions held, they must agree on what each
-    component booked every period earned, period by period. A gap in the total is an error in size or sign; a gap
-    that only shows period by period is money booked in another period than the label's, such as a flow at a decision
-    time paid to the positions that decision opens. Either fails: verdicts are judged period by period."""
+    """The consumer books what the label says, period by period. The consumer and the label are written independently;
+    on the positions held, they must agree on what each component booked every period earned, period by period. A gap in
+    the total is an error in size or sign; a gap that only shows period by period is money booked in another period than
+    the label's, such as a flow at a decision time paid to the positions that decision opens. Either fails: verdicts are
+    judged period by period."""
     shared = [c for c in result.marked if c in result.net.columns and c in labels.columns]
     if not shared:
         return Check("consumer matches labels", "skip", "no component booked every period by both")
@@ -215,7 +223,8 @@ def matches_labels(result: ConsumerResult, labels: pl.DataFrame, period_ns: int)
 
 
 def passthrough(run: Run, fields: pl.DataFrame, base: ConsumerResult, scores: pl.DataFrame) -> Check:
-    """Handing the consumer its own baseline scores must change nothing: the score path is wired correctly."""
+    """The consumer's own baseline scores must change nothing. Handing the consumer its own baseline scores must change
+    nothing: the score path is wired correctly."""
     mismatch = _frame_mismatch(run(fields, scores).net, base.net, ["t"], ["net"])
     if mismatch:
         return Check("scores pass through", "fail", f"own scores change the result: {mismatch}")
@@ -223,7 +232,7 @@ def passthrough(run: Run, fields: pl.DataFrame, base: ConsumerResult, scores: pl
 
 
 def target_reads_score(name: str, reduce: Callable[[pl.DataFrame], pl.DataFrame], rows: pl.DataFrame) -> Check:
-    """A target must move with the scores: the same label rows with two draws of random scores give other values."""
+    """A target must move with the scores. The same label rows with two draws of random scores give other values."""
     rng = np.random.default_rng(0)
     a, b = (_by_t(reduce(rows.with_columns(score=rng.standard_normal(rows.height)))) for _ in range(2))
     if a.height == b.height and np.allclose(a["value"].to_numpy(), b["value"].to_numpy(), equal_nan=True):
@@ -236,7 +245,8 @@ def target_reads_score(name: str, reduce: Callable[[pl.DataFrame], pl.DataFrame]
 
 
 def branch_diff(base: ConsumerResult, branch: ConsumerResult, start: int, end: int) -> tuple[float, float]:
-    """The branch's extra net over ``(start, end]``, and how much of the baseline's positions it still holds there."""
+    """The branch's extra net over ``(start, end]``, and its overlap. The overlap is how much of the baseline's
+    positions it still holds there."""
     window = (pl.col("t") > lit_time(start)) & (pl.col("t") <= lit_time(end))
     diff = float(branch.net.filter(window)["net"].sum()) - float(base.net.filter(window)["net"].sum())
     a = base.positions.filter(window).select("t", "entity", pl.col("weight").abs().alias("a"))
@@ -248,8 +258,9 @@ def branch_diff(base: ConsumerResult, branch: ConsumerResult, start: int, end: i
 
 
 def perturb(scores: pl.DataFrame, kind: str, share: float, block_ns: int, seed: int) -> pl.DataFrame:
-    """An uninformative change to scores: drop ``share`` of the candidates, or permute the scores of ``share`` of
-    them among themselves at each time. The chosen candidates stay chosen for a whole block."""
+    """An uninformative change to scores: a share dropped or permuted. It drops ``share`` of the candidates, or permutes
+    the scores of ``share`` of them among themselves at each time. The chosen candidates stay chosen for a whole block.
+    """
     block = (pl.col("t").dt.epoch("ns") // block_ns).alias("block")
     u = pl.struct(pl.col("entity"), block).hash(seed) / float(2**64)
     if kind == "drop":

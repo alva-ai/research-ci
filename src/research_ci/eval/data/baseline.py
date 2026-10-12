@@ -13,7 +13,7 @@ ANOMALY_SCHEMA = {"kind": pl.String, "entity": pl.String, "field": pl.String, "s
 
 
 def first_vintages(fields: pl.DataFrame) -> pl.DataFrame:
-    """One row per event: the first vintage, as a decision at the time would have seen it."""
+    """One row per event: its first vintage. That is the vintage a decision at the time would have seen."""
     return (
         fields.sort("vintage")
         .unique(["entity", "field", "event_time"], keep="first")
@@ -22,7 +22,8 @@ def first_vintages(fields: pl.DataFrame) -> pl.DataFrame:
 
 
 def events(fields: pl.DataFrame) -> pl.DataFrame:
-    """First vintages with the spacing to the previous event of the same entity and field, and its typical size."""
+    """First vintages with each event's spacing and its typical size. The spacing is to the previous event of the same
+    entity and field."""
     gap = pl.col("event_time").diff().over("entity", "field").dt.total_nanoseconds()
     return (
         first_vintages(fields)
@@ -39,9 +40,10 @@ def baseline(
     gap_factor: float = 3.0,
     near_ns: int = 60 * 10**9,
 ) -> tuple[list[Check], pl.DataFrame]:
-    """Generic checks, and the anomalies they flag: long gaps between events and events closer than ``near_ns``; and,
-    in the fields the source declares as ``levels``, moves of ``shift_ratio`` or more from the median of the last
-    ``window`` events that persist over the next ``window``, flagged where they start."""
+    """Generic checks and their anomalies: gaps, near-duplicates, level shifts. The anomalies are long gaps between
+    events and events closer than ``near_ns``; and, in the fields the source declares as ``levels``, moves of
+    ``shift_ratio`` or more from the median of the last ``window`` events that persist over the next ``window``, flagged
+    where they start."""
     e = events(fields)
     checks = []
     bad = fields.filter(pl.col("value").is_null() | ~pl.col("value").is_finite()).height
@@ -68,7 +70,7 @@ def baseline(
 def level_shift_anomalies(
     fields: pl.DataFrame, levels: tuple[str, ...] = (), shift_ratio: float = 0.0, window: int = 0
 ) -> pl.DataFrame:
-    """The baseline's level shifts alone, read from the declared levels only."""
+    """The baseline's level shifts alone, from the declared levels only."""
     if not levels:
         return pl.DataFrame(schema=ANOMALY_SCHEMA)
     e = events(fields.filter(pl.col("field").is_in(list(levels))))

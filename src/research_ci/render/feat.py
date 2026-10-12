@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from research_ci.render.common import MARK, adder, amount, check_line, figure, num, rolled
+from research_ci.render.common import MARK, adder, amount, check_line, eval_line, failed_tests, figure, num, rolled
 
 
 def calibration_lines(cal: dict[str, Any]) -> list[str]:
@@ -30,30 +30,21 @@ def result_card(spec: dict[str, Any], idea: str, version: int) -> str:
     add("features", f"{f['path']} · {f['hash'][:12]}")
     sc = spec["scores"]
     add("scores", f"{sc['rows']:,} rows · {sc['share']:.0%} of candidate rows · {sc['hash'][:12]}")
-    add("floors", *[check_line(c) for c in spec["floors"]])
+    add("floors", *[eval_line(c) for c in spec["floors"]])
     add("cost", cost_line(spec.get("cost")))
     cal = spec["calibration"]
     if cal["ran"]:
         add("calibrate", *calibration_lines(cal))
     add("need", f"z ≥ {spec['need']:.2f} on submission {spec['n']}")
     for d in spec.get("decisive", []):
-        add("decisive", _decisive_line(d))
-    if spec.get("criteria"):
-        add("shown", "diagnostics, not deciding: the engine's defaults and the idea's criteria")
-    for r in spec.get("criteria", []):
-        mark = "ok  " if r["passed"] else "[!] "
-        best = f" at {r['best']}" if r.get("best") else ""
-        explains = ", ".join(r["explains"])
-        head = f"{mark} {r['criterion']} ({r['by']}) vs {r['world']} ({explains}): z {num(r['z'])}{best} · {r['note']}"
-        add("", head)
-        for h in r["horizons"]:
-            counted = "" if h["counted"] else "  not counted"
-            add(
-                "",
-                f"       {h['h']:<7}value {num(h['real']):>10} ± {num(h['se']):<10} null {num(h['null_mean']):>10} "
-                f"sd {num(h['null_sd']):<10} {h['blocks']:>4} blocks  z {num(h['z'])}{counted}",
-            )
-    add("worlds", check_line(spec["coverage"]))
+        add("decisive", _decisive_line(d, spec["need"]))
+    rows = spec.get("evals", spec.get("criteria", []))
+    if rows:
+        add("evals", "shown, not deciding: the engine's default evals and the idea's own (library or case)")
+    for r in rows:
+        for line in _eval_rows(r, spec["need"]):
+            add("", line)
+    add("worlds", eval_line(spec["coverage"]))
     v = spec["verdict"]
     add("verdict", v["status"], *v["notes"])
     add("warnings", *[f"[!] {w}" for w in spec.get("warnings", [])])
@@ -61,14 +52,44 @@ def result_card(spec: dict[str, Any], idea: str, version: int) -> str:
     return "\n".join(out)
 
 
-def _decisive_line(d: dict[str, Any]) -> str:
+def _eval_rows(r: dict[str, Any], need: float) -> list[str]:
+    """An eval's line against one world, with its horizons; an invalid case eval with the test it failed, and no
+    numbers."""
+    name = r.get("eval") or r.get("criterion", "")
+    by = r.get("by", "")
+    v = r.get("validation")
+    if r.get("invalid") and v:
+        return [f"{by:<8} FAIL {name}: {v['summary']}; not judged, so no numbers; {r['fix']}", *failed_tests(v)]
+    mark = "ok  " if r["passed"] else "[!] "
+    best = f" at {r['best']}" if r.get("best") else ""
+    explains = ", ".join(r["explains"])
+    valid = f" ({v['summary']})" if v else ""
+    z = f"z {num(r['z'])}" if r["passed"] else f"z {num(r['z'])} < {need:.2f}"
+    head = f"{by:<8} {mark} {name}{valid} vs {r['world']} ({explains}): {z}{best} · {r['note']}{_shuffles(r)}"
+    lines = [head]
+    for h in r["horizons"]:
+        counted = "" if h["counted"] else "  not counted"
+        lines.append(
+            f"{'':<9}      {h['h']:<7}value {num(h['real']):>10} ± {num(h['se']):<10} null {num(h['null_mean']):>10} "
+            f"sd {num(h['null_sd']):<10} {h['blocks']:>4} blocks  z {num(h['z'])}{counted}"
+        )
+    return lines
+
+
+def _decisive_line(d: dict[str, Any], need: float) -> str:
     at = f" at {d['best']}" if d["best"] else ""
     year = rolled(d["effect"], d["best"], d) if d["best"] else ""
     year = f" ({year} if rolled)" if year else ""
+    z = f"z {num(d['z'])} {'≥' if d['outcome'] == 'passed' else '<'} {need:.2f}"
     return (
-        f"{d['on']}: gain over random {amount(d['effect'], d)} ± {figure(d['se'], d)}{at}{year} · "
-        f"z {num(d['z'])} · {d['outcome'].upper()}"
+        f"{'floor':<8} {d['on']}: gain over random {amount(d['effect'], d)} ± {figure(d['se'], d)}{at}{year} · "
+        f"{z}{_shuffles(d)} · {d['outcome'].upper()}"
     )
+
+
+def _shuffles(r: dict[str, Any]) -> str:
+    """How many shuffles of the world the z rests on; records from before it was kept show nothing."""
+    return f" · {r['shuffles']} shuffles" if r.get("shuffles") else ""
 
 
 def explore_card(spec: dict[str, Any], idea: str) -> str:
@@ -78,7 +99,7 @@ def explore_card(spec: dict[str, Any], idea: str) -> str:
     add("features", f"{f['path']} · {f['hash'][:12]}")
     sc = spec["scores"]
     add("scores", f"{sc['rows']:,} rows · {sc['share']:.0%} of candidate rows · {sc['hash'][:12]}")
-    add("floors", *[check_line(c) for c in spec["floors"]])
+    add("floors", *[eval_line(c) for c in spec["floors"]])
     add("cost", cost_line(spec.get("cost")))
     add("warnings", *[f"[!] {w}" for w in spec.get("warnings", [])])
     out.append("-" * 100)

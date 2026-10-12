@@ -17,7 +17,8 @@ START_NS = 1_767_225_600 * 10**9
 
 
 def market(m: Market, seed: int) -> pl.DataFrame:
-    """Columns ``t``, ``entity``, ``cluster``, ``group``, ``score`` and ``y``, one row per entity and time."""
+    """A synthetic evaluation table, one row per entity and time. Columns ``t``, ``entity``, ``cluster``, ``group``,
+    ``score`` and ``y``."""
     rng = np.random.default_rng(seed)
     cluster = np.arange(m.entities) % m.clusters
     group = cluster % m.groups
@@ -44,8 +45,8 @@ def market(m: Market, seed: int) -> pl.DataFrame:
 
 
 def source(s: Source, seed: int) -> pl.DataFrame:
-    """A field table: ``price`` hourly, known at its event; ``flow`` at each settlement, known ``lag`` hours later,
-    some of it revised one settlement after that as vintage 1."""
+    """A synthetic field table of hourly prices and settled flows. ``price`` is hourly, known at its event; ``flow``
+    comes at each settlement, known ``lag`` hours later, some of it revised one settlement after that as vintage 1."""
     rng = np.random.default_rng(seed)
     names = _named("e", np.arange(s.entities))
     hours = np.arange(1, s.hours + 1, dtype=np.int64)
@@ -94,7 +95,7 @@ def source(s: Source, seed: int) -> pl.DataFrame:
 
 
 def hand(columns: Mapping[str, list[Any]], t: int = 0) -> pl.DataFrame:
-    """A small evaluation table worked by hand, all at decision time ``t`` (in hours)."""
+    """A small evaluation table worked by hand, at one time. All its rows are at decision time ``t`` (in hours)."""
     rows = len(next(iter(columns.values())))
     frame = pl.DataFrame({"t": [t * HOUR_NS] * rows, **columns}, strict=False)
     return frame.with_columns(pl.col("t").cast(pl.Datetime("ns")).dt.replace_time_zone("UTC").cast(TIME))

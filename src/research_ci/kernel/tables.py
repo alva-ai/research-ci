@@ -41,12 +41,30 @@ def field_table(df: pl.DataFrame | pd.DataFrame) -> pl.DataFrame:
     except pl.exceptions.PolarsError as exc:
         raise SchemaError(str(exc)) from exc
 
-    duplicated = int(frame.select(pl.struct(KEY).is_duplicated().sum()).item())
+    duplicated, revised_early = _key_checks(frame)
     if duplicated:
         raise SchemaError(f"{duplicated} duplicate rows on {KEY}")
-    revised_early = frame.sort(KEY).select(
-        (pl.col("available_at").diff().over(["entity", "field", "event_time"]) < pl.duration(nanoseconds=0)).any()
-    )
-    if revised_early.item():
+    if revised_early:
         raise SchemaError("a revision must not be available before the vintage it revises")
     return frame.sort(["available_at", *KEY]).with_columns(pl.col("available_at").set_sorted())
+
+
+def _key_checks(frame: pl.DataFrame) -> tuple[int, bool]:
+    """How many rows share their key with another, and whether a revision is available before the vintage it revises:
+    both from one sort of the key, with entity and field as codes."""
+    keyed = frame.select(
+        pl.col("entity").cast(pl.Categorical).to_physical().alias("e"),
+        pl.col("field").cast(pl.Categorical).to_physical().alias("f"),
+        pl.col("event_time").dt.epoch("ns").alias("t"),
+        pl.col("vintage").alias("v"),
+        pl.col("available_at").dt.epoch("ns").alias("a"),
+    ).sort("e", "f", "t", "v")
+
+    def same(columns: str, k: int) -> pl.Expr:
+        return pl.all_horizontal(pl.col(c) == pl.col(c).shift(k) for c in columns).fill_null(False)
+
+    found = keyed.select(
+        (same("eftv", 1) | same("eftv", -1)).sum().alias("duplicated"),
+        (same("eft", 1) & (pl.col("a") < pl.col("a").shift(1))).any().alias("early"),
+    )
+    return int(found["duplicated"].item()), bool(found["early"].item())

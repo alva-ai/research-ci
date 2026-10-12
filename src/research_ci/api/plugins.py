@@ -147,7 +147,10 @@ class LabelPlugin(Protocol):
     optional component columns such as ``flow`` and ``price`` that add up to ``value``), before costs.
 
     A row for ``t`` may use data known up to ``t + horizon`` and nothing later; the engine checks this by cutting the
-    data. ``cases`` are the author's worked examples."""
+    data. ``cases`` are the author's worked examples. An optional method ``values_each(fields, candidates, horizons)``
+    yields the frames ``values`` gives at each horizon, in order, sharing the work that does not depend on the
+    horizon; the engine calls it, when the class that defines ``values`` defines it too, to ask for every horizon at
+    once."""
 
     def values(self, fields: pl.DataFrame, candidates: pl.DataFrame, horizon: pd.Timedelta) -> pl.DataFrame: ...
 
@@ -174,6 +177,10 @@ class TargetPlugin(Protocol):
     Two optional class attributes tell the cards how to show the number. ``per`` is a short word for what one value
     is, such as ``"entry"``: values are then fractions shown in basis points per that unit. ``rolls = True`` says a
     value is a return over the horizon that can be repeated back to back, so a card may add what it comes to over a
-    year, ``value × 365 days / h``. Without them, cards show the raw number."""
+    year, ``value × 365 days / h``. Without them, cards show the raw number.
+
+    An optional method ``batched(horizon, costs)`` returns the same ``reduce`` computed on many shuffles of the scores
+    at once (a form from ``research_ci.eval.statistics.shuffled``), or ``None``; the null worlds then run faster, with
+    the same numbers."""
 
     def reduce(self, labels: pl.DataFrame, horizon: pd.Timedelta, costs: CostModel) -> pl.DataFrame: ...

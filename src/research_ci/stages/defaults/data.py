@@ -6,24 +6,25 @@ it checks fidelity, that the rows are what the venue reported, and the data laye
 ``CHECKS`` come after it, in order, and check fitness, whether faithful rows can be used for research: a ticker reused
 for another asset, a price at zero or stuck, an entity too short for the horizons; the last only shows how much of
 the noise rests on one cluster. They read only the FieldTable, what the plugins declare (``levels``, ``hedge``) and
-the contract; none needs reference data or knows an asset class. Each returns lines for the DataCard, warnings,
-treatments, and items a person must decide. The data layer applies the treatments by default and weighs each by its
-influence on the decisive number; a check sees the data with the treatments before it applied (``Seen.prior``). An
-idea's own tests (``TESTS`` in ``data.py``) run after these; the built-in pits of the categories in ``PITS``, with the
-idea's own (``PITS`` in ``nulls/data.py``), calibrate them. Tools that need knowledge of a case, such as adjusting
-stock prices for splits or rolling futures, are not defaults: they are eval methods an idea uses on purpose.
+the contract; none needs reference data or knows an asset class. Each is a step (``stages/steps.py``) that reads the
+data check's context (``Seen`` in ``stages/floor/data.py``) and returns lines for the DataCard, warnings, treatments,
+and items a person must decide. The data layer applies the treatments by default and weighs each by its influence on
+the decisive number; a check sees the data with the treatments before it applied (``Seen.prior``). An idea's own
+evals (``EVALS`` in ``data.py``) run after these, once validated; the built-in pits of the categories in ``PITS``, with
+the idea's own (``PITS`` in ``nulls/data.py``), test the ones that claim to cover them. Tools that need knowledge of a
+case, such as adjusting stock prices for splits or rolling futures, are not defaults: they are evals an idea lists on
+purpose, from the engine's library or its own case evals.
 
 The engine hash leaves ``stages/defaults`` out: the data freeze pins the treated data by content, so a changed list
 cannot change a frozen result; it shows at the next ``rci data check``.
 """
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
 from typing import Any
 
 import polars as pl
 
-from research_ci.api.contract import Contract, span
+from research_ci.api.contract import span
 from research_ci.api.data import Hedge
 from research_ci.eval.data import concentration as cc
 from research_ci.eval.data import coverage as cv
@@ -35,7 +36,9 @@ from research_ci.eval.data.baseline import level_shift_anomalies
 from research_ci.kernel.time.clock import from_ns, span_ns
 from research_ci.kernel.verdict.check import Check
 from research_ci.kernel.verdict.power import DAY_NS
-from research_ci.stages.source import declared_levels
+from research_ci.stages.floor.data import Seen
+from research_ci.stages.floor.source import declared_levels
+from research_ci.stages.steps import Found, Step
 
 STALE_AFTER = "2 days"
 IDENTITY_GAP = 3.0
@@ -47,45 +50,8 @@ PITS = ("unit", "level_break", "gap", "duplicate", "shift", "leak", "spike", "sw
 KEYS = ["entity", "field", "event_time"]
 
 
-@dataclass(frozen=True)
-class Decisive:
-    """The label rows of the contract's decisive numbers, keyed by label and horizon, such as ``carry 24h``:
-    ``rows(treatments, columns)`` stacks every key's rows as the treatments leave them, with ``key``, ``h_ns`` (the
-    horizon in ns), ``t`` and the named columns of the label or the candidates."""
-
-    rows: Callable[[Sequence[tr.Treatment], Sequence[str]], pl.DataFrame]
-
-
-@dataclass(frozen=True)
-class Seen:
-    """What a check reads: the contract, the explore data, the candidates (``None`` without a universe), the data and
-    universe plugins, the source's admission, when the newest row became known, and now (both in ns); the decisive
-    numbers (``None`` without a universe), and the treatments the checks before it found that will be applied."""
-
-    contract: Contract
-    fields: pl.DataFrame
-    candidates: pl.DataFrame | None
-    source: Any
-    universe: Any
-    admission: dict[str, Any]
-    latest: int
-    now: int
-    decisive: Decisive | None = None
-    prior: tuple[tr.Treatment, ...] = ()
-
-
-@dataclass
-class Found:
-    """``decide`` are items a person must look at; ``shown`` goes into the data check's record, for the DataCard."""
-
-    checks: list[Check] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    treatments: list[tr.Treatment] = field(default_factory=list)
-    decide: list[str] = field(default_factory=list)
-    shown: dict[str, Any] = field(default_factory=dict)
-
-
 def fresh(seen: Seen) -> Found:
+    """Data whose newest row is older than ``STALE_AFTER`` is a warning: collect live data first."""
     return freshness(seen.latest, seen.now)
 
 
@@ -258,14 +224,14 @@ def concentration(seen: Seen) -> Found:
     return out
 
 
-CHECKS: list[Callable[[Seen], Found]] = [
-    fresh,
-    level_shifts,
-    level_sanity,
-    identity_breaks,
-    coverage,
-    hedge_guard,
-    concentration,
+CHECKS = [
+    Step("data is current", "warns", fresh, "Warns when the newest row is too old"),
+    Step("level shifts", "treats", level_shifts, "Masks level jumps the source did not confirm", "levels"),
+    Step("level sanity", "treats", level_sanity, "Masks levels at zero, stuck, or spiking", "levels"),
+    Step("identity breaks", "treats", identity_breaks, "Splits an entity that returns at another level", "levels"),
+    Step("coverage", "treats", coverage, "Drops entities shorter than the longest horizon"),
+    Step("hedge guard", "treats", hedge_guard, "Drops candidates whose legs are not one asset", "hedge"),
+    Step("influence concentration", "warns", concentration, "Shows the clusters most of the noise rests on"),
 ]
 
 

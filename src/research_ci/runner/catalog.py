@@ -1,16 +1,19 @@
 """What an agent can use without reading the engine's source: every installed plugin with its options and
-declarations (``rci plugins``), and the eval methods a criterion, a data test, or a pit can call, each with the worked
-examples and properties that back it, and how a null world is written (``rci methods``)."""
+declarations (``rci plugins``), and the general evals of the engine's library an idea's ``EVALS`` can list or its case
+evals can call, each with the worked examples and properties that back it, how a case eval and its tests are written,
+and how a null world is written (``rci methods``)."""
 
 import importlib
 import inspect
 import pkgutil
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, is_dataclass
+from dataclasses import MISSING, asdict, fields, is_dataclass
 from importlib.metadata import entry_points
 from types import CodeType, ModuleType
 from typing import Any
 
+from research_ci.api.evals import FORMAT, Eval
+from research_ci.api.methods import Case, Market, Power, Recovers, Size, Source
 from research_ci.api.nulls import Null, PermuteWithin
 from research_ci.api.plugins import ENTRY_POINTS
 from research_ci.runner import plugins as loader
@@ -25,26 +28,37 @@ KINDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("consumer", ("timing", "run")),
 )
 METHODS: tuple[tuple[str, str, str], ...] = (
-    (
-        "criterion",
-        "research_ci.eval.statistics",
-        "feat.py: CRITERIA = [Criterion(name, evaluate)]; evaluate(table) returns t, value per decision time",
-    ),
-    ("criterion", "research_ci.eval.structure", ""),
-    (
-        "data test",
-        "research_ci.eval.data.sanity",
-        "data.py: TESTS = [DataTest(name, check, covers, on_fail)]; check(fields) returns the flagged rows "
-        "(entity, event_time, optionally field)",
-    ),
-    ("data test", "research_ci.eval.data.coverage", ""),
-    ("data test", "research_ci.eval.data.identity", ""),
+    ("feat eval", "research_ci.eval.statistics", f"{FORMAT['feat']}"),
+    ("feat eval", "research_ci.eval.structure", ""),
+    ("data eval", "research_ci.eval.data.sanity", f"{FORMAT['data']}"),
+    ("data eval", "research_ci.eval.data.coverage", ""),
+    ("data eval", "research_ci.eval.data.identity", ""),
     (
         "pit",
         "research_ci.eval.data.pits",
         "nulls/data.py: PITS = [Pit(category, plant)]; plant(fields, field, rng) returns a copy with the pit planted",
     ),
 )
+CASE_EVAL = (
+    "a function of the idea's own, in a module such as `evals/<name>.py`, with its tests next to it: CASES (required) "
+    "and PROPERTIES (optional); data.py or feat.py imports it into EVALS (`from evals.<name> import <eval>`). Before "
+    "anything runs, the engine runs its tests, the cases and properties that run it, and only a case eval that passes "
+    "them all runs; one without tests is refused, an invalid one is shown with the test it failed and no result. "
+    "`rci eval check <file>` runs them any time, for free; a validation is kept until the module's files change"
+)
+CASE_EXAMPLE = (
+    'CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars '
+    "DataFrame of the evaluation table (t, entity, score, y) and thirds(SIX) returns t, value"
+)
+CASE_FIELDS: dict[type, str] = {
+    Eval: "an entry of EVALS with what its layer reads: on_fail, covers (data.py); label, horizons, combine (feat.py)",
+    Case: "",
+    Size: "",
+    Power: "",
+    Recovers: "",
+    Market: "",
+    Source: "",
+}
 
 NULLS_FORMAT = (
     "nulls/feat.py: NULLS = [Null(explains, world)]; give each alternative of the contract one, or the ResultCard "
@@ -56,8 +70,8 @@ NULL_FIELDS: dict[type, dict[str, str]] = {
         "explains": "the id of the contract's alternative this world answers",
         "world": "a PermuteWithin: how the scores are shuffled while the labels stay",
         "keeps": "the column the alternative lives in; None means the world's bucket_by",
-        "criteria": "the names of the criteria this world judges; () means every criterion of the layer",
-        "reps": "how many shuffles, at least 20",
+        "evals": "the names of the evals this world judges; () means every eval of the layer, defaults included",
+        "reps": "how many shuffles, at least 20; 50 by default",
         "note": "free text kept with the world in the submission's record",
     },
     PermuteWithin: {
@@ -125,6 +139,34 @@ def nulls() -> list[dict[str, Any]]:
 def formats() -> dict[str, str]:
     """How each kind of research code calls the methods listed for it."""
     return {use: text for use, _, text in METHODS if text}
+
+
+def case_evals() -> list[dict[str, Any]]:
+    """How a case eval is written: ``Eval``, and the tests a case eval's module declares, from ``api/methods.py``."""
+    return [
+        {
+            "use": "case eval",
+            "module": "research_ci.api",
+            "name": cls.__name__,
+            "import": f"from research_ci.api import {cls.__name__}",
+            "signature": _fields(cls),
+            "doc": doc or first_line(cls),
+        }
+        for cls, doc in CASE_FIELDS.items()
+    ]
+
+
+def _fields(cls: type) -> str:
+    """A dataclass's fields as it is called: required ones by name, the others with their defaults."""
+    shown = []
+    for f in fields(cls):
+        if f.default is not MISSING:
+            shown.append(f"{f.name}={f.default!r}")
+        elif f.default_factory is not MISSING:
+            shown.append(f"{f.name}={type(f.default_factory()).__name__}()")
+        else:
+            shown.append(f.name)
+    return f"({', '.join(shown)})"
 
 
 def first_line(obj: Any) -> str:

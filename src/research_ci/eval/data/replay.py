@@ -36,9 +36,9 @@ def cut_points(
     random_entities: int = 20,
     hole_factor: float = 1.5,
 ) -> list[Cut]:
-    """Inside every hole (an event missing where the usual spacing expects one), at its first missing slot; a day
-    before each week's newly appearing entities, so rows a plugin dropped from before an entity's start show up; and
-    at random times for random entities."""
+    """Cut points: holes, before new entities, and random times. Inside every hole (an event missing where the usual
+    spacing expects one), at its first missing slot; a day before each week's newly appearing entities, so rows a plugin
+    dropped from before an entity's start show up; and at random times for random entities."""
     e = events(full)
     first = int(full.select(pl.col("available_at").min().dt.epoch("ns")).item())
     last = int(full.select(pl.col("available_at").max().dt.epoch("ns")).item())
@@ -69,7 +69,8 @@ def cut_points(
 
 
 def replay(fetch: Fetch, full: pl.DataFrame, cuts: Sequence[Cut]) -> tuple[Check, list[dict[str, Any]]]:
-    """Each cut: the plugin's fetch as of ``at`` for the cut's entities must equal the full fetch cut at ``at``."""
+    """Each cut's fetch must equal the full fetch cut there. For each cut, the plugin's fetch as of ``at`` for the cut's
+    entities must equal the full fetch cut at ``at``."""
     results = []
     for cut in cuts:
         try:

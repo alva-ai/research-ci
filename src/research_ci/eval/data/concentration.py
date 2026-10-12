@@ -17,9 +17,9 @@ SHARE_SCHEMA = {"cluster": pl.String, "share": pl.Float64}
 def shares(
     rows: pl.DataFrame, cluster: str, h_ns: int | str, label: str = "value", by: Sequence[str] = ()
 ) -> pl.DataFrame:
-    """Each cluster's share of the noise: the part of the variance of the block means (one horizon long, as the MDE
-    takes them) of the label's mean per decision time ``t``, each cluster weighted once, that goes away when the
-    cluster is left out, between 0 and 1. ``h_ns`` is the horizon, or the column that holds it; with ``by`` (such as
+    """Each cluster's share of the noise, between 0 and 1. The share is the part of the variance of the block means (one
+    horizon long, as the MDE takes them) of the label's mean per decision time ``t``, each cluster weighted once, that
+    goes away when the cluster is left out. ``h_ns`` is the horizon, or the column that holds it; with ``by`` (such as
     the key of each horizon in stacked rows) each group is measured on its own. Largest share first.
 
     Every cluster is left out at once, by algebra on the means per decision time and cluster: the mean without a

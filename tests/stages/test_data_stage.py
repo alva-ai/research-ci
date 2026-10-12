@@ -18,6 +18,8 @@ from research_ci.stages import data as data_stage
 from research_ci.stages.contract import Settings
 from research_ci.stages.data import DataSettings
 from research_ci.stages.defaults import data as data_defaults
+from research_ci.stages.floor.data import Seen
+from research_ci.stages.steps import Found, Step
 from research_ci.store import vault
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
@@ -38,9 +40,13 @@ from toy import (
 FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
 RELAYED = Approval(by="human", channel="relayed", words="ok")
 
-SWAP_TEST = '''
+LEGS = '''
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
 import polars as pl
-from research_ci.api import DataTest
+
+from research_ci.api import Case
 
 
 def drifting_legs(fields):
@@ -59,12 +65,38 @@ def nothing(fields):
     return fields.head(0).select("entity", "event_time")
 
 
-TESTS = [
-    DataTest("drifting legs", drifting_legs, covers=[("swap", "close")], on_fail="drop_entities"),
-    {lazy}
+def _venues(apart):
+    walks = 100 * np.exp(np.cumsum(np.random.default_rng(0).normal(0, 0.01, (2, 48)), axis=1))
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    t = pl.datetime_range(start, start + timedelta(hours=47), "1h", eager=True)
+    closes = {"a:X": walks[0], "b:X": walks[0], "c:X": walks[1] if apart else walks[0]}
+    return pl.concat(
+        [pl.DataFrame({"entity": e, "field": "close", "event_time": t, "value": v}) for e, v in closes.items()]
+    )
+
+
+CASES = [
+    Case("a venue moving apart is flagged", lambda: drifting_legs(_venues(True))["entity"].unique().to_list(), ["c:X"]),
+    Case("venues moving together are not", drifting_legs, 0, given=_venues(False)),
+    Case("nothing flags nothing", nothing, 0, given=_venues(True)),
 ]
 '''
-LAZY = 'DataTest("lazy", nothing, covers=[("swap", "close")], on_fail="mask"),'
+SWAP_TEST = """
+from research_ci.api import Eval
+from evals.legs import drifting_legs, nothing
+
+EVALS = [
+    Eval(drifting_legs, name="drifting legs", covers=[("swap", "close")], on_fail="drop_entities"),
+    {lazy}
+]
+"""
+LAZY = 'Eval(nothing, name="lazy", covers=[("swap", "close")]),'
+
+
+def _evals(idea: "Idea", data: str, legs: str = LEGS) -> None:
+    (idea.root / "evals").mkdir(exist_ok=True)
+    (idea.root / "evals" / "legs.py").write_text(legs)
+    (idea.root / "data.py").write_text(data)
 
 
 def _relayed(idea: Idea, stage: str) -> Approval:
@@ -190,31 +222,39 @@ def test_treated_data_of_a_superseded_check_leaves_the_vault_unless_frozen(tmp_p
     assert third["panel"]["exclusions"] == first["panel"]["exclusions"]
 
 
-@pytest.mark.parametrize(("lazy", "status"), [(False, "holds"), (True, "returned")])
-def test_an_idea_test_must_catch_the_pits_it_claims(tmp_path: Path, monkeypatch, lazy: bool, status: str) -> None:
+@pytest.mark.parametrize("lazy", [False, True])
+def test_an_idea_eval_must_catch_the_pits_it_claims(tmp_path: Path, monkeypatch, lazy: bool) -> None:
     idea = _idea(tmp_path, DataSettings(materiality=0.05, seeds=1))
-    (idea.root / "data.py").write_text(SWAP_TEST.replace("{lazy}", LAZY if lazy else ""))
+    _evals(idea, SWAP_TEST.replace("{lazy}", LAZY if lazy else ""))
     spec, card = idea.check_data()
-    tests = {t["name"]: t for t in spec["tests"]}
-    assert tests["drifting legs"]["status"] == "holds"
-    assert [r["status"] for r in tests["drifting legs"]["calibration"]] == ["caught"]
+    evals = {e["name"]: e for e in spec["evals"]}
+    legs = evals["drifting legs"]["validation"]
+    assert legs["status"] == "valid" and legs["file"] == "evals/legs.py"
+    assert [t["name"] for t in legs["tests"]][-1] == "built-in swap in close, seed 0"
+    assert [t["status"] for t in legs["tests"]] == ["pass"] * 3, "two cases run it, and the pit"
     if lazy:
-        assert tests["lazy"]["status"] == status
+        lazy_v = evals["lazy"]["validation"]
+        assert lazy_v["status"] == "invalid" and evals["lazy"]["flagged"] is None
         assert spec["verdict"]["status"] == "blocked"
-        assert "tests returned: lazy" in card
+        assert (
+            "case     FAIL lazy: invalid 1/2: built-in swap in close, seed 0: expected it flagged, got nothing" in card
+        )
+        assert "lazy (case eval) is invalid" in card and "make it catch the pits it claims in covers" in card
+        assert not [t for t in spec["treatments"] if t["name"].startswith("eval lazy")]
     else:
         assert spec["verdict"]["status"] == "ready"
 
 
 def test_the_default_list_decides_which_checks_run_and_which_pits_calibrate(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(data_defaults, "CHECKS", [data_defaults.fresh])
+    monkeypatch.setattr(data_defaults, "CHECKS", data_defaults.CHECKS[:1])
     monkeypatch.setattr(data_defaults, "PITS", ())
     idea = _idea(tmp_path, DataSettings(materiality=0.05, seeds=1))
-    (idea.root / "data.py").write_text(SWAP_TEST.replace("{lazy}", ""))
-    spec, _ = idea.check_data()
-    assert [c["name"] for c in spec["checks"]] == ["data is current", "field grades"]
-    calibration = spec["tests"][0]["calibration"]
-    assert spec["tests"][0]["status"] == "returned" and [r["status"] for r in calibration] == ["no pit"]
+    _evals(idea, SWAP_TEST.replace("{lazy}", ""))
+    spec, card = idea.check_data()
+    assert [c["name"] for c in spec["checks"]] == ["data is current", "drifting legs", "field grades"]
+    tests = spec["evals"][0]["validation"]["tests"]
+    assert spec["evals"][0]["validation"]["status"] == "invalid" and tests[-1]["name"] == "pits: swap in close"
+    assert "no pit plants swap, so the claim cannot be checked" in card and "nulls/data.py" in card
 
 
 SPLIT = "split entities at identity breaks"
@@ -256,17 +296,17 @@ def test_one_cluster_carrying_the_noise_is_shown_and_only_warned(tmp_path: Path,
 MASK = "mask b:Z before the relaunch"
 
 
-def _mask_b_z(seen: data_defaults.Seen) -> data_defaults.Found:
+def _mask_b_z(seen: Seen) -> Found:
     """Masks b:Z's closes over the hours before c:Z is delisted, when the labels of c:Z's pairs read the relaunch."""
     hours = pl.col("event_time").is_between(START + pd.Timedelta(hours=140), START + pd.Timedelta(hours=146))
     rows = seen.fields.filter((pl.col("entity") == "b:Z") & (pl.col("field") == "close") & hours)
-    return data_defaults.Found(treatments=[tr.mask_rows(MASK, f"{rows.height} rows", rows, seen.fields)])
+    return Found(treatments=[tr.mask_rows(MASK, f"{rows.height} rows", rows, seen.fields)])
 
 
 def test_other_treatments_are_weighed_on_top_of_the_split(tmp_path: Path, monkeypatch) -> None:
     """A mask next to a relaunch moves the number as much as where the venue named the relaunch apart itself: the
     relaunch that the split renames is not the mask's doing. The split is weighed against the data as it came."""
-    monkeypatch.setattr(data_defaults, "CHECKS", [*data_defaults.CHECKS, _mask_b_z])
+    monkeypatch.setattr(data_defaults, "CHECKS", [*data_defaults.CHECKS, Step(MASK, "treats", _mask_b_z, MASK)])
     split = _checked(tmp_path / "split", monkeypatch, ToyRelaunched)[1]
     apart = _checked(tmp_path / "apart", monkeypatch, ToyRenamed)[1]
     assert SPLIT not in {t["name"] for t in apart["treatments"]}
@@ -336,7 +376,7 @@ def test_dropping_a_short_series_a_split_made_does_the_same_with_or_without_the_
 
 ROW_TEST = """
 import polars as pl
-from research_ci.api import DataTest
+from research_ci.api import Case, Eval
 
 
 def zeros(fields):
@@ -344,24 +384,50 @@ def zeros(fields):
     return pl.DataFrame(flagged, schema=["entity", "event_time"], orient="row")
 
 
-TESTS = [DataTest("zeros", zeros, covers=[("spike", "close")], on_fail="mask")]
+CASES = [Case("no zeros, no flags", zeros, 0, given=pl.DataFrame({"entity": ["a"], "field": ["close"],
+                                                                   "event_time": [0], "value": [1.0]}))]
+EVALS = [Eval(zeros, covers=[("spike", "close")])]
 """
 
 
-def test_a_wrong_test_file_says_how_to_fix_it_and_a_row_wise_one_runs_with_a_warning(tmp_path: Path) -> None:
+def test_a_wrong_eval_file_says_how_to_fix_it_and_a_row_wise_one_runs_with_a_warning(tmp_path: Path) -> None:
     idea = _idea(tmp_path)
-    (idea.root / "data.py").write_text("TESTS = [\n")
+    (idea.root / "data.py").write_text("EVALS = [\n")
     with pytest.raises(ResearchError, match=r"data.py:1: .*fix the file"):
         idea.check_data()
     (idea.root / "data.py").write_text("import polars as pl\n")
-    with pytest.raises(data_stage.DataError, match=r"data.py defines no TESTS; data.py defines TESTS = \[DataTest"):
+    with pytest.raises(data_stage.DataError, match=r"data.py defines no EVALS; data.py defines EVALS = \[fn, Eval"):
         idea.check_data()
-    (idea.root / "data.py").write_text("TESTS = [print]\n")
-    with pytest.raises(data_stage.DataError, match=r"TESTS must be a list of DataTest; .*`rci methods` lists"):
+    (idea.root / "data.py").write_text("EVALS = [1]\n")
+    with pytest.raises(data_stage.DataError, match=r"EVALS\[0\] is a int: an entry is a function or Eval.*methods"):
+        idea.check_data()
+    (idea.root / "data.py").write_text("from research_ci.api import Eval\nEVALS = [Eval(print, covers=[('x',)])]\n")
+    with pytest.raises(data_stage.DataError, match=r"covers is a list of \(category, field\) pairs"):
         idea.check_data()
     assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
     (idea.root / "data.py").write_text(ROW_TEST)
     spec, card = idea.check_data()
     warning = "row-wise code: data.py:7 iter_rows — polars expressions are usually much faster"
     assert spec["warnings"][0] == warning and f"warnings   [!] {warning}" in card
-    assert [t["name"] for t in spec["tests"]] == ["zeros"]
+    assert [e["name"] for e in spec["evals"]] == ["zeros"]
+
+
+LIBRARY = """
+from functools import partial
+
+from research_ci.api import Eval
+from research_ci.eval.data.sanity import nonpositive
+
+EVALS = [Eval(partial(nonpositive, levels=("close",)), name="closes at zero or below")]
+"""
+
+
+def test_a_library_eval_is_trusted_and_runs_with_its_options(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.data": ToyZeros})
+    idea = _idea(tmp_path)
+    (idea.root / "data.py").write_text(LIBRARY)
+    spec, card = idea.check_data()
+    row = spec["evals"][0]
+    assert (row["by"], row["validation"]["status"], row["flagged"]) == ("library", "trusted", 3)
+    assert "library  [!]  closes at zero or below: engine library · flagged 3 rows; masked" in card
+    assert not (idea.root / ".rci" / "evals").exists(), "nothing to validate"

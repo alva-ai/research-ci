@@ -7,7 +7,8 @@ from research_ci.eval.synthetic import hand
 
 
 def rank_ic(table: pl.DataFrame, label: str = "y") -> pl.DataFrame:
-    """Spearman correlation of score and label across the candidates at each decision time."""
+    """Spearman correlation of score and label at each decision time. The correlation runs across the candidates at
+    that time."""
     rows = table.filter(pl.col("score").is_not_null() & pl.col(label).is_not_null())
     return rows.group_by("t").agg(pl.corr("score", label, method="spearman").alias("value")).sort("t")
 

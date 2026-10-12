@@ -1,7 +1,8 @@
-"""What an eval method declares about itself, for the engine to check before it is trusted.
+"""What an eval declares about itself, for the engine to check before it is trusted: its tests.
 
-A method's module lists ``CASES``, answers worked by hand, and ``PROPERTIES``, statistical behaviour on synthetic
-markets the engine builds. The engine runs both; a method whose obligations fail is not used.
+An eval's module lists ``CASES``, answers worked by hand, and may list ``PROPERTIES``, statistical behaviour on
+synthetic markets the engine builds. The engine's library is held to them in its CI; an idea's case evals are held to
+theirs before the engine runs them, and one whose tests fail is not used (``api/evals.py``).
 """
 
 from collections.abc import Callable
@@ -15,12 +16,17 @@ Statistic = Callable[[pl.DataFrame], pl.DataFrame]
 
 @dataclass(frozen=True)
 class Case:
-    """``run()`` must give ``expect``: numbers within ``tol``, frames with the same rows and values within ``tol``."""
+    """``run()`` must give ``expect``; with ``given``, ``run(given)`` must, so a case can name the eval and the frame
+    it reads: ``Case("the top two of six", thirds, 0.4, given=SIX)``. Numbers must agree within ``tol``. An expected
+    frame must come back with its columns (others are ignored) and the same rows in any order, numbers within ``tol``
+    and times compared as instants. An expected number against a returned frame: a frame with ``t`` and ``value`` and
+    one row gives that value, any other frame its number of rows."""
 
     name: str
-    run: Callable[[], Any]
+    run: Callable[..., Any]
     expect: Any
     tol: float = 1e-9
+    given: Any = None
 
 
 @dataclass(frozen=True)

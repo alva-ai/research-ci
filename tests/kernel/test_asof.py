@@ -128,3 +128,37 @@ def test_asof_does_not_depend_on_row_order(rows: list[tuple], t: int, seed: int)
     shuffled = fields.sample(fraction=1.0, shuffle=True, seed=seed)
     assert not shuffled["available_at"].flags["SORTED_ASC"] or shuffled.equals(fields)
     assert asof(shuffled, T0 + t * H).equals(asof(fields, T0 + t * H))
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    rows=st.lists(
+        st.tuples(
+            st.sampled_from(["a", "b", "c"]),
+            st.sampled_from(["x", "y"]),
+            st.integers(0, 4),
+            st.integers(0, 2),
+            st.integers(0, 6),
+        ),
+        min_size=1,
+        max_size=30,
+    )
+)
+def test_duplicates_and_early_revisions_are_found_as_a_check_by_key_finds_them(rows: list[tuple]) -> None:
+    """The key checks run on one sort of coded keys; brute force over the rows says what they must find."""
+    frame = pl.DataFrame(
+        [(e, f, T0 + event * H, T0 + at * H, 1.0, v, "") for e, f, event, v, at in rows],
+        schema=["entity", "field", "event_time", "available_at", "value", "vintage", "source"],
+        orient="row",
+    )
+    keys = [(e, f, event, v) for e, f, event, v, _ in rows]
+    duplicated = sum(keys.count(k) > 1 for k in keys)
+    early = any(a[:3] == b[:3] and a[3] < b[3] and a[4] > b[4] for a in rows for b in rows if keys.count(a[:4]) == 1)
+    if duplicated:
+        with pytest.raises(SchemaError, match=f"^{duplicated} duplicate rows"):
+            field_table(frame)
+    elif early:
+        with pytest.raises(SchemaError, match="before the vintage it revises"):
+            field_table(frame)
+    else:
+        assert field_table(frame).height == len(rows)
