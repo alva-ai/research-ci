@@ -119,6 +119,25 @@ def _checked(idea: Idea) -> dict:
     return [r["payload"]["spec"] for r in idea.ledger.records() if r["kind"] == "check"][-1]
 
 
+def test_the_same_scores_after_a_reopened_contract_are_judged_again_without_a_new_trial(tmp_path: Path) -> None:
+    """A reopened contract judges by its own rules: the same scores again are judged as the submission they were, with
+    its bar and no new trial; within the new version they are refused like any repeat."""
+    idea = _idea(tmp_path)
+    first, _, _ = idea.submit_feat(_file(idea, "noise", NOISE))
+    idea.derive_contract()
+    idea.approve("contract")
+    idea.check_data()
+    idea.approve("data", approval=_relayed(idea, "data"))
+    result, text, _ = idea.submit_feat(_file(idea, "noise again", NOISE))
+    assert result["again"] and result["n"] == 1 and result["need"] == first["need"], text
+    assert "submission 1 of 3 · judged again under v2, no new trial" in text
+    assert idea.status().stage("feat").trials == 1 and (idea.root / ".rci" / "feat-result-1-v2.json").is_file()
+    with pytest.raises(FeatError, match="same scores as submission 1"):
+        idea.submit_feat(_file(idea, "noise once more", NOISE))
+    result, _, _ = idea.submit_feat(_file(idea, "spread", SPREAD))
+    assert not result["again"] and result["n"] == 2 and idea.status().stage("feat").trials == 2
+
+
 def test_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> None:
     idea = _idea(tmp_path)
     explored, _ = idea.explore_feat(_file(idea, "peek", PEEK))

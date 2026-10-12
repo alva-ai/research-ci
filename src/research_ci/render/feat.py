@@ -26,7 +26,8 @@ def result_card(spec: dict[str, Any], idea: str, version: int) -> str:
     test, the engine's lists, the lab's evals and null worlds, and the lab evals' tests; then the verdict. The
     calibration of the decisive effect shows on the submission that ran it; later ones reuse it."""
     of = f" of {spec['budget']}" if spec.get("budget") else ""
-    out = [f"ResultCard · {idea} · feat v{version} · submission {spec['n']}{of}"]
+    again = f" · judged again under v{version}, no new trial" if spec.get("again") else ""
+    out = [f"ResultCard · {idea} · feat v{version} · submission {spec['n']}{of}{again}"]
     add = adder(out)
     f = spec["features"]
     add("features", f"{f['path']} · {f['hash'][:12]}")
