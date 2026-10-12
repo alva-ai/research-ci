@@ -42,28 +42,28 @@ class Permutation:
         ).sort("t", "b", "c", "inst")
         new = (pl.col("t") != pl.col("t").shift(1)) | (pl.col("b") != pl.col("b").shift(1))
         new = new | (pl.col("c") != pl.col("c").shift(1))
-        frame = frame.with_columns(inst=new.fill_null(True).cum_sum() - 1)
-        inst = frame.group_by("inst", maintain_order=True).agg(
+        frame = frame.with_columns(seg=new.fill_null(True).cum_sum() - 1)
+        seg = frame.group_by("seg", maintain_order=True).agg(
             pl.col("t").first(), pl.col("b").first(), pl.col("c").first(), pl.len().alias("size")
         )
-        t0 = int(inst["t"].min()) if inst.height else 0  # type: ignore[arg-type]
+        t0 = int(seg["t"].min()) if seg.height else 0  # type: ignore[arg-type]
         block = ((pl.col("t") - t0) // block_ns).alias("block")
         self.n = n
         self.rows = frame["row"].to_numpy()
-        self.inst_of_pos = frame["inst"].to_numpy()
-        size = inst["size"].to_numpy()
+        self.seg_of_pos = frame["seg"].to_numpy()
+        size = seg["size"].to_numpy()
         self.start = np.concatenate([[0], np.cumsum(size)[:-1]]).astype(np.int64)
-        codes = inst.select(
+        codes = seg.select(
             block,
             pl.col("b").rank("dense").cast(pl.Int64).alias("b"),
             pl.col("c").rank("dense").cast(pl.Int64).alias("c"),
             pl.struct("t", "b", "size").rank("dense").cast(pl.Int64).alias("g"),
         )
         order = np.lexsort((codes["c"].to_numpy(), codes["g"].to_numpy()))
-        keys = inst.select(block, "b", "c")
+        keys = seg.select(block, "b", "c")
         trading = _classes(codes["g"].to_numpy()[order], order)
         self.groups, self.key_frame, self.key_ids = _drawn(trading, keys, codes.select("block", "b", "c"))
-        members = self.inst_of_pos
+        members = self.seg_of_pos
         sized = _classes(members, np.arange(n, dtype=np.int64))
         member_codes = frame.select(
             block, pl.col("b").rank("dense"), pl.col("c").rank("dense"), pl.col("inst").rank("dense")
@@ -87,7 +87,7 @@ class Permutation:
             ranks = np.broadcast_to(np.arange(positions.shape[1], dtype=np.int64), positions.shape)
             offset[np.take_along_axis(positions, order, axis=1)] = ranks
         out = np.empty(self.n, dtype=np.int64)
-        out[self.rows] = self.rows[self.start[source[self.inst_of_pos]] + offset]
+        out[self.rows] = self.rows[self.start[source[self.seg_of_pos]] + offset]
         return out
 
 
