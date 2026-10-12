@@ -3,11 +3,12 @@ null world.
 
 ``judge_all`` judges many evals at once. A lane is one evaluation table shuffled one way: its layout is computed once,
 and each seed's shuffle once, for every eval and world that reads the lane. A ``Statistic`` with a batched form is
-computed on many shuffles at once by that form; any other eval on many shuffles at once by stacking (``Stacked``):
-one copy of the table per shuffle, each later in time than the one before, in one call. Either is used only after it
-gives the eval's own numbers on the table as it is; otherwise the eval runs shuffle by shuffle on the table with the
-shuffled scores. A request takes the seeds ``0 .. reps - 1``; a sequential one takes them a batch at a time and stops
-once its decision cannot change (``sequential.py``).
+computed on many shuffles at once by that form, on a lane whose shuffles move scores only within a decision time; any
+other eval on many shuffles at once by stacking (``Stacked``): one copy of the table per shuffle, each later in time
+than the one before, in one call. Either is used only after it gives the eval's own numbers on the table as it is;
+otherwise the eval runs shuffle by shuffle on the table with the shuffled scores. A request takes the seeds
+``0 .. reps - 1``, or fewer when a lane has fewer distinct shuffles; a sequential one takes them a batch at a time and
+stops once its decision cannot change (``sequential.py``).
 """
 
 import math
@@ -63,12 +64,16 @@ class Statistic:
 @dataclass(frozen=True)
 class Lane:
     """An evaluation table, its horizon in ns, and one way of shuffling its scores, built by ``shuffle()``; lanes with
-    the same ``key`` share every shuffle."""
+    the same ``key`` share every shuffle. ``within``: its shuffles move scores only between the rows of one decision
+    time, as the batched forms assume. ``distinct``: how many distinct shuffles it has, when that may be fewer than a
+    request asks for."""
 
     table: pl.DataFrame
     h_ns: int
     key: Hashable
     shuffle: Callable[[], Index]
+    within: bool = True
+    distinct: int | None = None
 
 
 @dataclass(frozen=True)
@@ -152,10 +157,11 @@ def judge(
     reps: int,
     min_blocks: int,
     combine: str,
+    within: bool = True,
 ) -> dict[str, Any]:
     """One eval against one null world over its horizons: ``tables`` maps a horizon to its evaluation table and
-    length, and ``index(h)(seed)`` gives the world's shuffle for that horizon."""
-    lanes = {h: Lane(table, h_ns, object(), _bound(index, h)) for h, (table, h_ns) in tables.items()}
+    length, and ``index(h)(seed)`` gives the world's shuffle for that horizon; ``within`` as in ``Lane``."""
+    lanes = {h: Lane(table, h_ns, object(), _bound(index, h), within) for h, (table, h_ns) in tables.items()}
     result = judge_all([Request(evaluate, lanes, reps, min_blocks, combine)])[0]
     if isinstance(result, Exception):
         raise result
@@ -196,18 +202,21 @@ def _bound(index: Callable[[str], Index], h: str) -> Callable[[], Index]:
 
 @dataclass(eq=False)
 class _Taken:
-    """A request's progress: the seeds drawn, the next target, and its consumers (one per horizon)."""
+    """A request's progress: the seeds drawn, the next target, the most it draws (its ``reps``, or fewer when a lane
+    has fewer distinct shuffles), and its consumers (one per horizon)."""
 
     request: Request
     consumers: list["_Consumer"] = field(default_factory=list)
     drawn: int = 0
     target: int = 0
+    most: int = 0
     error: Exception | None = None
     done: bool = False
 
     def __post_init__(self) -> None:
-        rule = self.request.sequential
-        self.target = self.request.reps if rule is None else min(self.request.reps, rule.batch)
+        r = self.request
+        self.most = min([r.reps, *(lane.distinct for lane in r.lanes.values() if lane.distinct)])
+        self.target = self.most if r.sequential is None else min(self.most, r.sequential.batch)
 
     def advance(self) -> None:
         if self.done:
@@ -219,7 +228,7 @@ class _Taken:
             self.finish()
             return
         r = self.request
-        if r.sequential is None or self.drawn >= r.reps:
+        if r.sequential is None or self.drawn >= self.most:
             self.finish()
             return
         reals, nulls = self.values()
@@ -227,7 +236,7 @@ class _Taken:
         if settled(summary(reals, nulls, r.min_blocks, r.combine), reals, nulls, r.combine, rule.need, rule.horizons):
             self.finish()
         else:
-            self.target = min(r.reps, self.drawn + r.sequential.batch)
+            self.target = min(self.most, self.drawn + r.sequential.batch)
 
     def finish(self) -> None:
         self.done = True
@@ -238,10 +247,12 @@ class _Taken:
         return {c.h: c.real for c in self.consumers}, {c.h: c.null[: self.drawn] for c in self.consumers}
 
     def result(self) -> dict[str, Any] | Exception:
+        """The judgement; ``distinct`` says it drew every distinct shuffle there is, fewer than its ``reps``."""
         if self.error is not None:
             return self.error
         r = self.request
-        return summary(*self.values(), r.min_blocks, r.combine)
+        out = summary(*self.values(), r.min_blocks, r.combine)
+        return out | ({"distinct": self.most} if self.most < r.reps and self.drawn >= self.most else {})
 
 
 def summary(
@@ -321,7 +332,9 @@ class _Consumer:
         t = self.taken
         return (t.drawn, t.target) if not t.done and self.error is None else (0, 0)
 
-    def start(self, lane: Lane) -> None:
+    def start(self, lane: Lane, other: Callable[[], np.ndarray | None]) -> None:
+        """The real value, and the fastest form that gives the eval's numbers: a batched one on a lane that shuffles
+        within each decision time, else stacked, checked with ``other()``, another shuffle of the lane."""
         if self.started:
             return
         self.started = True
@@ -330,9 +343,9 @@ class _Consumer:
         self.real = blocks(values, lane.h_ns)
         if not self.batched:
             return
-        form = getattr(self.evaluate, "batched", None)
+        form = getattr(self.evaluate, "batched", None) if lane.within else None
         found = checked(form(lane.table), self.evaluate, lane.table, values) if form is not None else None
-        self.prepared = found if found is not None else stacked(self.evaluate, lane.table, values)
+        self.prepared = found if found is not None else stacked(self.evaluate, lane.table, values, other())
 
 
 def checked(prepared: Prepared, evaluate: Evaluate, table: pl.DataFrame, values: pl.DataFrame) -> Prepared | None:
@@ -388,16 +401,19 @@ class Stacked:
         return frame.with_columns(when.cast(self.dtype), pl.Series("score", self.score[index.ravel()]))
 
 
-def stacked(evaluate: Evaluate, table: pl.DataFrame, values: pl.DataFrame) -> Stacked | None:
+def stacked(
+    evaluate: Evaluate, table: pl.DataFrame, values: pl.DataFrame, other: np.ndarray | None = None
+) -> Stacked | None:
     """``Stacked`` for ``evaluate``, if it gives what ``evaluate`` gives alone (``values``) on the table as it is, in a
-    copy between two copies holding other scores and in the last copy of a stack, the farthest in time; otherwise
-    nothing, and the eval runs shuffle by shuffle. An eval that reads across decision times, across the rows of other
-    copies, or the calendar beyond the hour and the weekday gives other numbers there."""
+    copy between two copies holding other scores (``other``, a shuffle; by default each decision time's rows reversed)
+    and in the last copy of a stack, the farthest in time; otherwise nothing, and the eval runs shuffle by shuffle. An
+    eval that reads across decision times, across the rows of other copies, or the calendar beyond the hour and the
+    weekday gives other numbers there."""
     form = Stacked(evaluate, table)
     copies = min(form.per_call, CHECKED_COPIES)
     if table.height == 0 or copies < 2:
         return None
-    other, same = _reversed(table), np.arange(table.height)
+    other, same = _reversed(table) if other is None else other, np.arange(table.height)
     index = np.stack([other, same, *([other] * (copies - 3)), same][:copies])
     score = table["score"].cast(pl.Float64)
     alone = per_t(evaluate, with_scores(table, score.to_numpy())) if score.null_count() else values
@@ -452,7 +468,7 @@ class _Lane:
         work = [(c, lo, hi) for c in self.consumers for lo, hi in [c.wants()] if lo < hi]
         for c, _, _ in work:
             try:
-                c.start(self.lane)
+                c.start(self.lane, self._other)
             except Exception as exc:  # noqa: BLE001
                 c.error = exc
         work = [w for w in work if w[0].error is None]
@@ -466,6 +482,15 @@ class _Lane:
                 c.prepared = None
         if all(c.taken.request.sequential is None for c in self.consumers):
             self.index = None
+
+    def _other(self) -> np.ndarray | None:
+        """The shuffle the stacked check sets beside the table: by default each time's rows reversed, which a lane that
+        moves scores across decision times would never draw, so there its first shuffle."""
+        if self.lane.within:
+            return None
+        if self.index is None:
+            self.index = self.lane.shuffle()
+        return self.index(0)
 
     def _draw(self, work: list[tuple[_Consumer, int, int]]) -> None:
         if not work:

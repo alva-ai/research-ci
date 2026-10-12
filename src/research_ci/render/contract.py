@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from research_ci.api.contract import SHAPES
 from research_ci.render.common import MARK, adder, figure, rolled
 
 
@@ -26,6 +27,9 @@ def contract_card(spec: dict[str, Any], idea: str, version: int) -> str:
             f"{u['plugin']} · median {u['candidates_median']:.0f} candidates in {u['clusters_median']:.0f} "
             f"{u['clusters']} clusters per decision · membership {u['membership']}",
         )
+        shape = u.get("shape", "cross")
+        world = f" · floor world {u['world']}" if u.get("world") else ""
+        add("shape", f"{shape}: {SHAPES[shape]}{world}")
     c = spec["costs"]
     options = ", ".join(f"{k}={v}" for k, v in c["options"].items())
     round_trip = "" if c["round_trip_median"] is None else f" · median round trip {c['round_trip_median'] * 1e4:.1f} bp"

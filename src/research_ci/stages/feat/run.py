@@ -7,8 +7,10 @@ frozen data and the candidates as polars DataFrames, and runs its floor list (``
 default diagnostics (``stages/feat/defaults.py``) where the floor marks them: the floors on the scores, then the
 decisive test (slot 1), the diagnostics and library evals, which are shown (slot 2), and the lab evals and null worlds,
 which can veto (slot 3). The verdict is horizon by horizon (``kernel/verdict/rule.py``). Only the candidates the
-features scored, with a finite score, are judged, in the real world and in every null world alike. What the calls
-cost, their wall time and the peak memory of the full one, is shown, never judged.
+features scored, with a finite score, are judged, in the real world and in every null world alike; for events the
+tables keep every candidate row, the scores missing between the events, and the scores move in time with their gaps,
+so statistics and targets judge the rows with a finite score in each world. What the calls cost, their wall time and
+the peak memory of the full one, is shown, never judged.
 """
 
 import math
@@ -23,7 +25,7 @@ import polars as pl
 
 from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, Use, as_use, span
 from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
-from research_ci.api.nulls import Null, nulls_of
+from research_ci.api.nulls import Null, PermuteWithin, nulls_of
 from research_ci.api.plugins import LabelPlugin
 from research_ci.kernel.hashing import hash_frame, hash_obj
 from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_ns
@@ -56,7 +58,8 @@ JUDGED = ("decisive", "shown", "vetoes")
 NULLS_FORMAT = (
     "nulls/feat.py defines NULLS = [Null(alternative, PermuteWithin(column, clusters=..., block='horizon'), "
     "evals=(...)), ...], one world for every alternative explanation in the contract; the world shuffles the scores "
-    "within the buckets of a column of the evaluation table and judges the evals it names, or the decisive effect"
+    "within the buckets of a column of the evaluation table, or, as ShiftInTime(min_shift=...), shifts each "
+    "entity's scores in time, and judges the evals it names, or the decisive effect"
 )
 EVAL_FILES = "eval:"
 
@@ -179,7 +182,7 @@ def submit(
     seen = floor.Seen(frozen, s, Path(root), Path(path))
     warnings = _run(floor.SCREEN, seen).warnings
     evals, validated = _lab_ready(Path(root), frozen.registry)
-    named = [(step.name.format(clusters=seen.clusters), step) for step in defaults.CHECKS]
+    named = [(step.name.format(clusters=seen.clusters), step) for step in defaults.CHECKS if step.needs == seen.shape]
     names = {name for name, _ in named} | {e.name for e in evals}
     worlds = [floor.floor_world(frozen, s)] + _worlds(Path(root), frozen, names)
     seen = replace(seen, worlds=tuple(worlds), validated=validated)
@@ -220,8 +223,10 @@ def submit(
         return out | {"seconds": round(time.monotonic() - started, 1)}
     if "scores rank candidates" in failed:
         why = failed["scores rank candidates"].detail
-        note = f"the scores do not rank the candidates (scores rank candidates, floor): {why}, needs ≥ 50%"
-        out["verdict"] = rule.verdict("FAILED", [f"{note}; give two or more candidates distinct scores at each time"])
+        said, fix = floor.RANKS[seen.shape]
+        need = "" if seen.shape == "events" else ", needs ≥ 50%"
+        note = f"{said} (scores rank candidates, floor): {why}{need}"
+        out["verdict"] = rule.verdict("FAILED", [f"{note}; {fix}"])
         return out | {"seconds": round(time.monotonic() - started, 1)}
     judged = _judge(seen, named, evals)
     out |= {key: judged.shown.get(key, []) for key in JUDGED}
@@ -238,8 +243,9 @@ def ready(root: Path, contract: Contract, registry: Registry | None = None) -> N
     unknown = _unknown(nulls, contract)
     if unknown:
         raise FeatError(f"{NULLS_FILE}: {'; '.join(unknown)}{NO_TRIAL}")
-    clusters = contract.universe.clusters if contract.universe is not None else "entity"
-    worlds = [floor_world(clusters, 0)] + [_world(i, n) for i, n in enumerate(nulls, start=1)]
+    u = contract.universe
+    clusters, shape = (u.clusters, u.shape) if u is not None else ("entity", "cross")
+    worlds = [floor_world(clusters, 0, shape)] + [_world(i, n) for i, n in enumerate(nulls, start=1)]
     _covered(skeleton.Found([floor.coverage(contract, worlds)]))
 
 
@@ -285,15 +291,14 @@ def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]],
     """The decisive test, the evals and the null worlds side by side: each step says what it needs judged, and all of
     it is judged together, every shuffle once for each eval and world that reads it. An idea eval named like a default
     diagnostic is judged in its place. Only the candidates the features scored are judged: the rows of the evaluation
-    tables without a finite score are left out, so they are left out in every world alike."""
+    tables without a finite score are left out, so they are left out in every world alike. For events every row stays,
+    its score NaN where the features gave none, since those rows are where a shift in time moves the events to."""
     scores = seen.scores
     assert scores is not None
     scored = scores.filter(pl.col("score").is_finite())
+    events = seen.shape == "events"
     tables = {
-        label: {
-            h: (table.join(scored, on=["t", "entity"], how="inner").sort("t", "entity"), h_ns)
-            for h, (table, h_ns) in by_h.items()
-        }
+        label: {h: (_scored(table, scored, events), h_ns) for h, (table, h_ns) in by_h.items()}
         for label, by_h in seen.frozen.tables.items()
     }
     idea = {e.name: e for e in evals}
@@ -314,6 +319,14 @@ def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]],
     out = skeleton.combined(found)
     out.shown |= {key: [r for f in found for r in f.shown.get(key, [])] for key in JUDGED}
     return out
+
+
+def _scored(table: pl.DataFrame, scored: pl.DataFrame, events: bool) -> pl.DataFrame:
+    """An evaluation table with the finite scores: only their rows, or for events every row, NaN where none."""
+    if not events:
+        return table.join(scored, on=["t", "entity"], how="inner").sort("t", "entity")
+    joined = table.join(scored, on=["t", "entity"], how="left").sort("t", "entity")
+    return joined.with_columns(pl.col("score").fill_null(float("nan")))
 
 
 def _default(seen: floor.Seen, name: str, step: skeleton.Step[floor.Seen], idea: dict[str, Eval]) -> skeleton.Found:
@@ -356,10 +369,9 @@ def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
     columns = set(next(iter(next(iter(frozen.tables.values())).values()))[0].columns) | {"score"}
     out, problems = [], _unknown(nulls, frozen.contract)
     for i, n in enumerate(nulls, start=1):
-        w = n.world
-        bucket = None if w.bucket_by == "time" else w.bucket_by
-        keeps = None if n.keeps in (None, "time") else n.keeps
-        missing = [col for col in dict.fromkeys((bucket, w.clusters, keeps)) if col is not None and col not in columns]
+        world = _world(i, n)
+        asked = (world.bucket, world.clusters, world.keeps)
+        missing = [col for col in dict.fromkeys(asked) if col is not None and col not in columns]
         if missing:
             problems.append(
                 f"null {i}: the evaluation table has no column {', '.join(missing)}; its columns are "
@@ -368,7 +380,7 @@ def _worlds(root: Path, frozen: Frozen, names: set[str]) -> list[World]:
         unknown = [name for name in n.evals if name not in names]
         if unknown:
             problems.append(f"null {i}: no eval named {', '.join(unknown)}; the evals are {', '.join(sorted(names))}")
-        out.append(_world(i, n))
+        out.append(world)
     if problems:
         raise FeatError(f"{NULLS_FILE}: {'; '.join(problems)}{NO_TRIAL}")
     return out
@@ -386,17 +398,19 @@ def _unknown(nulls: list[Null], contract: Contract) -> list[str]:
 
 def _world(i: int, n: Null) -> World:
     w = n.world
+    shift = None if isinstance(w, PermuteWithin) else w.min_shift
     return World(
         name=f"null {i}",
         explains=(n.explains,),
-        bucket=None if w.bucket_by == "time" else w.bucket_by,
-        clusters=w.clusters,
-        block=w.block,
+        bucket=None if not isinstance(w, PermuteWithin) or w.bucket_by == "time" else w.bucket_by,
+        clusters=w.clusters if isinstance(w, PermuteWithin) else None,
+        block=w.block if isinstance(w, PermuteWithin) else None,
         keeps=None if n.keeps in (None, "time") else n.keeps,
         evals=tuple(n.evals),
         reps=n.reps,
         by="idea",
         note=n.note,
+        shift=shift,
     )
 
 

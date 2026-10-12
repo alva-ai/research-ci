@@ -17,7 +17,7 @@ from research_ci.eval.data import concentration as cc
 from research_ci.kernel.time.clock import span_ns, time_series
 from research_ci.kernel.verdict import power as pw
 from research_ci.runner.plugins import Registry, factory_of
-from research_ci.stages.common import per_t, quantile_times, units
+from research_ci.stages.common import UNSCORED, per_t, quantile_times, units
 from research_ci.stages.skeleton import DEFAULTS, Found, Step
 
 
@@ -118,20 +118,23 @@ def label_truncation(seen: Seen) -> Found:
 def power(seen: Seen) -> Found:
     """Per decisive effect and horizon, the smallest gain over random the data can detect (MDE), from the dispersion
     of the target alone, and the cluster that carries the most of that noise. A number that is not finite at some
-    decision times is left out of the power, and a cluster that carries more than ``heavy`` of the noise is a warning;
-    the contract is blocked when no horizon of an effect can measure its noise."""
+    decision times is left out of the power, and a cluster that carries more than ``heavy`` of the noise is a warning,
+    unless it is the only one; the contract is blocked when no horizon of an effect can measure its noise."""
     found = Found()
     found.shown["decisive"] = [_power(seen, d, found.warnings) for d in seen.decisive]
     return found
 
 
 def target_reads(seen: Seen) -> Found:
-    """Each decisive target, on the label rows of its first horizon, must give other values for other scores."""
+    """Each decisive target, on the label rows of its first horizon, must give other values for other scores; for
+    events, scores that leave some rows without one."""
     found = Found()
+    u = seen.contract.universe
+    missing = UNSCORED if u is not None and u.shape == "events" else 0.0
     for d in seen.decisive:
         h, table = d.rows[0]
         reduce = partial(_reduce, d.target, span(h), seen.costs)
-        found.checks.append(pr.target_reads_score(d.use.name, reduce, table))
+        found.checks.append(pr.target_reads_score(d.use.name, reduce, table, missing))
     return found
 
 
@@ -179,8 +182,9 @@ def _power(seen: Seen, d: Decisive, warnings: list[str]) -> dict[str, Any]:
         if values.height < raw.height:
             infinite.append(f"{raw.height - values.height} at {h}")
         p = pw.power(pw.block_se(values, span_ns(horizon)), width, span_ns(horizon))
-        top = cc.shares(joined, u.clusters, span_ns(horizon)).head(1).rows()
-        if top and top[0][1] > seen.heavy:
+        shares = cc.shares(joined, u.clusters, span_ns(horizon))
+        top = shares.head(1).rows()
+        if top and top[0][1] > seen.heavy and shares.height > 1:
             heavy.setdefault(top[0][0], []).append(f"{top[0][1]:.0%} at {h}")
         rows.append({"horizon": h, "decisions": values.height, **asdict(p), "concentration": top[:1]})
     if infinite:

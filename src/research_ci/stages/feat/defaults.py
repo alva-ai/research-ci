@@ -2,13 +2,14 @@
 
 Each is a step (``stages/skeleton.py``) that judges one eval on the label of the first decisive effect, under the step's
 name (``{clusters}`` is the universe's cluster column), against the floor world and the idea's null worlds like any
-eval; an idea eval of the same name is judged in its place. They never decide a verdict. So this list
-can change with experience without touching any freeze: the engine hash leaves ``stages/feat/defaults.py`` out.
+eval; an idea eval of the same name is judged in its place. A step runs for the universe's shape it ``needs``. They
+never decide a verdict. So this list can change with experience without touching any freeze: the engine hash leaves
+``stages/feat/defaults.py`` out.
 """
 
 import polars as pl
 
-from research_ci.eval.statistics.ic import rank_ic
+from research_ci.eval.statistics.ic import rank_ic, ts_ic
 from research_ci.eval.statistics.shuffled import QuantileSpread, RankCorrelation
 from research_ci.eval.statistics.spread import quantile_spread
 from research_ci.eval.structure.filters import kept_without_top, without_top
@@ -42,8 +43,28 @@ def top_minus_bottom(seen: Seen) -> Found:
     return seen.judge(Statistic(lambda table: quantile_spread(table, SHARE), QuantileSpread(SHARE)))
 
 
+def timing_ic(seen: Seen) -> Found:
+    """Time-series rank IC: each entity's score and label ranked over its own decision times, their product averaged
+    over the entities at each time."""
+    return seen.judge(ts_ic)
+
+
+def at_events(seen: Seen) -> Found:
+    """The mean label at the event rows, those with a finite score, at each decision time."""
+    return seen.judge(_at_events)
+
+
+def _at_events(table: pl.DataFrame) -> pl.DataFrame:
+    rows = table.filter(pl.col("score").is_finite())
+    return rows.group_by("t").agg(pl.col("y").mean().alias("value")).sort("t")
+
+
 CHECKS = [
-    Step("rank ic", "shown", ic, "Rank correlation of score and label per time"),
-    Step("rank ic without top {clusters}", "shown", ic_without_top, "Rank IC without the top fifth of clusters"),
-    Step("top minus bottom fifth", "shown", top_minus_bottom, "Top fifth by score less the bottom fifth"),
+    Step("rank ic", "shown", ic, "Rank correlation of score and label per time", "cross"),
+    Step(
+        "rank ic without top {clusters}", "shown", ic_without_top, "Rank IC without the top fifth of clusters", "cross"
+    ),
+    Step("top minus bottom fifth", "shown", top_minus_bottom, "Top fifth by score less the bottom fifth", "cross"),
+    Step("ts ic", "shown", timing_ic, "Rank correlation of score and label over time", "series"),
+    Step("mean at events", "shown", at_events, "Mean label at the event rows", "events"),
 ]

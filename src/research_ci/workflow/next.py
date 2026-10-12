@@ -14,8 +14,11 @@ AGENT: dict[str, tuple[str, str, str]] = {
     "contract": (
         "derive",
         "rci contract derive",
-        "fill in contract.py (START.md says how; `rci plugins` lists the plugins, their options and fields), then "
-        "derive the contract",
+        "fill in contract.py (START.md says how; `rci plugins` lists the plugins, their options and fields), with the "
+        'shape of the question in Universe(..., shape=...): "cross" (the default) ranks the candidates at each time, '
+        'target ref.mean with top, floor world PermuteWithin across clusters; "series" times one or a few assets, '
+        'target ref.timing; "events" scores only the event rows, target ref.mean without top; both floor worlds '
+        'ShiftInTime(min_shift="horizon"); then derive the contract',
     ),
     "data": (
         "check",
@@ -32,7 +35,8 @@ AGENT: dict[str, tuple[str, str, str]] = {
         "list at least one lab eval in EVALS in feat.py, a function of your own in evals/<name>.py with its CASES, "
         "listed as Eval(fn, h0='<the H0 it rejects>'); give each alternative of contract.py a null world in "
         'nulls/feat.py, such as NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", '
-        'block="horizon"), evals=("<eval>",))]; each lab eval and world must reach z ≥ 2 at every horizon it covers, '
+        'block="horizon"), evals=("<eval>",))], or for a series or events Null("<id>", ShiftInTime(min_shift="72h")); '
+        "each lab eval and world must reach z ≥ 2 at every horizon it covers, "
         "or the claim fails there; then write research/<name>.py from research/example.py (polars expressions; row "
         "loops run with a warning), try it with `rci feat explore <file>`, and submit it; `rci methods` lists the "
         "library, how a lab eval is written, and the fields of a null world",

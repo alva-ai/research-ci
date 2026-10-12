@@ -23,7 +23,9 @@ CONTRACT = Contract(
     data="TODO-data-plugin",
     costs=Use("ref.flat_costs", {"commission_bps": 0.0, "slippage_bps": 0.0}),
     execution=Execution(every="24h"),
-    universe=Universe("TODO-universe-plugin", clusters="entity"),
+    # shape="cross" ranks the candidates at each time; "series" times one or a few assets (target ref.timing);
+    # "events" asks what follows the rows the features score (target ref.mean without top)
+    universe=Universe("TODO-universe-plugin", clusters="entity", shape="cross"),
     labels=(Label("return", Use("ref.return", {"price": "close"}), horizons=("24h",)),),
     forward=Forward("TODO-data-plugin"),
 )
@@ -36,16 +38,17 @@ takes `-i {idea}`. After every step, run `rci next -i {idea}` and do what it say
 write, and the helper commands.
 
 1. Contract: fill in `contract.py`. `rci plugins` lists the installed data sources, universes, labels, targets, and
-   cost models, with their options and fields. If you looked at the data or at results for this idea (plugin data,
-   notebooks, backtests), declare it in `used`; `used=()` only if nothing was seen. Run `rci contract derive`; a
-   person approves the ContractCard before any other work starts.
+   cost models, with their options and fields. `Universe(..., shape=...)`: `"cross"` (default) ranks candidates,
+   `ref.mean` with `top`; `"series"` times one or a few assets, `ref.timing`; `"events"` scores only events, `ref.mean`.
+   If you looked at the data or at results for this idea (plugin data, notebooks, backtests), declare it in `used`;
+   `used=()` only if nothing was seen. Run `rci contract derive`; a person approves the ContractCard first.
 2. Data, your loop: list at least one lab eval in `EVALS` in `data.py` (Lab evals, below); run `rci data check`.
 3. Feat, your loop: list at least one lab eval in `EVALS` in `feat.py`, and give each alternative of the contract a
    null world in `nulls/feat.py`: `NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>",
-   block="horizon"), evals=("<eval>",))]` (`from research_ci.api import Null, PermuteWithin`); a world judges the evals
-   it names, or the decisive effect when it names none. Copy `research/example.py` to `research/<name>.py` and write
-   your features there; try a file with `rci feat explore <file>` (free), then judge it with `rci feat submit <file>`
-   (one trial of the budget).
+   block="horizon"), evals=("<eval>",))]`, or for a series or events `ShiftInTime(min_shift="72h")` (`from
+   research_ci.api import Null, PermuteWithin, ShiftInTime`); a world judges the evals it names, or the decisive effect
+   when it names none. Copy `research/example.py` to `research/<name>.py` and write your features there; try a file
+   with `rci feat explore <file>` (free), then judge it with `rci feat submit <file>` (one trial of the budget).
 4. A person reviews each result after your loop and approves it; then the next stage opens.
 
 Lab evals: your tests of the claim; every layer with `EVALS` needs at least one, and each can veto. A lab eval is a
@@ -55,10 +58,9 @@ and, for a data eval, `PITS`, optional. List it with the H0 it rejects, in one s
 <eval>`, then `EVALS = [Eval(<eval>, h0="<the H0>")]`. In feat it, and each null world, must reach z ≥ 2 at every
 horizon it covers, or the claim fails there; it never passes what the decisive test failed. In data, `on_fail` says
 what is done with the rows it flags: `mask`, `drop_entities`, `ask`, or `block` (any row it flags, after the
-treatments before it, blocks the data). The
-engine runs the tests before anything heavy and refuses a layer with a lab eval that fails them; run
-`rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's library (`rci methods`):
-shown, never vetoing, with no `h0`.
+treatments before it, blocks the data). The engine runs the tests before anything heavy and refuses a layer with a
+lab eval that fails them; run `rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's
+library (`rci methods`): shown, never vetoing, with no `h0`.
 
 Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with

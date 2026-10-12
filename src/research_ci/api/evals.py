@@ -205,7 +205,8 @@ class Market:
     """A synthetic evaluation table: ``entities`` candidates in ``clusters`` (and the clusters in ``groups``) at
     ``times`` hourly decision times. Each label is a group level (share ``group_share`` of its variance), a cluster
     shock (``cluster_share``) and its own noise, Student-t with ``tail`` degrees of freedom (``None``: normal). The
-    score's rank correlation with the label is about ``ic``."""
+    score's rank correlation with the label is about ``ic``: across the entities at each time (``shape="cross"``), or
+    over time within each entity (``"series"``, judged against a world that shifts the scores in time)."""
 
     times: int = 120
     entities: int = 100
@@ -215,10 +216,13 @@ class Market:
     group_share: float = 0.0
     tail: float | None = 4.0
     ic: float = 0.0
+    shape: Literal["cross", "series"] = "cross"
 
     def __post_init__(self) -> None:
         if not 0 < self.clusters <= self.entities or self.groups < 1 or self.times < 2:
             raise ValueError("a market needs at least two times and no more clusters than entities")
+        if self.shape not in ("cross", "series"):
+            raise ValueError("a market's shape is cross or series")
         if self.cluster_share + self.group_share >= 1 or min(self.cluster_share, self.group_share) < 0:
             raise ValueError("the cluster and group shares must leave room for each entity's own noise")
         if not -1 < self.ic < 1:

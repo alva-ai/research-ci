@@ -150,6 +150,8 @@ EVALS = [
 
 A `Case` takes frames in and gives frames or numbers out: `run(given)` must give `expect`, a frame matched on its own columns in any row order, or a number. `Eval(fn, ...)` adds what a layer reads: `h0` for a lab eval (and refused on a library eval), `on_fail` and `covers` in `data.py`, `label`, `horizons`, and `combine` in `feat.py`. [docs/catalog.md](docs/catalog.md#slot-3-lab-evals) has every field.
 
+A universe also declares the shape of the question, `Universe(use, clusters, shape=...)`, and the shape sets the floor world. `"cross"`, the default, asks which candidates do better than the others at the same time: the floor shuffles the scores across clusters at each decision time, and the target is `ref.mean` with `top`. `"series"` times one or a few assets, and `"events"` asks what follows the rows the features score, the others left without a score: for both, the floor world is `ShiftInTime(min_shift="horizon")`, which shifts every entity's scores along its decision times by one offset of at least the horizon, the same for all entities, so the scores keep their own autocorrelation and lose only their alignment with the labels. A series is judged with `ref.timing` (sign(score) × label) and shown the time-series rank IC, `ts_ic`; events with `ref.mean` over the scored rows, and the mean label at the events. `docs/catalog.md` lists each shape with its world and targets.
+
 ### Who does what
 
 ```text

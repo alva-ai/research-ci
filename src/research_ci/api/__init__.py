@@ -12,7 +12,7 @@ from research_ci.api.contract import (
 )
 from research_ci.api.data import Hedge, Levels, OnFail, Pit
 from research_ci.api.evals import TABLE_KEYS, Case, Eval, Market, Power, Recovers, Size, Source, evals_of
-from research_ci.api.nulls import Null, PermuteWithin, nulls_of
+from research_ci.api.nulls import Null, PermuteWithin, ShiftInTime, nulls_of
 from research_ci.api.plugins import (
     ENTRY_POINTS,
     FIELD_COLUMNS,
@@ -63,6 +63,7 @@ __all__ = [
     "Recovers",
     "Reference",
     "ReferenceSource",
+    "ShiftInTime",
     "Size",
     "Source",
     "TargetPlugin",

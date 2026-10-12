@@ -18,7 +18,8 @@ START_NS = 1_767_225_600 * 10**9
 
 def market(m: Market, seed: int) -> pl.DataFrame:
     """A synthetic evaluation table, one row per entity and time. Columns ``t``, ``entity``, ``cluster``, ``group``,
-    ``score`` and ``y``."""
+    ``score`` and ``y``; the score follows the label across the entities at each time, or, for a series, over each
+    entity's times."""
     rng = np.random.default_rng(seed)
     cluster = np.arange(m.entities) % m.clusters
     group = cluster % m.groups
@@ -29,7 +30,8 @@ def market(m: Market, seed: int) -> pl.DataFrame:
     own_share = 1 - m.cluster_share - m.group_share
     y = math.sqrt(m.group_share) * level + math.sqrt(m.cluster_share) * shock + math.sqrt(own_share) * own
     rho = 2 * math.sin(math.pi * m.ic / 6)
-    score = rho * _standard(y) + math.sqrt(1 - rho * rho) * rng.standard_normal(shape)
+    axis = 0 if m.shape == "series" else 1
+    score = rho * _standard(y, axis) + math.sqrt(1 - rho * rho) * rng.standard_normal(shape)
     t = np.repeat(np.arange(m.times, dtype=np.int64) * HOUR_NS, m.entities)
     frame = pl.DataFrame(
         {
@@ -112,7 +114,7 @@ def _noise(rng: np.random.Generator, shape: tuple[int, int], tail: float | None)
     return draws / math.sqrt(tail / (tail - 2)) if tail > 2 else draws
 
 
-def _standard(x: np.ndarray) -> np.ndarray:
-    mean = x.mean(axis=1, keepdims=True)
-    sd = x.std(axis=1, keepdims=True)
+def _standard(x: np.ndarray, axis: int) -> np.ndarray:
+    mean = x.mean(axis=axis, keepdims=True)
+    sd = x.std(axis=axis, keepdims=True)
     return (x - mean) / np.where(sd > 0, sd, 1.0)

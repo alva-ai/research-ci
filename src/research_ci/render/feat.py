@@ -122,7 +122,7 @@ def _world_rows(r: dict[str, Any]) -> list[str]:
 
 def _judgement(r: dict[str, Any]) -> str:
     """A slot-3 judgement in one world: its z against the bar, and how its horizons vote."""
-    where = "floor (chance, timing)" if r["world"] == "floor" else f"{r['world']} ({', '.join(r['explains'])})"
+    where = f"{r['world']} ({', '.join(r['explains'])})"
     sign = "≥" if r["passed"] else "<"
     vote = "one vote for all its horizons" if r["combine"] == "max" else "each horizon votes"
     z = f"z {num(r['z'])} {sign} {VETO_Z:.2f}" if r["combine"] == "max" else f"weakest z {num(r['z'])}"
@@ -171,8 +171,10 @@ def _test_line(t: dict[str, Any]) -> str:
 
 
 def _shuffles(r: dict[str, Any]) -> str:
-    """How many shuffles of the world the z rests on; records from before it was kept show nothing."""
-    return f" · {r['shuffles']} shuffles" if r.get("shuffles") else ""
+    """How many shuffles of the world the z rests on, and when they are every one it has; records from before it was
+    kept show nothing."""
+    every = ", every shift there is" if r.get("distinct") else ""
+    return f" · {r['shuffles']} shuffles{every}" if r.get("shuffles") else ""
 
 
 def explore_card(spec: dict[str, Any], idea: str) -> str:

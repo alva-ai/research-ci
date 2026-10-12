@@ -16,6 +16,7 @@ from research_ci.api.plugins import LabelPlugin, TargetPlugin
 from research_ci.kernel.time.clock import TIME, from_ns
 
 DEFAULT_TARGET = "ref.mean"
+UNSCORED = 0.5
 
 
 class DeriveError(ContractError):
