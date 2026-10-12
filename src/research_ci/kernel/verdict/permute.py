@@ -19,7 +19,7 @@ import polars as pl
 @dataclass(frozen=True)
 class Layout:
     """How a world shuffles one table: within ``bucket`` (``None``: each decision time), whole ``clusters`` at a
-    time (``None``: each entity alone), the same way within blocks of ``block_ns``."""
+    time (``None``: each inst alone), the same way within blocks of ``block_ns``."""
 
     bucket: str | None
     clusters: str | None
@@ -37,9 +37,9 @@ class Permutation:
             pl.int_range(n, dtype=pl.Int64).alias("row"),
             pl.col("t").dt.epoch("ns").alias("t"),
             _key(bucket).alias("b"),
-            (_key(cluster) if cluster else pl.col("entity").cast(pl.String)).alias("c"),
-            pl.col("entity").cast(pl.String),
-        ).sort("t", "b", "c", "entity")
+            (_key(cluster) if cluster else pl.col("inst").cast(pl.String)).alias("c"),
+            pl.col("inst").cast(pl.String),
+        ).sort("t", "b", "c", "inst")
         new = (pl.col("t") != pl.col("t").shift(1)) | (pl.col("b") != pl.col("b").shift(1))
         new = new | (pl.col("c") != pl.col("c").shift(1))
         frame = frame.with_columns(inst=new.fill_null(True).cum_sum() - 1)
@@ -66,9 +66,9 @@ class Permutation:
         members = self.inst_of_pos
         sized = _classes(members, np.arange(n, dtype=np.int64))
         member_codes = frame.select(
-            block, pl.col("b").rank("dense"), pl.col("c").rank("dense"), pl.col("entity").rank("dense")
+            block, pl.col("b").rank("dense"), pl.col("c").rank("dense"), pl.col("inst").rank("dense")
         ).cast(pl.Int64)
-        member_keys = frame.select(block, "b", "c", "entity")
+        member_keys = frame.select(block, "b", "c", "inst")
         self.clusters, self.member_frame, self.member_ids = _drawn(sized, member_keys, member_codes)
 
     def index(self, seed: int) -> np.ndarray:

@@ -102,7 +102,7 @@ def test_a_correct_label_passes_truncation_when_decisions_fall_between_prices(fi
 def test_a_target_that_gives_the_same_number_for_any_scores_is_caught(fields: pl.DataFrame, target, status) -> None:
     h = pd.Timedelta("8h")
     cands = _cands(fields)
-    rows = PairCarry(flow="funding_rate").values(fields, cands, h).join(cands, on=["t", "entity"], suffix="_candidate")
+    rows = PairCarry(flow="funding_rate").values(fields, cands, h).join(cands, on=["t", "inst"], suffix="_candidate")
     check = pr.target_reads_score("ref.mean", lambda t: target.reduce(t, h, COSTS), rows)
     assert check.status == status, check.detail
 
@@ -145,7 +145,7 @@ def test_fees_must_match_the_cost_model(fields: pl.DataFrame, plugin, status) ->
 )
 def test_the_consumer_must_earn_what_the_labels_say_its_positions_earned(fields, plugin, status) -> None:
     result = plugin.run(fields)
-    held = result.positions.join(_cands(fields), on=["t", "entity"], how="inner")
+    held = result.positions.join(_cands(fields), on=["t", "inst"], how="inner")
     labels = PairCarry(flow="funding_rate").values(fields, held, pd.Timedelta(hours=1))
     check = pr.matches_labels(result, labels, HOUR_NS)
     assert check.status == status, check.detail
@@ -154,19 +154,19 @@ def test_the_consumer_must_earn_what_the_labels_say_its_positions_earned(fields,
 def test_own_scores_pass_through_and_perturbations_keep_their_share(fields: pl.DataFrame) -> None:
     plugin = ToyCarry()
     base = plugin.run(fields)
-    scores = _cands(fields).select("t", "entity", "score")
+    scores = _cands(fields).select("t", "inst", "score")
     assert pr.passthrough(plugin.run, fields, base, scores).status == "pass"
     block = int(pd.Timedelta("24h").value)
     kept = pr.perturb(scores, "drop", 0.2, block, seed=1)
     assert 0.7 < kept.height / scores.height < 0.9
-    per_block = kept.with_columns(b=pl.col("t").dt.epoch("ns") // block).group_by("b", "entity").len()
-    whole = scores.with_columns(b=pl.col("t").dt.epoch("ns") // block).group_by("b", "entity").len()
-    partial = per_block.join(whole, on=["b", "entity"], suffix="_all").filter(pl.col("len") != pl.col("len_all"))
+    per_block = kept.with_columns(b=pl.col("t").dt.epoch("ns") // block).group_by("b", "inst").len()
+    whole = scores.with_columns(b=pl.col("t").dt.epoch("ns") // block).group_by("b", "inst").len()
+    partial = per_block.join(whole, on=["b", "inst"], suffix="_all").filter(pl.col("len") != pl.col("len_all"))
     assert partial.is_empty()
     shuffled = pr.perturb(scores, "shuffle", 0.5, block, seed=1)
     assert shuffled.height == scores.height
     assert sorted(shuffled["score"].to_list()) == sorted(scores["score"].to_list())
-    assert (shuffled.sort("t", "entity")["score"] != scores.sort("t", "entity")["score"]).any()
+    assert (shuffled.sort("t", "inst")["score"] != scores.sort("t", "inst")["score"]).any()
 
 
 @pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (Unbalanced(), "fail")])
@@ -176,5 +176,5 @@ def test_components_must_add_up_to_net(fields: pl.DataFrame, plugin, status) -> 
 
 @pytest.mark.parametrize(("plugin", "status"), [(ToyCarry(), "pass"), (LaggedScores(), "fail")])
 def test_the_consumer_must_reproduce_itself_from_its_own_scores(fields: pl.DataFrame, plugin, status) -> None:
-    scores = _cands(fields).select("t", "entity", "score")
+    scores = _cands(fields).select("t", "inst", "score")
     assert pr.passthrough(plugin.run, fields, plugin.run(fields), scores).status == status

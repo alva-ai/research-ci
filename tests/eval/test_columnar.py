@@ -1,5 +1,5 @@
 """Engine code works on whole columns. In ``SCANNED``, the methods, default checks and treatments that run on every
-idea's data and what tests the evals, a loop over data-sized things (rows, entities, clusters, decision times) is not
+idea's data and what tests the evals, a loop over data-sized things (rows, insts, clusters, decision times) is not
 allowed, and neither are the row APIs in ``ROW_APIS``. A structural loop, over horizons, folds, cut points, chunks,
 iterations of an algorithm, repetitions, or calls into plugin, research, or criterion code, and a row API on a handful
 of rows, such as a worked example's fixture, are allowed only through an entry in ``ALLOWED``: the file, the function,
@@ -44,8 +44,7 @@ ALLOWED: dict[Key, str] = {
     "per treatment",
     ("stages/data/treatments.py", "_counts", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
     ("stages/data/treatments.py", "_split", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
-    ("stages/data/treatments.py", "_split", "iter_rows"): "worked example: rows per entity of a fixed five-entity "
-    "source",
+    ("stages/data/treatments.py", "_split", "iter_rows"): "worked example: rows per inst of a fixed five-inst source",
     ("stages/data/treatments.py", "Numbers.per_set", "for"): "the target plugin runs once per set of treatments and "
     "key",
     ("stages/data/treatments.py", "Numbers._build", "for"): "one label frame per key of the decisive numbers",
@@ -54,8 +53,8 @@ ALLOWED: dict[Key, str] = {
     "per split the table rests on",
 }
 FIX = (
-    "fix: work on whole columns: group_by().agg() per group, .over() per entity or cluster, a join or join_asof per "
-    "decision time, rolling_*_by for windows; a loop or a row API over rows, entities, clusters, or times does not "
+    "fix: work on whole columns: group_by().agg() per group, .over() per inst or cluster, a join or join_asof per "
+    "decision time, rolling_*_by for windows; a loop or a row API over rows, insts, clusters, or times does not "
     "belong in eval, stages/*/defaults.py, or the other files in SCANNED"
 )
 JUSTIFY = (

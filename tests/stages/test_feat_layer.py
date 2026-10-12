@@ -58,7 +58,7 @@ import polars as pl
 
 
 def features(fields, candidates):
-    return candidates.select("t", "entity", pl.col("spread_h").alias("score"))
+    return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 """
 
 NOISE = """
@@ -66,7 +66,7 @@ import polars as pl
 
 
 def features(fields, candidates):
-    return candidates.select("t", "entity", (pl.struct("t", "entity").hash(7) / 2.0**64).alias("score"))
+    return candidates.select("t", "inst", (pl.struct("t", "inst").hash(7) / 2.0**64).alias("score"))
 """
 
 PEEK = """
@@ -74,11 +74,11 @@ import polars as pl
 
 
 def features(fields, candidates):
-    rate = fields.filter(pl.col("field") == "funding_rate").group_by("entity").agg(pl.col("value").mean())
-    short = rate.rename({"entity": "short", "value": "s"})
-    long = rate.rename({"entity": "long", "value": "l"})
+    rate = fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg(pl.col("value").mean())
+    short = rate.rename({"inst": "short", "value": "s"})
+    long = rate.rename({"inst": "long", "value": "l"})
     rows = candidates.join(short, on="short").join(long, on="long")
-    return rows.select("t", "entity", (pl.col("s") - pl.col("l")).alias("score"))
+    return rows.select("t", "inst", (pl.col("s") - pl.col("l")).alias("score"))
 """
 
 
@@ -384,13 +384,13 @@ import polars as pl
 def features(fields, candidates):
     assert isinstance(fields, pl.DataFrame) and isinstance(candidates, pl.DataFrame)
     rate = fields.filter(pl.col("field") == "funding_rate").select(
-        "entity", pl.col("available_at").alias("at"), "value"
+        "inst", pl.col("available_at").alias("at"), "value"
     ).sort("at")
     rows = candidates.sort("t")
     for leg in ("long", "short"):
-        table = rate.rename({"entity": leg, "at": f"{leg}_at", "value": leg + "_rate"})
+        table = rate.rename({"inst": leg, "at": f"{leg}_at", "value": leg + "_rate"})
         rows = rows.join_asof(table, left_on="t", right_on=f"{leg}_at", by=leg, check_sortedness=False)
-    return rows.select("t", "entity", (pl.col("short_rate") - pl.col("long_rate")).alias("score"))
+    return rows.select("t", "inst", (pl.col("short_rate") - pl.col("long_rate")).alias("score"))
 """
 
 LAZY = EAGER.replace("fields.filter(", "fields.lazy().filter(").replace("candidates.sort(", "candidates.lazy().sort(")
@@ -399,7 +399,7 @@ PANDAS = """
 def features(fields, candidates):
     frame = candidates.to_pandas()
     frame["score"] = frame.groupby("t")["spread_h"].rank()
-    return frame[["t", "entity", "score"]]
+    return frame[["t", "inst", "score"]]
 """
 
 
@@ -416,7 +416,7 @@ def test_features_get_dataframes_and_may_return_polars_lazy_or_pandas(tmp_path: 
     example = (idea.root / "research" / "example.py").read_text()
     mine = example.replace('FIELD = "TODO"', 'FIELD = "funding_rate"').splitlines()[2:]
     explored, _ = idea.explore_feat(_file(idea, "mine", "\n".join(mine)))
-    assert explored["scores"]["rows"] == 0, "the example scores entities; the toy's candidates are pairs"
+    assert explored["scores"]["rows"] == 0, "the example scores insts; the toy's candidates are pairs"
 
 
 def _costly(call, memory=True):
@@ -460,9 +460,9 @@ import polars as pl
 
 
 def features(fields, candidates):
-    frame = candidates.sort("t", "entity")
-    scores = [s for _, _, s in frame.select("t", "entity", "spread_h").iter_rows()]
-    return frame.select("t", "entity", pl.Series("score", scores))
+    frame = candidates.sort("t", "inst")
+    scores = [s for _, _, s in frame.select("t", "inst", "spread_h").iter_rows()]
+    return frame.select("t", "inst", pl.Series("score", scores))
 """
 
 
@@ -504,7 +504,7 @@ def test_what_is_refused_before_anything_runs_says_how_to_fix_it(tmp_path: Path)
     refusals = [
         (idea.root / "research" / "example.py", "is still the example; write your own"),
         (idea.root / "research" / "missing.py", "does not exist; a features file defines features(fields, candidates)"),
-        (_file(idea, "columns", SPREAD.replace('alias("score")', 'alias("s")')), "features returned t, entity, s"),
+        (_file(idea, "columns", SPREAD.replace('alias("score")', 'alias("s")')), "features returned t, inst, s"),
         (_file(idea, "fails", SPREAD.replace("spread_h", "spread_x")), "features(fields, candidates) failed"),
         (_file(idea, "nothing", "import polars as pl\n"), "defines no function features"),
     ]
@@ -633,7 +633,7 @@ import polars as pl
 
 def features(fields, candidates):
     score = pl.when(pl.col("symbol") != "Z").then(pl.col("spread_h"))
-    return candidates.select("t", "entity", score.alias("score"))
+    return candidates.select("t", "inst", score.alias("score"))
 """
 SCORED_Y = """
 import polars as pl
@@ -670,9 +670,9 @@ import polars as pl
 
 
 def features(fields, candidates):
-    noise = pl.struct("t", "entity").hash(7) / 2.0**64
-    half = pl.struct("t", "entity").hash(3) % 2 == 0
-    return candidates.select("t", "entity", pl.when(half).then(noise).alias("score"))
+    noise = pl.struct("t", "inst").hash(7) / 2.0**64
+    half = pl.struct("t", "inst").hash(3) % 2 == 0
+    return candidates.select("t", "inst", pl.when(half).then(noise).alias("score"))
 """
 
 

@@ -202,7 +202,7 @@ class _DataCheck:
             "approval": None if approved is None else approved["payload"]["approval"],
             "code": spec["code"],
             "fields": spec["fields"],
-            "entities": spec["entities"],
+            "insts": spec["insts"],
             "rows": spec["rows"],
             "checks": spec["checks"],
             "reference": spec.get("reference", {}).get("note", ""),
@@ -221,7 +221,7 @@ class _DataCheck:
             "source": as_use(self.c.data).name,
             "hash": digest,
             "rows": fields.height,
-            "entities": fields["entity"].n_unique(),
+            "insts": fields["inst"].n_unique(),
             "first": iso(self.start),
             "explore_end": iso(self.explore_end),
             "age_days": round(age, 1),
@@ -324,11 +324,11 @@ def _eval_note(row: dict[str, Any]) -> str:
 
 
 def _exclusions(cands: pl.DataFrame | None, ts: list[tr.Treatment]) -> pl.DataFrame:
-    empty = pl.DataFrame(schema={"t": pl.Datetime("ns", "UTC"), "entity": pl.String})
+    empty = pl.DataFrame(schema={"t": pl.Datetime("ns", "UTC"), "inst": pl.String})
     if cands is None:
         return empty
-    kept = tr.apply_candidates(ts, cands.select("t", "entity"))
-    return cands.select("t", "entity").join(kept, on=["t", "entity"], how="anti").sort("t", "entity")
+    kept = tr.apply_candidates(ts, cands.select("t", "inst"))
+    return cands.select("t", "inst").join(kept, on=["t", "inst"], how="anti").sort("t", "inst")
 
 
 def current_data_deps(

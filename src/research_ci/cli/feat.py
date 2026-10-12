@@ -11,7 +11,7 @@ from research_ci.workflow.machine import State, WorkflowError
 feat_app = typer.Typer(no_args_is_help=True, help="Judge features against random scores.")
 FEATURES_HELP = (
     "A features file, such as research/<name>.py: features(fields, candidates) gets polars DataFrames and returns t, "
-    "entity, score; research/example.py shows one. Row-by-row code gets a warning on the card, which also shows the "
+    "inst, score; research/example.py shows one. Row-by-row code gets a warning on the card, which also shows the "
     "time and peak memory the features took."
 )
 

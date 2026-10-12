@@ -17,19 +17,19 @@ def funding_ic(table):
 
 def closes_at_zero(fields):
     """Closes at zero or below."""
-    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("inst", "field", "event_time")
 
 
 FOUR = pl.DataFrame(
     {
         "t": [T] * 4,
-        "entity": list("abcd"),
+        "inst": list("abcd"),
         "score": [1.0, 2.0, 3.0, 4.0],
         "y": [0.0] * 4,
         "y_flow": [0.1, 0.2, 0.4, 0.3],
     }
 )
-ROWS = pl.DataFrame({"entity": ["a", "a"], "field": ["close"] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
+ROWS = pl.DataFrame({"inst": ["a", "a"], "field": ["close"] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
 CASES = [
     Case("one swap in four: 1 - 6·2/(4·15)", funding_ic, 0.8, given=FOUR),
     Case("a close at zero is flagged", closes_at_zero, 1, given=ROWS),

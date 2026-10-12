@@ -14,7 +14,7 @@ def _frame() -> pl.DataFrame:
     return field_table(
         pd.DataFrame(
             {
-                "entity": ["a", "b", "a"],
+                "inst": ["a", "b", "a"],
                 "field": ["x", "x", "y"],
                 "event_time": [T0, T0, T0],
                 "available_at": [T0, T0, T0 + pd.Timedelta(hours=1)],
@@ -42,7 +42,7 @@ def test_frame_hash_ignores_row_and_column_order() -> None:
 
 def test_frame_hash_sees_a_changed_value() -> None:
     frame = _frame()
-    changed = frame.with_columns(pl.when(pl.col("entity") == "b").then(2.5).otherwise(pl.col("value")).alias("value"))
+    changed = frame.with_columns(pl.when(pl.col("inst") == "b").then(2.5).otherwise(pl.col("value")).alias("value"))
     assert hash_frame(changed) != hash_frame(frame)
 
 

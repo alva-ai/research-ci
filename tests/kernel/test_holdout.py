@@ -15,9 +15,7 @@ TIERS = Tiers(explore_end=to_ns(T0 + 10 * H), seal_end=to_ns(T0 + 20 * H))
 def _prices(n: int = 30) -> pl.DataFrame:
     rows = [("a", "close", T0 + i * H, T0 + i * H, 100.0 + i, 0) for i in range(n)]
     rows += [("b", "close", T0 + i * H, T0 + i * H, 200.0 - i, 0) for i in range(n)]
-    return field_table(
-        pd.DataFrame(rows, columns=["entity", "field", "event_time", "available_at", "value", "vintage"])
-    )
+    return field_table(pd.DataFrame(rows, columns=["inst", "field", "event_time", "available_at", "value", "vintage"]))
 
 
 def test_explore_tier_never_shows_rows_after_its_cutoff() -> None:

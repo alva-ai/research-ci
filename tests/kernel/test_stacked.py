@@ -19,15 +19,15 @@ def _spread(table: pl.DataFrame) -> pl.DataFrame:
     return table.group_by("t").agg(top.alias("value"))
 
 
-def _entity_mean(table: pl.DataFrame) -> pl.DataFrame:
-    """Each entity's mean score over every time: it reads across times."""
-    m = table.group_by("entity").agg(pl.col("score").mean().alias("m"))
-    return table.join(m, on="entity").group_by("t").agg(pl.corr("m", "y", method="spearman").alias("value"))
+def _inst_mean(table: pl.DataFrame) -> pl.DataFrame:
+    """Each inst's mean score over every time: it reads across times."""
+    m = table.group_by("inst").agg(pl.col("score").mean().alias("m"))
+    return table.join(m, on="inst").group_by("t").agg(pl.corr("m", "y", method="spearman").alias("value"))
 
 
 def _lagged(table: pl.DataFrame) -> pl.DataFrame:
     """The score of the time before: it reads across times."""
-    s = table.sort("t").with_columns(p=pl.col("score").shift(1).over("entity"))
+    s = table.sort("t").with_columns(p=pl.col("score").shift(1).over("inst"))
     return s.group_by("t").agg(pl.corr("p", "y").alias("value"))
 
 
@@ -55,7 +55,7 @@ def test_stacked_shuffles_give_what_the_eval_gives_shuffle_by_shuffle(evaluate) 
     np.testing.assert_allclose(form(index), _by_shuffle(evaluate, table, index, form.times), rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("evaluate", [_entity_mean, _lagged, _monthly], ids=["entity mean", "lagged", "monthly"])
+@pytest.mark.parametrize("evaluate", [_inst_mean, _lagged, _monthly], ids=["inst mean", "lagged", "monthly"])
 def test_an_eval_that_reads_across_times_or_the_calendar_is_not_stacked(evaluate) -> None:
     table = market(Market(ic=0.05, times=24 * 120), 3)
     assert stacked(evaluate, table, per_t(evaluate, table)) is None

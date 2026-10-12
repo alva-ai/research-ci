@@ -23,13 +23,13 @@ polars function in `evals/<name>.py` (copy `evals/example.py`) with its tests in
 and, for a data eval, `PITS`, optional. List it with the H0 it rejects, in one sentence: `from evals.<name> import
 <eval>`, then `EVALS = [Eval(<eval>, h0="<the H0>")]`. In feat it, and each null world, must reach z ≥ 2 at every
 horizon it covers, or the claim fails there; it never passes what the decisive test failed. In data, `on_fail` says
-what is done with the rows it flags: `mask`, `drop_entities`, `ask`, or `block` (any row it flags, after the
+what is done with the rows it flags: `mask`, `drop_insts`, `ask`, or `block` (any row it flags, after the
 treatments before it, blocks the data). The
 engine runs the tests before anything heavy and refuses a layer with a lab eval that fails them; run
 `rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's library (`rci methods`):
 shown, never vetoing, with no `h0`.
 
-Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
+Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `inst`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with
 `fields.lazy() ... .collect()` for a longer pipeline; pandas is fine for dates; any library runs. Row-by-row code
 (`iter_rows`, `.rows()`, `map_elements`, loops over data) runs too, with a warning on the card that names each line.

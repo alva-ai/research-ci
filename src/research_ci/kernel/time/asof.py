@@ -13,7 +13,7 @@ def asof(
     lookback: pd.Timedelta | None = None,
     columns: list[str] | None = None,
 ) -> pl.DataFrame:
-    """Wide panel of everything known at ``t``: columns time, entity, then one column per field.
+    """Wide panel of everything known at ``t``: columns time, inst, then one column per field.
 
     Only rows with ``available_at <= t`` are visible, and each value is the latest vintage published by ``t``.
     """
@@ -28,9 +28,9 @@ def asof(
         known = known.filter(pl.col("event_time") > lit_time(cutoff - span_ns(lookback)))
     columns = field_names(fields) if columns is None else columns
     if known.is_empty():
-        return pl.DataFrame(schema={"time": TIME, "entity": pl.String, **dict.fromkeys(columns, pl.Float64)})
-    latest = known.sort("vintage").unique(subset=["entity", "field", "event_time"], keep="last", maintain_order=True)
-    panel = latest.pivot(on="field", index=["event_time", "entity"], values="value").rename({"event_time": "time"})
+        return pl.DataFrame(schema={"time": TIME, "inst": pl.String, **dict.fromkeys(columns, pl.Float64)})
+    latest = known.sort("vintage").unique(subset=["inst", "field", "event_time"], keep="last", maintain_order=True)
+    panel = latest.pivot(on="field", index=["event_time", "inst"], values="value").rename({"event_time": "time"})
     panel = panel.with_columns(pl.lit(None, dtype=pl.Float64).alias(c) for c in columns if c not in panel.columns)
     return panel.select(*PANEL_KEYS, *columns).sort(PANEL_KEYS)
 

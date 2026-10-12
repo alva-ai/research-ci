@@ -4,7 +4,7 @@ experience.
 Admitting the source (replay as of past times, the independent source, the canaries, the field grades) is not here:
 it checks fidelity, that the rows are what the venue reported, and the data layer runs it first. The checks in
 ``CHECKS`` come after it, in order, and check fitness, whether faithful rows can be used for research: a ticker reused
-for another asset, a price at zero or stuck, an entity too short for the horizons; the last only shows how much of
+for another asset, a price at zero or stuck, an inst too short for the horizons; the last only shows how much of
 the noise rests on one cluster. They read only the FieldTable, what the plugins declare (``levels``, ``hedge``) and
 the contract; none needs reference data or knows an asset class. Each is a step (``stages/skeleton.py``) that reads the
 data check's context (``Seen`` in ``stages/data/floor.py``) and returns lines for the DataCard, warnings, treatments,
@@ -48,7 +48,7 @@ MIN_CANDIDATES = 5
 CONCENTRATION = 0.5
 CONCENTRATION_SHOWN = 3
 PITS = ("unit", "level_break", "gap", "duplicate", "shift", "leak", "spike", "swap")
-KEYS = ["entity", "field", "event_time"]
+KEYS = ["inst", "field", "event_time"]
 
 
 def fresh(seen: Seen) -> Found:
@@ -71,7 +71,7 @@ def level_shifts(seen: Seen) -> Found:
     confirm at admission are masked for the source's ``mask`` on each side; confirmed ones are kept."""
     found = Found()
     shifts = level_shift_anomalies(seen.fields, *declared_levels(seen.source))
-    unconfirmed = shifts.join(_confirmed(seen.admission), on=["entity", "field", "end"], how="anti")
+    unconfirmed = shifts.join(_confirmed(seen.admission), on=["inst", "field", "end"], how="anti")
     if unconfirmed.height:
         around = span_ns(span(seen.source.levels.mask))
         reason = f"{unconfirmed.height} level shifts the independent source did not confirm"
@@ -121,8 +121,8 @@ def level_sanity(seen: Seen) -> Found:
 
 def identity_breaks(seen: Seen) -> Found:
     """A declared level that comes back after a gap longer than ``IDENTITY_GAP`` usual spacings at the declared factor
-    or more away from where it was is another asset under the same name: the entity is split there, and its rows from
-    the break on become ``<entity>#2`` (``#3`` after a second break)."""
+    or more away from where it was is another asset under the same name: the inst is split there, and its rows from
+    the break on become ``<inst>#2`` (``#3`` after a second break)."""
     names, factor, window = declared_levels(seen.source)
     name = "identity breaks"
     if not names:
@@ -130,41 +130,41 @@ def identity_breaks(seen: Seen) -> Found:
     found = idn.breaks(seen.fields, names, factor, window, IDENTITY_GAP)
     if found.is_empty():
         return Found([Check(name, "pass", f"no declared level comes back {factor:g}x away after a long gap")])
-    splits = idn.renames(found, seen.fields["entity"].unique())
-    shown = found.head(6).select("entity", _ns("at"), "ratio").rows()
+    splits = idn.renames(found, seen.fields["inst"].unique())
+    shown = found.head(6).select("inst", _ns("at"), "ratio").rows()
     where = ", ".join(f"{e} {_iso(int(at))} (x{r:.3g})" for e, at, r in shown)
     more = f" and {found.height - 6} more" if found.height > 6 else ""
-    entities = found["entity"].n_unique()
-    detail = f"{_count(entities, 'entity comes', 'entities come')} back at another level after a long gap: "
+    insts = found["inst"].n_unique()
+    detail = f"{_count(insts, 'inst comes', 'insts come')} back at another level after a long gap: "
     detail += where + more
-    reason = f"{_count(found.height, 'break', 'breaks')}; the rows from each are a new entity"
-    split = tr.split_entities("split entities at identity breaks", reason, splits, seen.fields)
+    reason = f"{_count(found.height, 'break', 'breaks')}; the rows from each are a new inst"
+    split = tr.split_insts("split insts at identity breaks", reason, splits, seen.fields)
     return Found([Check(name, "warn", detail + "; split")], treatments=[split])
 
 
 def coverage(seen: Seen) -> Found:
-    """Entities whose whole history is shorter than the contract's longest horizon are dropped; decision times with
+    """Insts whose whole history is shorter than the contract's longest horizon are dropped; decision times with
     fewer than ``MIN_CANDIDATES`` candidates are only counted, for a cross shape, which ranks them."""
     horizons = [span(h) for label in seen.contract.labels for h in label.horizons]
     if not horizons:
         return Found([Check("coverage", "skip", "the contract has no labels")])
     longest = max(horizons)
-    treated = tr.apply_all(seen.prior, seen.fields.select("entity", "field", "event_time"))
+    treated = tr.apply_all(seen.prior, seen.fields.select("inst", "field", "event_time"))
     short = cv.short_lived(treated, span_ns(longest))
     found, notes = Found(), []
     if short.height:
         found.treatments.append(
             tr.drop_spans(
-                "drop entities too short for the horizon",
-                f"{_count(short.height, 'entity', 'entities')} with less than {_days(longest)} of data",
+                "drop insts too short for the horizon",
+                f"{_count(short.height, 'inst', 'insts')} with less than {_days(longest)} of data",
                 _origins(short, seen.fields),
                 seen.fields,
             )
         )
-        names = short["entity"].to_list()
+        names = short["inst"].to_list()
         more = f" and {len(names) - 6} more" if len(names) > 6 else ""
         notes.append(
-            f"{_count(len(names), 'entity', 'entities')} shorter than {_days(longest)}, dropped: "
+            f"{_count(len(names), 'inst', 'insts')} shorter than {_days(longest)}, dropped: "
             f"{', '.join(names[:6])}{more}"
         )
     u = seen.contract.universe
@@ -176,7 +176,7 @@ def coverage(seen: Seen) -> Found:
     if notes:
         found.checks.append(Check("coverage", "warn", "; ".join(notes)))
     else:
-        found.checks.append(Check("coverage", "pass", f"every entity covers {_days(longest)}"))
+        found.checks.append(Check("coverage", "pass", f"every inst covers {_days(longest)}"))
     return found
 
 
@@ -231,19 +231,19 @@ CHECKS = [
     Step("data is current", "warns", fresh, "Warns when the newest row is too old"),
     Step("level shifts", "treats", level_shifts, "Masks level jumps the source did not confirm", "levels"),
     Step("level sanity", "treats", level_sanity, "Masks levels at zero, stuck, or spiking", "levels"),
-    Step("identity breaks", "treats", identity_breaks, "Splits an entity that returns at another level", "levels"),
-    Step("coverage", "treats", coverage, "Drops entities shorter than the longest horizon"),
+    Step("identity breaks", "treats", identity_breaks, "Splits an inst that returns at another level", "levels"),
+    Step("coverage", "treats", coverage, "Drops insts shorter than the longest horizon"),
     Step("hedge guard", "treats", hedge_guard, "Drops candidates whose legs are not one asset", "hedge"),
     Step("influence concentration", "warns", concentration, "Shows the clusters most of the noise rests on"),
 ]
 
 
 def _confirmed(admission: dict[str, Any]) -> pl.DataFrame:
-    """Level shifts the independent source confirmed at admission: ``entity``, ``field``, ``end``. Admission records
+    """Level shifts the independent source confirmed at admission: ``inst``, ``field``, ``end``. Admission records
     the end of the window it asked about, the reconciliation tolerance after the shift."""
     rows = admission.get("confirmed_shifts", [])
     tol = span_ns(span(admission.get("settings", {}).get("tolerance", "0s")))
-    frame = pl.DataFrame(rows, schema={"entity": pl.String, "field": pl.String, "end": pl.String}, orient="row")
+    frame = pl.DataFrame(rows, schema={"inst": pl.String, "field": pl.String, "end": pl.String}, orient="row")
     end = pl.col("end").str.to_datetime(time_zone="UTC").cast(pl.Datetime("ns", "UTC"))
     return frame.with_columns(end - pl.duration(nanoseconds=tol, time_unit="ns"))
 
@@ -263,13 +263,13 @@ def _still_there(flagged: pl.DataFrame, near: pl.DataFrame, prior: Sequence[tr.T
 
 
 def _origins(short: pl.DataFrame, fields: pl.DataFrame) -> pl.DataFrame:
-    """Spans to drop for short entities; an entity a split made also covers the rows it came from, so the drop does the
+    """Spans to drop for short insts; an inst a split made also covers the rows it came from, so the drop does the
     same with or without the split."""
-    raw = fields.select("entity").unique()
-    base = pl.col("entity").str.replace(r"#\d+$", "").alias("_base")
-    made = short.join(raw, on="entity", how="anti").with_columns(base)
+    raw = fields.select("inst").unique()
+    base = pl.col("inst").str.replace(r"#\d+$", "").alias("_base")
+    made = short.join(raw, on="inst", how="anti").with_columns(base)
     came = made.join(raw.with_columns(base), on="_base", suffix="_raw").select(
-        pl.col("entity_raw").alias("entity"), "start", "end"
+        pl.col("inst_raw").alias("inst"), "start", "end"
     )
     return pl.concat([short, came.select(short.columns)]).cast(short.schema)  # type: ignore[arg-type]
 

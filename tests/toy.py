@@ -29,16 +29,16 @@ def toy_fields(hours: int = 24 * 25, seed: int = 0) -> pl.DataFrame:
     for symbol in SYMBOLS:
         common = np.cumsum(rng.normal(0, 0.004, hours))
         for i, venue in enumerate(VENUES):
-            entity = f"{venue}:{symbol}"
+            inst = f"{venue}:{symbol}"
             close = 100 * np.exp(common + np.cumsum(rng.normal(0, 0.0005, hours)))
             level = rng.normal(0.0004 * (i + 1), 0.0001)
             for h in range(hours):
                 ts = START + (h + 1) * HOUR
-                rows.append((entity, "close", ts, ts, float(close[h])))
+                rows.append((inst, "close", ts, ts, float(close[h])))
                 if (h + 1) % SETTLE == 0:
-                    rows.append((entity, "funding_rate", ts, ts, float(level + rng.normal(0, 0.00005))))
-                    rows.append((entity, "funding_interval_hours", ts, ts, float(SETTLE)))
-    frame = pd.DataFrame(rows, columns=["entity", "field", "event_time", "available_at", "value"])
+                    rows.append((inst, "funding_rate", ts, ts, float(level + rng.normal(0, 0.00005))))
+                    rows.append((inst, "funding_interval_hours", ts, ts, float(SETTLE)))
+    frame = pd.DataFrame(rows, columns=["inst", "field", "event_time", "available_at", "value"])
     return field_table(frame.assign(vintage=0))
 
 
@@ -54,11 +54,11 @@ class ToyData:
     def __init__(self, hours: int = 24 * 25, seed: int = 0) -> None:
         self.hours, self.seed = hours, seed
 
-    def fetch(self, as_of: Any = None, entities: Sequence[str] | None = None) -> pl.DataFrame:
+    def fetch(self, as_of: Any = None, insts: Sequence[str] | None = None) -> pl.DataFrame:
         rows = self.build(as_of)
         if as_of is not None:
             rows = rows.filter(pl.col("available_at") <= pd.Timestamp(as_of))
-        return rows if entities is None else rows.filter(pl.col("entity").is_in(list(entities)))
+        return rows if insts is None else rows.filter(pl.col("inst").is_in(list(insts)))
 
     def build(self, as_of: Any = None) -> pl.DataFrame:
         return toy_fields(self.hours, self.seed)
@@ -71,14 +71,14 @@ def venue_reference(venue: pl.DataFrame, requests: pl.DataFrame) -> Reference:
     """What the toy venue answers from ``venue``; it keeps no history of funding intervals."""
     venue = venue.filter(pl.col("field") != "funding_interval_hours")
     answered = requests.filter(pl.col("field") != "funding_interval_hours")
-    rows = venue.join(answered.select("entity", "field", "start", "end"), on=["entity", "field"])
+    rows = venue.join(answered.select("inst", "field", "start", "end"), on=["inst", "field"])
     rows = rows.filter(pl.col("event_time").is_between(pl.col("start"), pl.col("end")))
-    return Reference(rows.select("entity", "field", "event_time", "value").unique(), answered.select("rid"))
+    return Reference(rows.select("inst", "field", "event_time", "value").unique(), answered.select("rid"))
 
 
 def timed_fields(hours: int = 24 * 25, seed: int = 0, drift: float = 0.002) -> pl.DataFrame:
     """The toy market with a timing signal planted: each symbol has a regime, +1 or -1 for stretches of one to four
-    days, which every entity publishes each hour as the field ``regime`` and whose closes drift with it, by ``drift``
+    days, which every inst publishes each hour as the field ``regime`` and whose closes drift with it, by ``drift``
     per hour, over the next hour."""
     rows = toy_fields(hours, seed)
     rng = np.random.default_rng(seed + 1)
@@ -93,11 +93,11 @@ def timed_fields(hours: int = 24 * 25, seed: int = 0, drift: float = 0.002) -> p
         plans.append(pl.DataFrame({"symbol": symbol, "h": np.arange(hours), "lift": lift, "regime": side}))
     plan = pl.concat(plans)
     hour = ((pl.col("event_time") - pl.lit(START)).dt.total_hours() - 1).alias("h")
-    keyed = rows.with_columns(hour, symbol=pl.col("entity").str.split(":").list.get(1)).join(plan, on=["symbol", "h"])
+    keyed = rows.with_columns(hour, symbol=pl.col("inst").str.split(":").list.get(1)).join(plan, on=["symbol", "h"])
     close = pl.col("field") == "close"
     lifted = keyed.with_columns(value=pl.when(close).then(pl.col("value") * pl.col("lift")).otherwise("value"))
     published = keyed.filter(close).with_columns(field=pl.lit("regime"), value=pl.col("regime"))
-    out = pl.concat([lifted, published]).select("entity", "field", "event_time", "available_at", "value", "vintage")
+    out = pl.concat([lifted, published]).select("inst", "field", "event_time", "available_at", "value", "vintage")
     return field_table(out)
 
 
@@ -114,17 +114,17 @@ class ToyTimed(ToyData):
 
 
 class ToySeries:
-    """The ``entities`` (one asset, by default) at every decision time once their first close is known."""
+    """The ``insts`` (one asset, by default) at every decision time once their first close is known."""
 
-    def __init__(self, entities: Sequence[str] = ("a:X",)) -> None:
-        self.entities = list(entities)
+    def __init__(self, insts: Sequence[str] = ("a:X",)) -> None:
+        self.insts = list(insts)
 
     def candidates(self, fields: pl.DataFrame, times: Sequence[Any]) -> pl.DataFrame:
-        listed = fields.filter((pl.col("field") == "close") & pl.col("entity").is_in(self.entities))
-        first = listed.group_by("entity").agg(pl.col("available_at").min().alias("since"))
+        listed = fields.filter((pl.col("field") == "close") & pl.col("inst").is_in(self.insts))
+        first = listed.group_by("inst").agg(pl.col("available_at").min().alias("since"))
         grid = pl.DataFrame({"t": list(times)}, schema={"t": TIME})
         out = grid.join(first, how="cross").filter(pl.col("t") >= pl.col("since"))
-        return out.select("t", "entity").sort("t", "entity")
+        return out.select("t", "inst").sort("t", "inst")
 
 
 class ToyEvents(ToySeries):
@@ -142,7 +142,7 @@ class ToyHindsight(ToyData):
         lo, hi = START + 200 * HOUR, START + 206 * HOUR
         if as_of is not None and pd.Timestamp(as_of) < hi + HOUR:
             return rows
-        window = (pl.col("entity") == "b:Y") & (pl.col("field") == "close") & pl.col("event_time").is_between(lo, hi)
+        window = (pl.col("inst") == "b:Y") & (pl.col("field") == "close") & pl.col("event_time").is_between(lo, hi)
         return rows.filter(~window)
 
 
@@ -156,7 +156,7 @@ class ToyCorrupt(ToyData):
 
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
-        hit = (pl.col("entity").str.starts_with("c:")) & (pl.col("field") == "close")
+        hit = (pl.col("inst").str.starts_with("c:")) & (pl.col("field") == "close")
         return rows.with_columns(value=pl.when(hit).then(pl.col("value") * 1.1).otherwise("value"))
 
 
@@ -165,7 +165,7 @@ class ToySwapped(ToyData):
 
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
-        hit = (pl.col("entity") == "c:Z") & (pl.col("field") == "close")
+        hit = (pl.col("inst") == "c:Z") & (pl.col("field") == "close")
         other = rows.filter(hit).sort("event_time")
         rng = np.random.default_rng(99)
         path = float(other["value"][0]) * np.exp(np.cumsum(rng.normal(0, 0.01, other.height)))
@@ -181,7 +181,7 @@ class ToyRelaunched(ToyData):
 
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
-        z, t = pl.col("entity") == "c:Z", pl.col("event_time")
+        z, t = pl.col("inst") == "c:Z", pl.col("event_time")
         gone = z & t.is_between(START + 151 * HOUR, START + 161 * HOUR)
         later = z & (pl.col("field") == "close") & (t >= START + 162 * HOUR)
         return rows.filter(~gone).with_columns(value=pl.when(later).then(pl.col("value") * 1000).otherwise("value"))
@@ -195,8 +195,8 @@ class ToyRenamed(ToyRelaunched):
 
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
-        later = (pl.col("entity") == "c:Z") & (pl.col("event_time") >= START + 162 * HOUR)
-        return rows.with_columns(entity=pl.when(later).then(pl.lit("c:Z#2")).otherwise("entity"))
+        later = (pl.col("inst") == "c:Z") & (pl.col("event_time") >= START + 162 * HOUR)
+        return rows.with_columns(inst=pl.when(later).then(pl.lit("c:Z#2")).otherwise("inst"))
 
 
 class ToyZeros(ToyData):
@@ -205,7 +205,7 @@ class ToyZeros(ToyData):
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
         hours = pl.col("event_time").is_between(START + 100 * HOUR, START + 102 * HOUR)
-        hit = (pl.col("entity") == "b:X") & (pl.col("field") == "close") & hours
+        hit = (pl.col("inst") == "b:X") & (pl.col("field") == "close") & hours
         return rows.with_columns(value=pl.when(hit).then(0.0).otherwise("value"))
 
     def reference(self, requests: pl.DataFrame) -> Reference:
@@ -218,7 +218,7 @@ class ToyShort(ToyData):
     def build(self, as_of: Any = None) -> pl.DataFrame:
         rows = super().build()
         brief = pl.col("event_time").is_between(START + 300 * HOUR, START + 319 * HOUR)
-        return rows.filter((pl.col("entity") != "c:Y") | brief)
+        return rows.filter((pl.col("inst") != "c:Y") | brief)
 
     def reference(self, requests: pl.DataFrame) -> Reference:
         return venue_reference(self.build(), requests)
@@ -233,10 +233,10 @@ class ToyPairs:
     def candidates(self, fields: pl.DataFrame, times: Sequence[Any]) -> pl.DataFrame:
         funding = fields.filter(pl.col("field") == "funding_rate").sort("available_at")
         if self.peek:
-            funding = funding.with_columns(pl.col("value").shift(-1).over("entity")).drop_nulls("value")
+            funding = funding.with_columns(pl.col("value").shift(-1).over("inst")).drop_nulls("value")
         rows = []
         for t in times:
-            known = funding.filter(pl.col("available_at") <= t).group_by("entity").agg(pl.col("value").last())
+            known = funding.filter(pl.col("available_at") <= t).group_by("inst").agg(pl.col("value").last())
             rate = {e: v / SETTLE for e, v in known.iter_rows()}
             for symbol in SYMBOLS:
                 for a, b in combinations(VENUES, 2):
@@ -247,7 +247,7 @@ class ToyPairs:
                     lv, sv = long.split(":")[0], short.split(":")[0]
                     spread = rate[short] - rate[long]
                     rows.append((t, f"{symbol}:{lv}>{sv}", long, short, symbol, f"{lv}>{sv}", spread, spread, True))
-        columns = ["t", "entity", "long", "short", "symbol", "venue_pair", "spread_h", "score", "openable"]
+        columns = ["t", "inst", "long", "short", "symbol", "venue_pair", "spread_h", "score", "openable"]
         if not rows:
             return pl.DataFrame(schema={c: pl.String for c in columns})
         out = pl.DataFrame(rows, schema=columns, orient="row")
@@ -279,19 +279,19 @@ class ToyCarry:
         return Timing(every="1h", note="decide on the hour; fill at the close known then")
 
     def run(self, fields: pl.DataFrame, scores: pl.DataFrame | None = None, fresh: bool = False) -> ConsumerResult:
-        close = fields.filter(pl.col("field") == "close").pivot(on="entity", index="available_at", values="value")
+        close = fields.filter(pl.col("field") == "close").pivot(on="inst", index="available_at", values="value")
         close = close.sort("available_at")
         times = close["available_at"].to_list()
         flows = fields.filter(pl.col("field") == "funding_rate")
         cands = ToyPairs().candidates(fields, times)
         if scores is not None:
-            cands = cands.drop("score").join(scores.select("t", "entity", "score"), on=["t", "entity"], how="inner")
+            cands = cands.drop("score").join(scores.select("t", "inst", "score"), on=["t", "inst"], how="inner")
         if self.peek:
-            cands = cands.drop("score").join(self._future_flow(fields, times), on=["t", "entity"])
+            cands = cands.drop("score").join(self._future_flow(fields, times), on=["t", "inst"])
         by_t = {t: g for (t,), g in cands.group_by("t")}
         flow_at: dict[tuple[str, Any], float] = defaultdict(float)
         bucket = bisect_right if self.same_instant else bisect_left
-        for e, a, v in flows.select("entity", "available_at", "value").iter_rows():
+        for e, a, v in flows.select("inst", "available_at", "value").iter_rows():
             k = bucket(times, a)
             if k < len(times):
                 flow_at[(e, times[k])] += v
@@ -327,8 +327,8 @@ class ToyCarry:
             net = flow + price + fees + (np.random.normal(0, 1e-6) if self.noisy else 0.0)
             net_rows.append((nxt, net, flow, price, fees))
         net = pl.DataFrame(net_rows, schema=["t", "net", "flow", "price", "fees"], orient="row")
-        positions = pl.DataFrame(pos_rows, schema=["t", "entity", "weight", "long", "short"], orient="row")
-        trades = pl.DataFrame(trade_rows, schema=["t", "entity", "from_weight", "to_weight"], orient="row")
+        positions = pl.DataFrame(pos_rows, schema=["t", "inst", "weight", "long", "short"], orient="row")
+        trades = pl.DataFrame(trade_rows, schema=["t", "inst", "from_weight", "to_weight"], orient="row")
         cast = pl.col("t").cast(TIME)
         return ConsumerResult(
             net=net.with_columns(cast),
@@ -340,20 +340,20 @@ class ToyCarry:
         )
 
     def _choose(self, group: pl.DataFrame) -> dict[str, tuple[str, str]]:
-        top = group.sort(["score", "entity"], descending=[True, False]).head(self.k)
-        return {e: (lo, sh) for e, lo, sh in top.select("entity", "long", "short").iter_rows()}
+        top = group.sort(["score", "inst"], descending=[True, False]).head(self.k)
+        return {e: (lo, sh) for e, lo, sh in top.select("inst", "long", "short").iter_rows()}
 
     def _future_flow(self, fields: pl.DataFrame, times: list[object]) -> pl.DataFrame:
         cands = ToyPairs().candidates(fields, times)
-        flows = fields.filter(pl.col("field") == "funding_rate").select("entity", "available_at", "value")
+        flows = fields.filter(pl.col("field") == "funding_rate").select("inst", "available_at", "value")
         rows = []
-        for t, e, lo, sh in cands.select("t", "entity", "long", "short").iter_rows():
+        for t, e, lo, sh in cands.select("t", "inst", "long", "short").iter_rows():
             window = flows.filter((pl.col("available_at") > t) & (pl.col("available_at") <= t + 24 * HOUR))
-            s = float(window.filter(pl.col("entity") == sh)["value"].sum()) - float(
-                window.filter(pl.col("entity") == lo)["value"].sum()
+            s = float(window.filter(pl.col("inst") == sh)["value"].sum()) - float(
+                window.filter(pl.col("inst") == lo)["value"].sum()
             )
             rows.append((t, e, s))
-        return pl.DataFrame(rows, schema=["t", "entity", "score"], orient="row").with_columns(pl.col("t").cast(TIME))
+        return pl.DataFrame(rows, schema=["t", "inst", "score"], orient="row").with_columns(pl.col("t").cast(TIME))
 
 
 class EarlyCredit(ToyCarry):
@@ -435,10 +435,10 @@ class LazyLabel(PairCarry):
     def cases(self) -> list[LabelCase]:
         rows = [(e, "close", START + h * HOUR, START + h * HOUR, 100.0, 0, "") for e in ("a", "b") for h in range(6)]
         fields = pl.DataFrame(
-            rows, schema=["entity", "field", "event_time", "available_at", "value", "vintage", "source"], orient="row"
+            rows, schema=["inst", "field", "event_time", "available_at", "value", "vintage", "source"], orient="row"
         ).with_columns(pl.col("event_time").cast(TIME), pl.col("available_at").cast(TIME))
-        cands = pl.DataFrame({"t": [START + HOUR], "entity": ["a>b"], "long": ["a"], "short": ["b"]})
-        expected = pl.DataFrame({"t": [START + HOUR], "entity": ["a>b"], "value": [0.0], "price": [0.0]})
+        cands = pl.DataFrame({"t": [START + HOUR], "inst": ["a>b"], "long": ["a"], "short": ["b"]})
+        expected = pl.DataFrame({"t": [START + HOUR], "inst": ["a>b"], "value": [0.0], "price": [0.0]})
         cast = pl.col("t").cast(TIME)
         return [LabelCase(fields, cands.with_columns(cast), "2h", expected.with_columns(cast))]
 
@@ -513,19 +513,19 @@ def funding_ic(table):
 
 def closes_at_zero(fields):
     """Closes at zero or below."""
-    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("inst", "field", "event_time")
 
 
 FOUR = pl.DataFrame(
     {
         "t": [T] * 4,
-        "entity": list("abcd"),
+        "inst": list("abcd"),
         "score": [1.0, 2.0, 3.0, 4.0],
         "y": [0.0] * 4,
         "y_flow": [0.1, 0.2, 0.4, 0.3],
     }
 )
-ROWS = pl.DataFrame({"entity": ["a", "a"], "field": ["close"] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
+ROWS = pl.DataFrame({"inst": ["a", "a"], "field": ["close"] * 2, "event_time": [T, T], "value": [1.0, 0.0]})
 CASES = [
     Case("one swap in four: 1 - 6·2/(4·15)", funding_ic, 0.8, given=FOUR),
     Case("a close at zero is flagged", closes_at_zero, 1, given=ROWS),
@@ -571,7 +571,7 @@ RETURN = "Label('return', Use('ref.return', {'price': 'close'}), horizons=('8h',
 SHAPED_COSTS = "Use('ref.flat_costs', {'commission_bps': 1, 'slippage_bps': 1})"
 SHAPED = {
     "series": ("toy.series", "Use('ref.timing')", "the regime times the asset"),
-    "events": ("toy.events", "Use('ref.mean', {'cluster': 'entity'})", "a regime turning up is followed by gains"),
+    "events": ("toy.events", "Use('ref.mean', {'cluster': 'inst'})", "a regime turning up is followed by gains"),
 }
 
 
@@ -584,7 +584,7 @@ def shaped_contract(shape: str, budget: int = 5) -> str:
         f"    decisive=(Effect(on='return', target={target}),),\n"
         "    alternatives=(Alternative('trend', 'the score only follows the last days'),),\n"
         f"    used=(), data='toy.timed', costs={SHAPED_COSTS}, execution=Execution(every='1h'),\n"
-        f"    universe=Universe('{universe}', clusters='entity', shape='{shape}'),\n"
+        f"    universe=Universe('{universe}', clusters='inst', shape='{shape}'),\n"
         f"    labels=({RETURN},),\n"
         "    explore_end='2026-01-15T00:00:00Z', seal_end='2026-01-20T00:00:00Z',\n"
         f"    budget={budget!r})\n"
@@ -625,7 +625,7 @@ def backwards(table):
 FOUR = pl.DataFrame(
     {
         "t": [T + timedelta(hours=h) for h in range(4)],
-        "entity": ["a"] * 4,
+        "inst": ["a"] * 4,
         "score": [1.0, -1.0, float("nan"), 1.0],
         "y": [0.2, 0.1, 0.5, -0.1],
     }

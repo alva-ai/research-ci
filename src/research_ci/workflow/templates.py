@@ -15,7 +15,7 @@ CONTRACT = Contract(
     claim="TODO: state the claim in one sentence",
     # the target averages the label over the top share of the candidates by score at each decision time; keep that
     # to at least a few candidates (the ContractCard shows the median number of candidates)
-    decisive=(Effect(on="return", target=Use("ref.mean", {"cluster": "entity", "top": 0.5})),),
+    decisive=(Effect(on="return", target=Use("ref.mean", {"cluster": "inst", "top": 0.5})),),
     alternatives=(Alternative("TODO", "TODO: another reason the same result could appear"),),
     # if you looked at the data or at results for this idea before writing this (plugin data, notebooks, backtests),
     # declare it: used=(Usage("<start>", "<end>", "what was seen", ("claim",)),); () only if nothing was seen
@@ -25,7 +25,7 @@ CONTRACT = Contract(
     execution=Execution(every="24h"),
     # shape="cross" ranks the candidates at each time; "series" times one or a few assets (target ref.timing);
     # "events" asks what follows the rows the features score (target ref.mean without top)
-    universe=Universe("TODO-universe-plugin", clusters="entity", shape="cross"),
+    universe=Universe("TODO-universe-plugin", clusters="inst", shape="cross"),
     labels=(Label("return", Use("ref.return", {"price": "close"}), horizons=("24h",)),),
     forward=Forward("TODO-data-plugin"),
 )
@@ -57,12 +57,12 @@ polars function in `evals/<name>.py` (copy `evals/example.py`) with its tests in
 and, for a data eval, `PITS`, optional. List it with the H0 it rejects, in one sentence: `from evals.<name> import
 <eval>`, then `EVALS = [Eval(<eval>, h0="<the H0>")]`. In feat it, and each null world, must reach z ≥ 2 at every
 horizon it covers, or the claim fails there; it never passes what the decisive test failed. In data, `on_fail` says
-what is done with the rows it flags: `mask`, `drop_entities`, `ask`, or `block` (any row it flags, after the
+what is done with the rows it flags: `mask`, `drop_insts`, `ask`, or `block` (any row it flags, after the
 treatments before it, blocks the data). The engine runs the tests before anything heavy and refuses a layer with a
 lab eval that fails them; run `rci eval check evals/<name>.py` any time, for free. `EVALS` may also list the engine's
 library (`rci methods`): shown, never vetoing, with no `h0`.
 
-Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `entity`, `score` for every decision
+Features: `features(fields, candidates)` gets polars DataFrames and returns `t`, `inst`, `score` for every decision
 time at once (a polars DataFrame or LazyFrame, or a pandas DataFrame). Research code is free: polars first, with
 `fields.lazy() ... .collect()` for a longer pipeline; pandas is fine for dates; any library runs. Row-by-row code
 (`iter_rows`, `.rows()`, `map_elements`, loops over data) runs too, with a warning on the card that names each line.
@@ -83,10 +83,10 @@ FIELD = "TODO"  # a field of the data; `rci plugins` lists the fields a data plu
 
 
 def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
-    """One score per candidate row (t, entity, score), for every decision time at once.
+    """One score per candidate row (t, inst, score), for every decision time at once.
 
-    fields: entity, field, event_time, available_at, value, vintage, source; all of the frozen data.
-    candidates: t, entity, and the universe's columns (such as the legs long and short, the cluster and the groups).
+    fields: inst, field, event_time, available_at, value, vintage, source; all of the frozen data.
+    candidates: t, inst, and the universe's columns (such as the legs long and short, the cluster and the groups).
     Both are polars DataFrames. A score at t may use only rows with available_at <= t; join_asof on available_at gives
     the latest of them. Return a polars DataFrame or LazyFrame, or a pandas DataFrame.
     """
@@ -94,26 +94,26 @@ def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
     known = (
         fields.lazy()
         .filter(pl.col("field") == FIELD)
-        .select("entity", pl.col("available_at").alias("known_at"), "value")
+        .select("inst", pl.col("available_at").alias("known_at"), "value")
         .sort("known_at")
     )
-    # TODO: transform each entity's series with expressions, for example
-    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("entity"))
-    #   known.with_columns(pl.col("value").diff().over("entity").alias("change"))
+    # TODO: transform each inst's series with expressions, for example
+    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("inst"))
+    #   known.with_columns(pl.col("value").diff().over("inst").alias("change"))
     scored = (
         candidates.lazy()
         .sort("t")
-        .join_asof(known, left_on="t", right_on="known_at", by="entity", check_sortedness=False)
+        .join_asof(known, left_on="t", right_on="known_at", by="inst", check_sortedness=False)
     )
-    # Candidates with two legs: look each leg up by its own column instead of entity, then take the difference:
-    #   leg = known.rename({{"entity": "long", "known_at": "long_at", "value": "long_value"}})
+    # Candidates with two legs: look each leg up by its own column instead of inst, then take the difference:
+    #   leg = known.rename({{"inst": "long", "known_at": "long_at", "value": "long_value"}})
     #   scored = candidates.lazy().sort("t").join_asof(leg, left_on="t", right_on="long_at", by="long",
     #                                                  check_sortedness=False)
     # Ranks within each decision time: pl.col("score").rank().over("t").
     # pandas is fine for dates (pd.Timedelta, offsets, calendars), and any library runs. Whole-column polars
     # expressions like these are usually much faster than going row by row, which runs too, with a warning on the card;
     # the card also shows the time and peak memory the features took.
-    return scored.select("t", "entity", pl.col("value").alias("score")).collect()
+    return scored.select("t", "inst", pl.col("value").alias("score")).collect()
 '''
 
 EVALS_EXAMPLE = f'''# {EXAMPLE_MARKER} -- the engine refuses a lab eval from this file while this line is in it. Copy
@@ -130,22 +130,22 @@ T = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def ranks_label(table: pl.DataFrame) -> pl.DataFrame:
-    """A feat eval. table: the evaluation table of one horizon (t, entity, score, y, the label's parts y_<part>, and
+    """A feat eval. table: the evaluation table of one horizon (t, inst, score, y, the label's parts y_<part>, and
     the candidate columns). It returns one value per decision time (t, value); here the rank correlation of score and
     label. TODO: what yours measures, such as the score against one part of the label, y_<part>."""
     return table.group_by("t").agg(pl.corr("score", "y", method="spearman").alias("value")).sort("t")
 
 
 def flags(fields: pl.DataFrame) -> pl.DataFrame:
-    """A data eval. fields: the explore data (entity, field, event_time, available_at, value, vintage, source). It
-    returns the rows it flags (entity, event_time, optionally field); none means it found nothing. TODO: what yours
+    """A data eval. fields: the explore data (inst, field, event_time, available_at, value, vintage, source). It
+    returns the rows it flags (inst, event_time, optionally field); none means it found nothing. TODO: what yours
     catches; here a value of FIELD at zero or below."""
-    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("entity", "field", "event_time")
+    return fields.filter((pl.col("field") == FIELD) & (pl.col("value") <= 0)).select("inst", "field", "event_time")
 
 
 FIELD = "TODO"
-FOUR = pl.DataFrame({{"t": [T] * 4, "entity": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]}})
-ROWS = pl.DataFrame({{"entity": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]}})
+FOUR = pl.DataFrame({{"t": [T] * 4, "inst": list("abcd"), "score": [1.0, 2.0, 3.0, 4.0], "y": [0.1, 0.2, 0.4, 0.3]}})
+ROWS = pl.DataFrame({{"inst": ["a", "a"], "field": [FIELD] * 2, "event_time": [T, T], "value": [1.0, 0.0]}})
 
 # The tests the engine runs before the eval judges anything, worked by hand; a failed one refuses the layer.
 CASES = [

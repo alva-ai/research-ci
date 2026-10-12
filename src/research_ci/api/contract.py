@@ -64,7 +64,7 @@ class Universe:
     ``shape`` is the question the scores answer (``SHAPES``), and it sets the floor world: ``"cross"`` ranks the
     candidates at each decision time, and the floor shuffles scores across clusters there; ``"series"`` times one or a
     few assets, and ``"events"`` asks what follows the rows the features score, the others left without a score; for
-    both the floor shifts each entity's scores in time.
+    both the floor shifts each inst's scores in time.
     """
 
     use: Use | str

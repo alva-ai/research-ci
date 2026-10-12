@@ -309,7 +309,7 @@ def test_an_idea_named_from_inside_itself_says_to_drop_the_path(
         ),
         (
             ("'top': 0.34", "'top': 3.4"),
-            ["plugin 'ref.mean' rejects its options", "top is a share", "it takes ref.mean(cluster: str = 'entity'"],
+            ["plugin 'ref.mean' rejects its options", "top is a share", "it takes ref.mean(cluster: str = 'inst'"],
         ),
     ],
 )
@@ -347,7 +347,7 @@ import polars as pl
 
 
 def features(fields, candidates):
-    return candidates.select("t", "entity", pl.col("spread_h").alias("score"))
+    return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 """
 
 ROWS = """
@@ -355,8 +355,8 @@ import polars as pl
 
 
 def features(fields, candidates):
-    rows = [(t, e, s) for t, e, s in candidates.select("t", "entity", "spread_h").iter_rows()]
-    return pl.DataFrame(rows, schema=["t", "entity", "score"], orient="row")
+    rows = [(t, e, s) for t, e, s in candidates.select("t", "inst", "spread_h").iter_rows()]
+    return pl.DataFrame(rows, schema=["t", "inst", "score"], orient="row")
 """
 
 

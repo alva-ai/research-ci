@@ -52,7 +52,7 @@ ContractCard · spread · v1
 claim      cross-venue funding spreads persist
 decisive   carry: beats random significantly · target ref.mean(cluster=symbol, top=0.34)
 decisions  every 1h from execution · 335 decision times
-data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.4 days old
+data       toy.data afa06051cf36 · 3,780 rows · 9 insts · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.4 days old
 universe   toy.pairs · median 9 candidates in 3 symbol clusters per decision · membership pit
 costs      ref.flat_costs(commission_bps=1, legs=2, slippage_bps=1) · median round trip 8.0 bp
 labels     carry: ref.carry · H 8h 24h
@@ -87,10 +87,10 @@ contract v1 PASSED: freeze 94da1a669339 · approved by the agent (automatic rese
 
 $ rci data check -i ideas/spread
 DataCard · spread · v1
-data       toy.data afa06051cf36 · 3,780 rows · 9 entities · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.4 days old
+data       toy.data afa06051cf36 · 3,780 rows · 9 insts · 2026-01-01T01:00Z → 2026-01-15T00:00Z · 259.4 days old
 1 floor · the source's admission, and what the engine weighs on every idea's data
 source     toy.data · admission 04a8425fcb2b · not yet admitted: approving this card admits it for every idea [!]
-           code 82522fb96764 · 9 entities · 6,750 rows
+           code 82522fb96764 · 9 insts · 6,750 rows
            ok   values are finite: none: values null, NaN or infinite
            ok   known no earlier than the event: none: rows known before their event time
            ok   no long gaps: none: gaps longer than 3× the usual spacing
@@ -112,7 +112,7 @@ calibrate  ok   carry at 8h vs floor: stand-ins die 98% (needs ≥ 92%) · a sig
 checks     default  [!]  data is current: latest data is 259.4 days old
            default  ok   level sanity: no declared level at zero or below, stale, or spiking
            default  ok   identity breaks: no declared level comes back 5x away after a long gap
-           default  ok   coverage: every entity covers 24h
+           default  ok   coverage: every inst covers 24h
            default  ok   hedged legs are one asset: every candidate row holds (close within 1.2x and returns correlated ≥ 0.3)
            default  [!]  influence concentration: more than 50% of the noise from one symbol: Z 55% at carry 24h; shown, not treated
 clusters   share of the noise that goes away without each symbol, largest first

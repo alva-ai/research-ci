@@ -17,13 +17,13 @@ START_NS = 1_767_225_600 * 10**9
 
 
 def market(m: Market, seed: int) -> pl.DataFrame:
-    """A synthetic evaluation table, one row per entity and time. Columns ``t``, ``entity``, ``cluster``, ``group``,
-    ``score`` and ``y``; the score follows the label across the entities at each time, or, for a series, over each
-    entity's times."""
+    """A synthetic evaluation table, one row per inst and time. Columns ``t``, ``inst``, ``cluster``, ``group``,
+    ``score`` and ``y``; the score follows the label across the insts at each time, or, for a series, over each
+    inst's times."""
     rng = np.random.default_rng(seed)
-    cluster = np.arange(m.entities) % m.clusters
+    cluster = np.arange(m.insts) % m.clusters
     group = cluster % m.groups
-    shape = (m.times, m.entities)
+    shape = (m.times, m.insts)
     own = _noise(rng, shape, m.tail)
     shock = _noise(rng, (m.times, m.clusters), m.tail)[:, cluster]
     level = rng.standard_normal((m.times, m.groups))[:, group]
@@ -32,11 +32,11 @@ def market(m: Market, seed: int) -> pl.DataFrame:
     rho = 2 * math.sin(math.pi * m.ic / 6)
     axis = 0 if m.shape == "series" else 1
     score = rho * _standard(y, axis) + math.sqrt(1 - rho * rho) * rng.standard_normal(shape)
-    t = np.repeat(np.arange(m.times, dtype=np.int64) * HOUR_NS, m.entities)
+    t = np.repeat(np.arange(m.times, dtype=np.int64) * HOUR_NS, m.insts)
     frame = pl.DataFrame(
         {
             "t": t,
-            "entity": np.tile(_named("e", np.arange(m.entities)), m.times),
+            "inst": np.tile(_named("e", np.arange(m.insts)), m.times),
             "cluster": np.tile(_named("c", cluster), m.times),
             "group": np.tile(_named("g", group), m.times),
             "score": score.ravel(),
@@ -50,14 +50,14 @@ def source(s: Source, seed: int) -> pl.DataFrame:
     """A synthetic field table of hourly prices and settled flows. ``price`` is hourly, known at its event; ``flow``
     comes at each settlement, known ``lag`` hours later, some of it revised one settlement after that as vintage 1."""
     rng = np.random.default_rng(seed)
-    names = _named("e", np.arange(s.entities))
+    names = _named("e", np.arange(s.insts))
     hours = np.arange(1, s.hours + 1, dtype=np.int64)
-    walk = 100 * np.exp(np.cumsum(rng.normal(0, 0.003, (s.entities, s.hours)), axis=1))
-    price_t = START_NS + np.tile(hours, s.entities) * HOUR_NS
+    walk = 100 * np.exp(np.cumsum(rng.normal(0, 0.003, (s.insts, s.hours)), axis=1))
+    price_t = START_NS + np.tile(hours, s.insts) * HOUR_NS
     rows = [
         pl.DataFrame(
             {
-                "entity": np.repeat(names, s.hours),
+                "inst": np.repeat(names, s.hours),
                 "field": "price",
                 "event_time": price_t,
                 "available_at": price_t,
@@ -67,14 +67,14 @@ def source(s: Source, seed: int) -> pl.DataFrame:
         )
     ]
     settles = hours[hours % s.settle == 0]
-    level = rng.normal(0.0002, 0.0001, s.entities)
-    flow = level[:, None] + rng.normal(0, 0.00005, (s.entities, len(settles)))
-    flow_t = START_NS + np.tile(settles, s.entities) * HOUR_NS
+    level = rng.normal(0.0002, 0.0001, s.insts)
+    flow = level[:, None] + rng.normal(0, 0.00005, (s.insts, len(settles)))
+    flow_t = START_NS + np.tile(settles, s.insts) * HOUR_NS
     lag = s.lag * HOUR_NS
     rows.append(
         pl.DataFrame(
             {
-                "entity": np.repeat(names, len(settles)),
+                "inst": np.repeat(names, len(settles)),
                 "field": "flow",
                 "event_time": flow_t,
                 "available_at": flow_t + lag,

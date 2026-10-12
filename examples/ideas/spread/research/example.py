@@ -8,10 +8,10 @@ FIELD = "TODO"  # a field of the data; `rci plugins` lists the fields a data plu
 
 
 def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
-    """One score per candidate row (t, entity, score), for every decision time at once.
+    """One score per candidate row (t, inst, score), for every decision time at once.
 
-    fields: entity, field, event_time, available_at, value, vintage, source; all of the frozen data.
-    candidates: t, entity, and the universe's columns (such as the legs long and short, the cluster and the groups).
+    fields: inst, field, event_time, available_at, value, vintage, source; all of the frozen data.
+    candidates: t, inst, and the universe's columns (such as the legs long and short, the cluster and the groups).
     Both are polars DataFrames. A score at t may use only rows with available_at <= t; join_asof on available_at gives
     the latest of them. Return a polars DataFrame or LazyFrame, or a pandas DataFrame.
     """
@@ -19,23 +19,23 @@ def features(fields: pl.DataFrame, candidates: pl.DataFrame) -> pl.DataFrame:
     known = (
         fields.lazy()
         .filter(pl.col("field") == FIELD)
-        .select("entity", pl.col("available_at").alias("known_at"), "value")
+        .select("inst", pl.col("available_at").alias("known_at"), "value")
         .sort("known_at")
     )
-    # TODO: transform each entity's series with expressions, for example
-    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("entity"))
-    #   known.with_columns(pl.col("value").diff().over("entity").alias("change"))
+    # TODO: transform each inst's series with expressions, for example
+    #   known.with_columns(pl.col("value").rolling_mean_by("known_at", window_size="24h").over("inst"))
+    #   known.with_columns(pl.col("value").diff().over("inst").alias("change"))
     scored = (
         candidates.lazy()
         .sort("t")
-        .join_asof(known, left_on="t", right_on="known_at", by="entity", check_sortedness=False)
+        .join_asof(known, left_on="t", right_on="known_at", by="inst", check_sortedness=False)
     )
-    # Candidates with two legs: look each leg up by its own column instead of entity, then take the difference:
-    #   leg = known.rename({"entity": "long", "known_at": "long_at", "value": "long_value"})
+    # Candidates with two legs: look each leg up by its own column instead of inst, then take the difference:
+    #   leg = known.rename({"inst": "long", "known_at": "long_at", "value": "long_value"})
     #   scored = candidates.lazy().sort("t").join_asof(leg, left_on="t", right_on="long_at", by="long",
     #                                                  check_sortedness=False)
     # Ranks within each decision time: pl.col("score").rank().over("t").
     # pandas is fine for dates (pd.Timedelta, offsets, calendars), and any library runs. Whole-column polars
     # expressions like these are usually much faster than going row by row, which runs too, with a warning on the card;
     # the card also shows the time and peak memory the features took.
-    return scored.select("t", "entity", pl.col("value").alias("score")).collect()
+    return scored.select("t", "inst", pl.col("value").alias("score")).collect()

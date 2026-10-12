@@ -26,15 +26,15 @@ import polars as pl
 
 from research_ci.api import Case
 
-ROWS = pl.DataFrame({"entity": ["a", "a"], "field": ["close", "close"], "event_time": [1, 2], "value": [1.0, 0.0]})
+ROWS = pl.DataFrame({"inst": ["a", "a"], "field": ["close", "close"], "event_time": [1, 2], "value": [1.0, 0.0]})
 
 
 def zeros(fields):
-    return fields.filter(pl.col("value") == 0).select("entity", "event_time")
+    return fields.filter(pl.col("value") == 0).select("inst", "event_time")
 
 
 def broken(fields):
-    return fields.select("entity", "event_time").head(1)
+    return fields.select("inst", "event_time").head(1)
 
 
 def wrong_shape(fields):
@@ -44,7 +44,7 @@ def wrong_shape(fields):
 def fails(fields):
     if fields.height:
         raise RuntimeError("cannot read this field table")
-    return fields.select("entity", "event_time")
+    return fields.select("inst", "event_time")
 
 
 CASES = [
@@ -149,7 +149,7 @@ def test_a_data_eval_that_breaks_on_the_data_or_returns_no_rows_is_refused_sayin
 
 def test_resultcard_failed_says_the_z_against_the_bar_and_the_effect(tmp_path: Path) -> None:
     idea = _passed_data(_idea(tmp_path))
-    noise = '(candidates.select("t", "entity", (pl.struct("t", "entity").hash(7) / 2.0**64).alias("score")))'
+    noise = '(candidates.select("t", "inst", (pl.struct("t", "inst").hash(7) / 2.0**64).alias("score")))'
     result, text, _ = idea.submit_feat(_features(idea, "noise", noise))
     assert result["verdict"]["status"] == "FAILED"
     (note,) = result["verdict"]["notes"]
@@ -166,7 +166,7 @@ def test_resultcard_failed_says_the_z_against_the_bar_and_the_effect(tmp_path: P
 
 def test_resultcard_scores_that_do_not_rank_say_how_often_they_do_and_what_is_needed(tmp_path: Path) -> None:
     idea = _passed_data(_idea(tmp_path))
-    result, text, _ = idea.submit_feat(_features(idea, "flat", 'candidates.select("t", "entity", score=pl.lit(1.0))'))
+    result, text, _ = idea.submit_feat(_features(idea, "flat", 'candidates.select("t", "inst", score=pl.lit(1.0))'))
     assert result["verdict"]["status"] == "FAILED"
     assert (
         "the scores do not rank the candidates (scores rank candidates, floor): scores 100% of candidate rows; ranks "
@@ -178,8 +178,8 @@ def test_resultcard_scores_that_do_not_rank_say_how_often_they_do_and_what_is_ne
 def test_resultcard_tainted_says_where_the_cut_was_and_what_changed(tmp_path: Path) -> None:
     idea = _passed_data(_idea(tmp_path))
     peek = (
-        'candidates.join(fields.filter(pl.col("field") == "funding_rate").group_by("entity").agg('
-        'pl.col("value").mean()).rename({"entity": "short"}), on="short").select("t", "entity", score="value")'
+        'candidates.join(fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg('
+        'pl.col("value").mean()).rename({"inst": "short"}), on="short").select("t", "inst", score="value")'
     )
     result, text, _ = idea.submit_feat(_features(idea, "peek", peek))
     assert result["verdict"]["status"] == "TAINTED"
@@ -193,5 +193,5 @@ def test_resultcard_tainted_says_where_the_cut_was_and_what_changed(tmp_path: Pa
 
 def test_explorecard_a_failed_floor_says_why(tmp_path: Path) -> None:
     idea = _passed_data(_idea(tmp_path))
-    _, card = idea.explore_feat(_features(idea, "flat", 'candidates.select("t", "entity", score=pl.lit(1.0))'))
+    _, card = idea.explore_feat(_features(idea, "flat", 'candidates.select("t", "inst", score=pl.lit(1.0))'))
     assert "floor    FAIL scores rank candidates: scores 100% of candidate rows; ranks candidates at 0%" in card

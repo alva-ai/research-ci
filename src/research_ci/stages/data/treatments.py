@@ -4,8 +4,8 @@ has to look.
 
 Which label rows a treatment touches, so its influence on a label effect is weighed on labels computed once. A label
 row at ``t`` with horizon ``h`` may read what its legs report up to ``t + h``, and what is current at ``t``; a field
-row is current from when it becomes known until the next row of its entity and field does. A treatment that drops
-field rows touches every label row of their entity whose window ``[t, t + h]`` meets a span in which a dropped row was
+row is current from when it becomes known until the next row of its inst and field does. A treatment that drops
+field rows touches every label row of their inst whose window ``[t, t + h]`` meets a span in which a dropped row was
 current; leaving those label rows out stands for computing the labels again on the treated data. It errs towards more
 influence: a row inside the window that the label does not read still counts.
 
@@ -29,9 +29,9 @@ from research_ci.kernel.time.clock import TIME, span_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.stages.common import Treatment, label_values, per_t
 
-SPAN_SCHEMA = {"entity": pl.String, "event_time": TIME, "start": pl.Int64, "end": pl.Int64}
+SPAN_SCHEMA = {"inst": pl.String, "event_time": TIME, "start": pl.Int64, "end": pl.Int64}
 OPEN = 2**62
-LEGS = ("entity", "long", "short")
+LEGS = ("inst", "long", "short")
 PER_T = {"t": pl.Datetime("ns", "UTC"), "value": pl.Float64}
 
 
@@ -47,10 +47,10 @@ def _dropping(
 
 
 def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged field's rows within ``around_ns`` of each window. A window has ``entity``, ``field``, ``start``
+    """Drop the flagged field's rows within ``around_ns`` of each window. A window has ``inst``, ``field``, ``start``
     and ``end``."""
     pad = pl.duration(nanoseconds=around_ns, time_unit="ns")
-    keys = ["entity", "field"]
+    keys = ["inst", "field"]
     w = windows.select(*keys, (pl.col("start") - pad).alias("lo"), (pl.col("end") + pad).alias("hi"))
 
     def hit(f: pl.DataFrame) -> pl.Series:
@@ -62,9 +62,9 @@ def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, 
 
 
 def mask_rows(name: str, reason: str, flagged: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged rows. Flags match by ``entity`` and ``event_time``, and by ``field`` too when the flags name
+    """Drop the flagged rows. Flags match by ``inst`` and ``event_time``, and by ``field`` too when the flags name
     one."""
-    keys = ["entity", "event_time"] + (["field"] if "field" in flagged.columns else [])
+    keys = ["inst", "event_time"] + (["field"] if "field" in flagged.columns else [])
     flags = flagged.select(*keys).with_columns(pl.col("event_time").cast(TIME)).unique()
 
     def apply(f: pl.DataFrame) -> pl.DataFrame:
@@ -76,56 +76,56 @@ def mask_rows(name: str, reason: str, flagged: pl.DataFrame, fields: pl.DataFram
     return _dropping(name, "fields", reason, fields, apply, removed)
 
 
-def drop_entities(name: str, reason: str, entities: Sequence[str], fields: pl.DataFrame) -> Treatment:
-    """Drop every row of the named entities."""
-    names = pl.Series(sorted(set(entities)), dtype=pl.String).implode()
-    gone = pl.col("entity").is_in(names)
+def drop_insts(name: str, reason: str, insts: Sequence[str], fields: pl.DataFrame) -> Treatment:
+    """Drop every row of the named insts."""
+    names = pl.Series(sorted(set(insts)), dtype=pl.String).implode()
+    gone = pl.col("inst").is_in(names)
     return _dropping(name, "fields", reason, fields, lambda f: f.filter(~gone), lambda f: f.filter(gone))
 
 
 def drop_spans(name: str, reason: str, spans: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop the rows each span covers. Every row of the span's ``entity`` whose event falls in ``[start, end]`` goes."""
-    keys = spans.select("entity", pl.col("start").cast(TIME), pl.col("end").cast(TIME))
+    """Drop the rows each span covers. Every row of the span's ``inst`` whose event falls in ``[start, end]`` goes."""
+    keys = spans.select("inst", pl.col("start").cast(TIME), pl.col("end").cast(TIME))
 
     def hit(f: pl.DataFrame) -> pl.Series:
-        g = f.select("entity", "event_time").with_row_index("_i")
-        inside = g.join(keys, on="entity").filter(pl.col("event_time").is_between("start", "end"))
+        g = f.select("inst", "event_time").with_row_index("_i")
+        inside = g.join(keys, on="inst").filter(pl.col("event_time").is_between("start", "end"))
         return g["_i"].is_in(inside["_i"].unique().implode())
 
     return _dropping(name, "fields", reason, fields, lambda f: f.filter(~hit(f)), lambda f: f.filter(hit(f)))
 
 
-def split_entities(name: str, reason: str, splits: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Rename each split entity's rows from the split on. The rows of each split's ``entity`` whose event is at or after
-    its ``at`` are renamed to its ``to``, up to the entity's next split. The rows stay; ``rows`` counts those renamed.
-    It applies to any table with ``entity`` and ``event_time``."""
-    s = splits.select("entity", pl.col("at").cast(TIME), "to").sort("at")
-    names = s["entity"].unique()
+def split_insts(name: str, reason: str, splits: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
+    """Rename each split inst's rows from the split on. The rows of each split's ``inst`` whose event is at or after
+    its ``at`` are renamed to its ``to``, up to the inst's next split. The rows stay; ``rows`` counts those renamed.
+    It applies to any table with ``inst`` and ``event_time``."""
+    s = splits.select("inst", pl.col("at").cast(TIME), "to").sort("at")
+    names = s["inst"].unique()
 
     def renamed(f: pl.DataFrame) -> pl.DataFrame:
         g = f.with_row_index("_i")
-        touched = g.filter(pl.col("entity").is_in(names.implode())).select("_i", "entity", "event_time")
+        touched = g.filter(pl.col("inst").is_in(names.implode())).select("_i", "inst", "event_time")
         hit = touched.sort("event_time").join_asof(
-            s, left_on="event_time", right_on="at", by="entity", strategy="backward", check_sortedness=False
+            s, left_on="event_time", right_on="at", by="inst", strategy="backward", check_sortedness=False
         )
         return hit.filter(pl.col("to").is_not_null()).select("_i", "to")
 
     def apply(f: pl.DataFrame) -> pl.DataFrame:
         r = renamed(f)
-        return f.with_columns(f["entity"].scatter(r["_i"], r["to"])) if r.height else f
+        return f.with_columns(f["inst"].scatter(r["_i"], r["to"])) if r.height else f
 
     return Treatment(name, "fields", reason, renamed(fields).height, apply)
 
 
 def drop_candidates(name: str, reason: str, bad: pl.DataFrame) -> Treatment:
-    """Drop candidate rows (``t``, ``entity``)."""
-    flags = bad.select("t", "entity").unique()
+    """Drop candidate rows (``t``, ``inst``)."""
+    flags = bad.select("t", "inst").unique()
 
     def apply(c: pl.DataFrame) -> pl.DataFrame:
-        return c.join(flags, on=["t", "entity"], how="anti", maintain_order="left")
+        return c.join(flags, on=["t", "inst"], how="anti", maintain_order="left")
 
     def removed(c: pl.DataFrame) -> pl.DataFrame:
-        return c.join(flags, on=["t", "entity"], how="semi", maintain_order="left")
+        return c.join(flags, on=["t", "inst"], how="semi", maintain_order="left")
 
     return Treatment(name, "candidates", reason, flags.height, apply, removed)
 
@@ -146,10 +146,10 @@ def apply_candidates(treatments: Sequence[Treatment], cands: pl.DataFrame) -> pl
 
 
 def spans(fields: pl.DataFrame, removed: pl.DataFrame, by: Sequence[str] = ()) -> pl.DataFrame:
-    """When each removed row was current in ``fields``. Columns ``entity``, ``event_time``, ``start`` (when it became
-    known) and ``end`` (when the next row of its entity and field did; far in the future for the last), both in ns.
+    """When each removed row was current in ``fields``. Columns ``inst``, ``event_time``, ``start`` (when it became
+    known) and ``end`` (when the next row of its inst and field did; far in the future for the last), both in ns.
     ``by`` names columns of ``removed`` that set its rows apart, such as the treatment; they come first."""
-    keys, group = ["entity", "field"], list(by)
+    keys, group = ["inst", "field"], list(by)
     schema = {**{k: removed.schema[k] for k in group}, **SPAN_SCHEMA}
     known = fields.lazy().join(removed.lazy().select(keys).unique(), on=keys, how="semi")
     known = known.select(*keys, pl.col("available_at").dt.epoch("ns").alias("start")).unique().sort(*keys, "start")
@@ -163,8 +163,8 @@ def touched(
     rows: pl.DataFrame, found: pl.DataFrame, legs: Sequence[str], h: str = "h_ns", by: Sequence[str] = ()
 ) -> pl.DataFrame:
     """Label rows whose window meets a span of a leg. One row per group and label row touched: a label row (``_r``)
-    whose window ``[t, t + h]`` meets a span (``entity``, ``start``, ``end``) of one of its ``legs``, the columns that
-    name entities. ``h`` is the column with each row's horizon in ns, and ``by`` the columns of ``found`` that set spans
+    whose window ``[t, t + h]`` meets a span (``inst``, ``start``, ``end``) of one of its ``legs``, the columns that
+    name insts. ``h`` is the column with each row's horizon in ns, and ``by`` the columns of ``found`` that set spans
     apart, such as the treatment."""
     keys = list(by)
     legs = [c for c in legs if c in rows.columns]
@@ -172,9 +172,9 @@ def touched(
     if found.is_empty() or not legs:
         return pl.DataFrame(schema=schema)
     horizons = rows.lazy().select(pl.col(h).cast(pl.Int64).alias("_h")).unique()
-    reach = found.lazy().select(*keys, "entity", "start", "end").join(horizons, how="cross")
-    reach = reach.select(*keys, "entity", "_h", (pl.col("start") - pl.col("_h")).alias("lo"), pl.col("end").alias("hi"))
-    group = [*keys, "entity", "_h"]
+    reach = found.lazy().select(*keys, "inst", "start", "end").join(horizons, how="cross")
+    reach = reach.select(*keys, "inst", "_h", (pl.col("start") - pl.col("_h")).alias("lo"), pl.col("end").alias("hi"))
+    group = [*keys, "inst", "_h"]
     reach = reach.sort(*group, "lo").with_columns(_prior=pl.col("hi").cum_max().shift(1).over(group))
     fresh = pl.col("_prior").is_null() | (pl.col("lo") > pl.col("_prior"))
     merged = (
@@ -182,14 +182,14 @@ def touched(
         .group_by(*group, "_run")
         .agg(pl.col("lo").min(), pl.col("hi").max())
     )
-    entities = found.lazy().select(*keys, "entity").unique()
+    insts = found.lazy().select(*keys, "inst").unique()
     asked = rows.lazy().select(
         "_r", pl.col("t").dt.epoch("ns").alias("_t"), pl.col(h).cast(pl.Int64).alias("_h"), *legs
     )
     asked = asked.unpivot(index=["_r", "_t", "_h"], on=legs, value_name="_leg").select(
-        "_r", "_t", "_h", pl.col("_leg").alias("entity")
+        "_r", "_t", "_h", pl.col("_leg").alias("inst")
     )
-    asked = asked.join(entities, on="entity").sort("_t")
+    asked = asked.join(insts, on="inst").sort("_t")
     hit = asked.join_asof(
         merged.sort("lo"), left_on="_t", right_on="lo", by=group, strategy="backward", check_sortedness=False
     )
@@ -336,7 +336,7 @@ class Numbers:
         return {
             p.key: per_t(
                 p.target.reduce(
-                    v.join(c, on=["t", "entity"], how="inner", suffix="_candidate"),
+                    v.join(c, on=["t", "inst"], how="inner", suffix="_candidate"),
                     p.horizon,
                     self.costs,
                 )
@@ -361,11 +361,11 @@ class Numbers:
 
     def _build(self, f: pl.DataFrame, c: pl.DataFrame, renames: tuple[Treatment, ...]) -> _Table:
         indexed = c.with_row_index("_c")
-        index = indexed.select("t", "entity", "_c")
+        index = indexed.select("t", "inst", "_c")
         frames, columns = [], []
         for k, v in enumerate(self._values(f, c)):
             columns.append(v.columns)
-            frames.append(v.join(index, on=["t", "entity"]).drop("t", "entity").with_columns(_k=pl.lit(k, pl.UInt32)))
+            frames.append(v.join(index, on=["t", "inst"]).drop("t", "inst").with_columns(_k=pl.lit(k, pl.UInt32)))
         labels = pl.concat(frames, how="diagonal_relaxed").with_row_index("_r")
         return _Table(renames, f, indexed, labels, columns)
 
@@ -384,12 +384,12 @@ class Numbers:
         """One key's label rows joined with their candidates, as a target reads them, with the label row ``_r``."""
         labels = table.labels.filter(pl.col("_k") == k)
         columns = table.columns[k]
-        own = [c for c in columns if c not in ("t", "entity")]
-        theirs = [c for c in table.cands.columns if c not in ("t", "entity", "_c")]
-        cand = table.cands.select(pl.col("t", "entity", *theirs).gather(labels["_c"]))
+        own = [c for c in columns if c not in ("t", "inst")]
+        theirs = [c for c in table.cands.columns if c not in ("t", "inst", "_c")]
+        cand = table.cands.select(pl.col("t", "inst", *theirs).gather(labels["_c"]))
         cand = cand.rename({c: f"{c}_candidate" for c in theirs if c in own})
         out = labels.select("_r", *own).hstack(cand)
-        return out.select("_r", *columns, *(c for c in cand.columns if c not in ("t", "entity")))
+        return out.select("_r", *columns, *(c for c in cand.columns if c not in ("t", "inst")))
 
     def _dropped(self, table: _Table, ts: Sequence[Treatment]) -> pl.Series:
         """The label rows of ``table`` that the treatments in ``ts`` that drop rows touch."""
@@ -407,14 +407,14 @@ class Numbers:
             gone = pl.concat(
                 [
                     _removed(t, self.fields).select(
-                        "entity", "field", "event_time", "available_at", treatment=pl.lit(t.name)
+                        "inst", "field", "event_time", "available_at", treatment=pl.lit(t.name)
                     )
                     for t in on_fields
                 ]
             )
             current = spans(table.fields, reduce(lambda g, r: r.apply(g), table.renames, gone), by=["treatment"])
             legs = [c for c in LEGS if c in table.cands.columns]
-            near = pl.any_horizontal(pl.col(c).is_in(current["entity"].unique().implode()) for c in legs)
+            near = pl.any_horizontal(pl.col(c).is_in(current["inst"].unique().implode()) for c in legs)
             rows = table.cands.filter(near).select("_c", "t", *legs)
             rows = table.labels.select("_r", "_c", "_k").join(rows, on="_c").join(self.key_table, on="_k")
             found.append(touched(rows, current, legs, by=["treatment"]))
@@ -463,7 +463,7 @@ def smaller(a: float, b: float) -> float:
 
 
 def _fields() -> pl.DataFrame:
-    return source(Source(entities=3, hours=48), 0)
+    return source(Source(insts=3, hours=48), 0)
 
 
 def _at(hour: int) -> pl.Expr:
@@ -476,40 +476,40 @@ def _counts(t: Treatment) -> tuple[int, int]:
 
 
 def _windows() -> pl.DataFrame:
-    return pl.DataFrame({"entity": ["e0"], "field": ["price"]}).with_columns(start=_at(10), end=_at(11))
+    return pl.DataFrame({"inst": ["e0"], "field": ["price"]}).with_columns(start=_at(10), end=_at(11))
 
 
 def _flags() -> pl.DataFrame:
     return (
         _fields()
-        .filter((pl.col("entity") == "e1") & (pl.col("field") == "price"))
+        .filter((pl.col("inst") == "e1") & (pl.col("field") == "price"))
         .head(3)
-        .select("entity", "field", "event_time")
+        .select("inst", "field", "event_time")
     )
 
 
 def _spans() -> pl.DataFrame:
     rows = [("e0", 5, 7), ("e1", 40, 41)]
-    frame = pl.DataFrame(rows, schema=["entity", "start", "end"], orient="row")
+    frame = pl.DataFrame(rows, schema=["inst", "start", "end"], orient="row")
     return frame.with_columns((pl.col(c) * HOUR_NS + START_NS).cast(TIME) for c in ("start", "end"))
 
 
 def _split() -> tuple[int, dict[str, int], bool, bool]:
-    """e0 split at hours 20 and 40: rows renamed, rows per entity, the rest untouched, and applying it twice changes
+    """e0 split at hours 20 and 40: rows renamed, rows per inst, the rest untouched, and applying it twice changes
     nothing more."""
     f = _fields()
-    splits = pl.DataFrame([("e0", 20, "e0#2"), ("e0", 40, "e0#3")], schema=["entity", "at", "to"], orient="row")
-    t = split_entities("s", "", splits.with_columns((pl.col("at") * HOUR_NS + START_NS).cast(TIME)), f)
+    splits = pl.DataFrame([("e0", 20, "e0#2"), ("e0", 40, "e0#3")], schema=["inst", "at", "to"], orient="row")
+    t = split_insts("s", "", splits.with_columns((pl.col("at") * HOUR_NS + START_NS).cast(TIME)), f)
     out = t.apply(f)
-    counts = {str(e): int(n) for e, n in out.group_by("entity").len().iter_rows()}
-    return t.rows, counts, out.drop("entity").equals(f.drop("entity")), t.apply(out).equals(out)
+    counts = {str(e): int(n) for e, n in out.group_by("inst").len().iter_rows()}
+    return t.rows, counts, out.drop("inst").equals(f.drop("inst")), t.apply(out).equals(out)
 
 
 def _prices() -> pl.DataFrame:
     """Hourly prices of a and b at hours 0 to 10, each known an hour after its event."""
-    rows = pl.DataFrame({"entity": ["a"] * 11 + ["b"] * 11, "hour": list(range(11)) * 2})
+    rows = pl.DataFrame({"inst": ["a"] * 11 + ["b"] * 11, "hour": list(range(11)) * 2})
     return rows.select(
-        "entity",
+        "inst",
         field=pl.lit("price"),
         event_time=pl.from_epoch(pl.col("hour") * HOUR_NS + START_NS, time_unit="ns").dt.replace_time_zone("UTC"),
         available_at=pl.from_epoch((pl.col("hour") + 1) * HOUR_NS + START_NS, time_unit="ns").dt.replace_time_zone(
@@ -522,32 +522,32 @@ def _prices() -> pl.DataFrame:
 def _rows(h: int = 2, legs: bool = False) -> pl.DataFrame:
     """A label row of a and of b at every hour from 0 to 10, horizon ``h`` hours; with ``legs``, of a pair whose
     long leg is a."""
-    frame = pl.DataFrame({"hour": list(range(11)) * 2, "entity": ["a"] * 11 + ["b"] * 11})
+    frame = pl.DataFrame({"hour": list(range(11)) * 2, "inst": ["a"] * 11 + ["b"] * 11})
     frame = frame.with_columns(
         t=pl.from_epoch(pl.col("hour") * HOUR_NS + START_NS, time_unit="ns").dt.replace_time_zone("UTC"),
         h_ns=pl.lit(h * HOUR_NS),
     )
     if legs:
-        frame = frame.with_columns(long=pl.col("entity"), short=pl.lit("c"), entity=pl.col("entity") + ">c")
+        frame = frame.with_columns(long=pl.col("inst"), short=pl.lit("c"), inst=pl.col("inst") + ">c")
     return frame.with_row_index("_r")
 
 
 def _hit(hours: Sequence[int], h: int = 2, legs: bool = False) -> list[tuple[str, int]]:
-    """The label rows touched when a's prices of ``hours`` are dropped, as (entity, hour)."""
+    """The label rows touched when a's prices of ``hours`` are dropped, as (inst, hour)."""
     f = _prices()
-    gone = f.filter((pl.col("entity") == "a") & pl.col("event_time").dt.hour().is_in(list(hours)))
+    gone = f.filter((pl.col("inst") == "a") & pl.col("event_time").dt.hour().is_in(list(hours)))
     rows = _rows(h, legs)
-    found = touched(rows, spans(f, gone), ["entity", "long", "short"])
-    return rows.join(found, on="_r").select("entity", "hour").sort("hour").rows()
+    found = touched(rows, spans(f, gone), ["inst", "long", "short"])
+    return rows.join(found, on="_r").select("inst", "hour").sort("hour").rows()
 
 
 def _apart() -> list[tuple[str, int]]:
     """Spans of two treatments found at once, each touching only its own rows."""
     f = _prices()
-    a = f.filter((pl.col("entity") == "a") & (pl.col("event_time").dt.hour() == 3)).with_columns(treatment=pl.lit("x"))
-    b = f.filter((pl.col("entity") == "b") & (pl.col("event_time").dt.hour() == 7)).with_columns(treatment=pl.lit("y"))
+    a = f.filter((pl.col("inst") == "a") & (pl.col("event_time").dt.hour() == 3)).with_columns(treatment=pl.lit("x"))
+    b = f.filter((pl.col("inst") == "b") & (pl.col("event_time").dt.hour() == 7)).with_columns(treatment=pl.lit("y"))
     found = spans(f, pl.concat([a, b]), by=["treatment"])
-    hit = touched(_rows(0), found, ["entity"], by=["treatment"])
+    hit = touched(_rows(0), found, ["inst"], by=["treatment"])
     return hit.join(_rows(0), on="_r").select("treatment", "hour").sort("treatment", "hour").rows()
 
 
@@ -558,7 +558,7 @@ CASES = [
         (4, 4),
     ),
     Case("masking rows drops exactly them", lambda: _counts(mask_rows("m", "", _flags(), _fields())), (3, 3)),
-    Case("dropping an entity drops all its rows", lambda: _counts(drop_entities("d", "", ["e2"], _fields())), (54, 54)),
+    Case("dropping an inst drops all its rows", lambda: _counts(drop_insts("d", "", ["e2"], _fields())), (54, 54)),
     Case(
         "dropping spans drops their rows of every field",
         lambda: _counts(drop_spans("d", "", _spans(), _fields())),
@@ -570,13 +570,13 @@ CASES = [
         (33, {"e0": 21, "e0#2": 22, "e0#3": 11, "e1": 54, "e2": 54}, True, True),
     ),
     Case(
-        "a dropped row touches the rows whose window meets the hour it was current, of its entity only",
+        "a dropped row touches the rows whose window meets the hour it was current, of its inst only",
         lambda: _hit([5]),
         [("a", 4), ("a", 5), ("a", 6)],
     ),
     Case("the last row stays current", lambda: _hit([10]), [("a", 9), ("a", 10)]),
     Case("a longer horizon reaches further back", lambda: len(_hit([5], h=4)), 5),
     Case("dropped rows next to each other make one span", lambda: _hit([5, 6], h=0), [("a", 6), ("a", 7)]),
-    Case("a leg counts like the entity", lambda: _hit([5], legs=True), [("a>c", 4), ("a>c", 5), ("a>c", 6)]),
+    Case("a leg counts like the inst", lambda: _hit([5], legs=True), [("a>c", 4), ("a>c", 5), ("a>c", 6)]),
     Case("each treatment touches only its own rows", _apart, [("x", 4), ("y", 8)]),
 ]

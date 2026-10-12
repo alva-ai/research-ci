@@ -54,7 +54,7 @@ LAB_EVAL = (
 )
 CASE_EXAMPLE = (
     'CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars '
-    "DataFrame of the evaluation table (t, entity, score, y) and thirds(SIX) returns t, value"
+    "DataFrame of the evaluation table (t, inst, score, y) and thirds(SIX) returns t, value"
 )
 CASE_FIELDS: dict[type, str] = {
     Eval: (
@@ -83,20 +83,20 @@ NULL_FIELDS: dict[type, dict[str, str]] = {
     Null: {
         "explains": "the id of the contract's alternative this world answers",
         "world": "a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay",
-        "keeps": "the column the alternative lives in; None means the world's bucket_by, or entity for a ShiftInTime",
+        "keeps": "the column the alternative lives in; None means the world's bucket_by, or inst for a ShiftInTime",
         "evals": "the names of the evals this world judges, any eval of the layer; () means the decisive effect",
         "reps": "the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default",
         "note": "free text kept with the world in the submission's record",
     },
     PermuteWithin: {
-        "bucket_by": 'shuffle the scores across entities inside each bucket of this column; "time" is one bucket per '
+        "bucket_by": 'shuffle the scores across insts inside each bucket of this column; "time" is one bucket per '
         "decision time",
         "clusters": "a column whose members move together and are shuffled as one",
         "block": 'repeat the same shuffle for every decision time inside a block this long; "horizon" uses each '
         "label horizon",
     },
     ShiftInTime: {
-        "min_shift": "shift each entity's scores along its decision times, by one offset for all entities, at least "
+        "min_shift": "shift each inst's scores along its decision times, by one offset for all insts, at least "
         'this far either way round; "horizon" uses each label horizon',
     },
 }

@@ -10,13 +10,13 @@ from typing import Any, Literal
 import numpy as np
 import polars as pl
 
-OnFail = Literal["mask", "drop_entities", "ask", "block"]
+OnFail = Literal["mask", "drop_insts", "ask", "block"]
 
 
 @dataclass(frozen=True)
 class Pit:
     """A planted problem of ``category`` in ``field``: ``plant(fields, field, rng)`` returns a copy with it planted
-    in one entity where the field varies. A data eval's module lists them in ``PITS``, next to its ``CASES``: a test of
+    in one inst where the field varies. A data eval's module lists them in ``PITS``, next to its ``CASES``: a test of
     every eval of the module that covers the category."""
 
     category: str

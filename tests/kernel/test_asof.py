@@ -10,15 +10,15 @@ from research_ci.kernel.time.clock import from_ns, to_ns
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
 H = pd.Timedelta(hours=1)
-COLUMNS = ["entity", "field", "event_time", "available_at", "value", "vintage"]
+COLUMNS = ["inst", "field", "event_time", "available_at", "value", "vintage"]
 
 
 def _table(rows: list[tuple]) -> pl.DataFrame:
     return field_table(pd.DataFrame(rows, columns=COLUMNS))
 
 
-def _cell(frame: pl.DataFrame, at: pd.Timestamp, entity: str, column: str) -> float:
-    row = frame.filter((pl.col("time").dt.epoch("ns") == to_ns(at)) & (pl.col("entity") == entity))
+def _cell(frame: pl.DataFrame, at: pd.Timestamp, inst: str, column: str) -> float:
+    row = frame.filter((pl.col("time").dt.epoch("ns") == to_ns(at)) & (pl.col("inst") == inst))
     return row[column].item()
 
 
@@ -42,13 +42,13 @@ def test_lookback_keeps_only_recent_event_times() -> None:
 
 def test_panel_keeps_every_field_as_a_column() -> None:
     fields = _table([("a", "x", T0, T0, 1.0, 0), ("a", "y", T0 + 5 * H, T0 + 5 * H, 2.0, 0)])
-    assert asof(fields, T0).columns == ["time", "entity", "x", "y"]
-    assert asof(fields, T0 - H).columns == ["time", "entity", "x", "y"]
+    assert asof(fields, T0).columns == ["time", "inst", "x", "y"]
+    assert asof(fields, T0 - H).columns == ["time", "inst", "x", "y"]
 
 
 def test_missing_column_is_rejected() -> None:
     with pytest.raises(SchemaError):
-        field_table(pd.DataFrame({"entity": ["a"], "field": ["x"], "event_time": [T0], "value": [1.0]}))
+        field_table(pd.DataFrame({"inst": ["a"], "field": ["x"], "event_time": [T0], "value": [1.0]}))
 
 
 def test_naive_timestamps_are_rejected() -> None:
@@ -91,26 +91,26 @@ rows_strategy = st.lists(
 def test_asof_matches_brute_force(rows: list[tuple], t: int) -> None:
     table_rows = []
     seen: dict[tuple, int] = {}
-    for entity, field, event, lag, value in rows:
-        key = (entity, field, event)
+    for inst, field, event, lag, value in rows:
+        key = (inst, field, event)
         vintage = seen.get(key, -1) + 1
         seen[key] = vintage
-        table_rows.append((entity, field, T0 + event * H, T0 + (event + lag + 11 * vintage) * H, value, vintage))
+        table_rows.append((inst, field, T0 + event * H, T0 + (event + lag + 11 * vintage) * H, value, vintage))
     fields = _table(table_rows)
     cutoff = T0 + t * H
 
     expected: dict[tuple, float] = {}
     best: dict[tuple, int] = {}
-    for entity, field, event_time, available_at, value, vintage in table_rows:
-        if available_at <= cutoff and vintage >= best.get((entity, field, event_time), -1):
-            best[(entity, field, event_time)] = vintage
-            expected[(to_ns(event_time), entity, field)] = value
+    for inst, field, event_time, available_at, value, vintage in table_rows:
+        if available_at <= cutoff and vintage >= best.get((inst, field, event_time), -1):
+            best[(inst, field, event_time)] = vintage
+            expected[(to_ns(event_time), inst, field)] = value
 
-    long = asof(fields, cutoff).unpivot(index=["time", "entity"]).drop_nulls("value")
+    long = asof(fields, cutoff).unpivot(index=["time", "inst"]).drop_nulls("value")
     actual = {
-        (ns, entity, field): value
-        for ns, entity, field, value in zip(
-            long["time"].dt.epoch("ns").to_list(), long["entity"], long["variable"], long["value"], strict=True
+        (ns, inst, field): value
+        for ns, inst, field, value in zip(
+            long["time"].dt.epoch("ns").to_list(), long["inst"], long["variable"], long["value"], strict=True
         )
     }
     assert actual == expected
@@ -120,10 +120,10 @@ def test_asof_matches_brute_force(rows: list[tuple], t: int) -> None:
 @given(rows=rows_strategy, t=st.integers(0, 40), seed=st.integers(0, 2**16))
 def test_asof_does_not_depend_on_row_order(rows: list[tuple], t: int, seed: int) -> None:
     table_rows, seen = [], {}
-    for entity, field, event, lag, value in rows:
-        vintage = seen.get((entity, field, event), -1) + 1
-        seen[(entity, field, event)] = vintage
-        table_rows.append((entity, field, T0 + event * H, T0 + (event + lag + 11 * vintage) * H, value, vintage))
+    for inst, field, event, lag, value in rows:
+        vintage = seen.get((inst, field, event), -1) + 1
+        seen[(inst, field, event)] = vintage
+        table_rows.append((inst, field, T0 + event * H, T0 + (event + lag + 11 * vintage) * H, value, vintage))
     fields = _table(table_rows)
     shuffled = fields.sample(fraction=1.0, shuffle=True, seed=seed)
     assert not shuffled["available_at"].flags["SORTED_ASC"] or shuffled.equals(fields)
@@ -148,7 +148,7 @@ def test_duplicates_and_early_revisions_are_found_as_a_check_by_key_finds_them(r
     """The key checks run on one sort of coded keys; brute force over the rows says what they must find."""
     frame = pl.DataFrame(
         [(e, f, T0 + event * H, T0 + at * H, 1.0, v, "") for e, f, event, v, at in rows],
-        schema=["entity", "field", "event_time", "available_at", "value", "vintage", "source"],
+        schema=["inst", "field", "event_time", "available_at", "value", "vintage", "source"],
         orient="row",
     )
     keys = [(e, f, event, v) for e, f, event, v, _ in rows]

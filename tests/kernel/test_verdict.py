@@ -17,7 +17,7 @@ def _table(times: int = 60, n: int = 20) -> pl.DataFrame:
         for t in range(times)
         for i in range(n)
     ]
-    frame = pl.DataFrame(rows, schema=["t", "entity", "cluster", "score", "y"], orient="row")
+    frame = pl.DataFrame(rows, schema=["t", "inst", "cluster", "score", "y"], orient="row")
     return frame.with_columns(pl.col("t").cast(TIME))
 
 

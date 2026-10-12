@@ -71,7 +71,7 @@ def test_hedged_legs_flag_an_asset_listed_under_another_ticker() -> None:
 def test_every_builtin_pit_changes_the_field_it_targets(name: str) -> None:
     fields = toy_fields(hours=24 * 6)
     planted = field_table(BUILTIN[name](fields, "close", np.random.default_rng(0)))
-    key = ["entity", "event_time", "value"]
+    key = ["inst", "event_time", "value"]
     a = fields.filter(pl.col("field") == "close").select(key).sort(key)
     b = planted.filter(pl.col("field") == "close").select(key).sort(key)
     assert not a.equals(b)
@@ -82,7 +82,7 @@ def test_baseline_flags_gaps_near_duplicates_and_level_shifts() -> None:
     rng = np.random.default_rng(1)
     broken = field_table(BUILTIN["gap"](BUILTIN["duplicate"](fields, "close", rng), "close", rng))
     later = pl.col("event_time") > fields["event_time"].min() + pl.duration(hours=72, time_unit="ns")
-    hit = (pl.col("entity") == "a:X") & (pl.col("field") == "close") & later
+    hit = (pl.col("inst") == "a:X") & (pl.col("field") == "close") & later
     shifted = field_table(fields.with_columns(value=pl.when(hit).then(pl.col("value") * 10).otherwise("value")))
     levels = (("close",), 5.0, 24)
     clean_checks, clean = baseline(fields, *levels)
@@ -90,7 +90,7 @@ def test_baseline_flags_gaps_near_duplicates_and_level_shifts() -> None:
     _, moved = baseline(shifted, *levels)
     assert clean.is_empty() and all(c.status == "pass" for c in clean_checks)
     assert {"gap", "near"} <= set(found["kind"])
-    assert moved.filter(pl.col("kind") == "shift")["entity"].to_list() == ["a:X"]
+    assert moved.filter(pl.col("kind") == "shift")["inst"].to_list() == ["a:X"]
     undeclared_checks, undeclared = baseline(shifted)
     assert undeclared.filter(pl.col("kind") == "shift").is_empty()
     assert {c.name: c.status for c in undeclared_checks}["no level shifts"] == "skip"

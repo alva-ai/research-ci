@@ -23,7 +23,7 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     data = spec["data"]
     add(
         "data",
-        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['entities']} entities · "
+        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['insts']} insts · "
         f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
     )
     out.append(SLOT_HEADS[1])
@@ -107,7 +107,7 @@ def _source(src: dict[str, Any]) -> list[str]:
         return [f"{head} · admitted"]
     status = "not yet admitted: approving this card admits it for every idea [!]"
     status = status if src["status"] == "waiting" else "NOT ADMITTED: it failed its admission checks [!]"
-    lines = [f"{head} · {status}", f"code {src['code'][:12]} · {src['entities']} entities · {src['rows']:,} rows"]
+    lines = [f"{head} · {status}", f"code {src['code'][:12]} · {src['insts']} insts · {src['rows']:,} rows"]
     for c in src["checks"]:
         lines.append(check_line(c))
         if c["name"] == "independent source agrees" and src["reference"]:

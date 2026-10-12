@@ -30,7 +30,7 @@ from research_ci.kernel.verdict.power import Z_BASE
 STAT = Statistic(rank_ic, RankCorrelation())
 HORIZONS = {"1h": HOUR_NS, "4h": 4 * HOUR_NS}
 MOST, BATCH, MIN_BLOCKS = 200, 50, 5
-SMALL = Market(times=48, entities=30, clusters=10)
+SMALL = Market(times=48, insts=30, clusters=10)
 
 
 def _decisions(table: pl.DataFrame) -> tuple[float, float, int]:
@@ -80,7 +80,7 @@ def test_without_information_it_passes_no_more_often_than_the_fixed_run_and_draw
 
 
 def test_with_information_it_passes_as_often_as_the_fixed_run() -> None:
-    runs = _runs(Market(times=48, entities=30, clusters=10, ic=0.05), 120)
+    runs = _runs(Market(times=48, insts=30, clusters=10, ic=0.05), 120)
     fixed, seq, se = _check(runs)
     assert 0.2 < fixed < 0.8
     assert seq >= fixed - 3 * se
@@ -88,7 +88,7 @@ def test_with_information_it_passes_as_often_as_the_fixed_run() -> None:
 
 def test_the_judge_stops_where_the_rule_says_on_the_same_shuffles() -> None:
     for seed, ic in ((0, 0.0), (3, 0.05), (5, 0.05), (8, 0.08)):
-        table = market(Market(times=48, entities=30, clusters=10, ic=ic), seed)
+        table = market(Market(times=48, insts=30, clusters=10, ic=ic), seed)
         full, z, n = _decisions(table)
         lanes = {h: Lane(table, h_ns, h, _shuffle(table, h_ns)) for h, h_ns in HORIZONS.items()}
         fixed = Request(STAT, lanes, MOST, MIN_BLOCKS, "max")

@@ -59,7 +59,7 @@ NULLS_FORMAT = (
     "nulls/feat.py defines NULLS = [Null(alternative, PermuteWithin(column, clusters=..., block='horizon'), "
     "evals=(...)), ...], one world for every alternative explanation in the contract; the world shuffles the scores "
     "within the buckets of a column of the evaluation table, or, as ShiftInTime(min_shift=...), shifts each "
-    "entity's scores in time, and judges the evals it names, or the decisive effect"
+    "inst's scores in time, and judges the evals it names, or the decisive effect"
 )
 EVAL_FILES = "eval:"
 
@@ -99,12 +99,12 @@ def frozen(
         plugin(target_use(effect, contract))
     plugin(as_use(contract.costs))
     cands = norm_candidates(universe.candidates(fields, [from_ns(t) for t in times]))
-    cands = cands.join(excluded.select("t", "entity"), on=["t", "entity"], how="anti").sort("t", "entity")
+    cands = cands.join(excluded.select("t", "inst"), on=["t", "inst"], how="anti").sort("t", "inst")
     present = sorted(int(t) for t in cands.select(pl.col("t").dt.epoch("ns").unique())["t"])
     stride = max(1, math.ceil(len(present) / s.max_times))
     kept = pl.Series("t", present[::stride], dtype=pl.Int64)
     sampled = cands.filter(pl.col("t").dt.epoch("ns").is_in(kept.implode()))
-    extra = [c for c in cands.columns if c not in ("t", "entity")]
+    extra = [c for c in cands.columns if c not in ("t", "inst")]
     renamed = {c: f"{c}_candidate" for c in extra if c in TABLE_KEYS or c.startswith("y_")}
     columns = sampled.rename(renamed)
     tables: floor.Tables = {}
@@ -115,16 +115,16 @@ def frozen(
         found = label_values(values, fields, sampled, [span(h) for h in label.horizons])
         for h, out in zip(label.horizons, found, strict=True):
             h_ns = span_ns(span(h))
-            parts = [c for c in out.columns if c not in ("t", "entity", "value")]
+            parts = [c for c in out.columns if c not in ("t", "inst", "value")]
             components[label.name] = parts
             out = out.filter(pl.col("t") <= lit_time(end - h_ns))
             y = out.select(
                 pl.col("t").cast(TIME),
-                pl.col("entity").cast(pl.String),
+                pl.col("inst").cast(pl.String),
                 pl.col("value").cast(pl.Float64).alias("y"),
                 *[pl.col(c).cast(pl.Float64).alias(f"y_{c}") for c in parts],
             )
-            table = y.join(columns, on=["t", "entity"], how="inner").sort("t", "entity")
+            table = y.join(columns, on=["t", "inst"], how="inner").sort("t", "inst")
             tables[label.name][h] = (table, h_ns)
     return Frozen(contract, fields, cands, tables, components, start, end, stride, deps, registry, panel, exclusions)
 
@@ -244,7 +244,7 @@ def ready(root: Path, contract: Contract, registry: Registry | None = None) -> N
     if unknown:
         raise FeatError(f"{NULLS_FILE}: {'; '.join(unknown)}{NO_TRIAL}")
     u = contract.universe
-    clusters, shape = (u.clusters, u.shape) if u is not None else ("entity", "cross")
+    clusters, shape = (u.clusters, u.shape) if u is not None else ("inst", "cross")
     worlds = [floor_world(clusters, 0, shape)] + [_world(i, n) for i, n in enumerate(nulls, start=1)]
     _covered(skeleton.Found([floor.coverage(contract, worlds)]))
 
@@ -324,8 +324,8 @@ def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]],
 def _scored(table: pl.DataFrame, scored: pl.DataFrame, events: bool) -> pl.DataFrame:
     """An evaluation table with the finite scores: only their rows, or for events every row, NaN where none."""
     if not events:
-        return table.join(scored, on=["t", "entity"], how="inner").sort("t", "entity")
-    joined = table.join(scored, on=["t", "entity"], how="left").sort("t", "entity")
+        return table.join(scored, on=["t", "inst"], how="inner").sort("t", "inst")
+    joined = table.join(scored, on=["t", "inst"], how="left").sort("t", "inst")
     return joined.with_columns(pl.col("score").fill_null(float("nan")))
 
 
