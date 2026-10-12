@@ -6,12 +6,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from research_ci.api.methods import Market
-from research_ci.eval.calibration import stand_in
+from research_ci.api.evals import Market
 from research_ci.eval.statistics.ic import rank_ic
 from research_ci.eval.synthetic import HOUR_NS, market
 from research_ci.kernel.verdict.judge import Lane, Request, judge_all, per_t, stacked, with_scores
 from research_ci.kernel.verdict.permute import Permutation
+from research_ci.validation import calibration
 
 
 def _spread(table: pl.DataFrame) -> pl.DataFrame:
@@ -72,4 +72,4 @@ def test_the_judge_and_the_calibration_stack_an_eval_without_a_batched_form() ->
     fast, slow = judge_all([request], 1)[0], judge_all([request], 1, batched=False)[0]
     assert isinstance(fast, dict) and isinstance(slow, dict)
     assert fast["z"] == pytest.approx(slow["z"], rel=1e-9)
-    assert stand_in._batched(_spread, table) is not None
+    assert calibration._batched(_spread, table) is not None

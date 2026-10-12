@@ -8,7 +8,7 @@ import pytest
 
 from research_ci.api import Eval
 from research_ci.eval.statistics.ic import rank_ic
-from research_ci.runner import evals as ev
+from research_ci.validation import load as ev
 
 MODULE = """
 from functools import partial

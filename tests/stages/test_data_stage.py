@@ -5,21 +5,21 @@ import polars as pl
 import pytest
 
 from research_ci.api.contract import Use, span
-from research_ci.api.methods import Source
+from research_ci.api.evals import Source
 from research_ci.eval.data import coverage as cv
-from research_ci.eval.data import treatments as tr
 from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
 from research_ci.runner.research import ResearchError
-from research_ci.stages import data as data_stage
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataSettings
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.floor.data import Seen
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data import defaults as data_defaults
+from research_ci.stages.data import run as data_stage
+from research_ci.stages.data import treatments as tr
+from research_ci.stages.data.floor import Seen
+from research_ci.stages.data.run import DataSettings
+from research_ci.stages.skeleton import Found, Step
 from research_ci.store import vault
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea

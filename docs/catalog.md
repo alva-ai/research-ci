@@ -6,7 +6,7 @@ Generated from the code by `rci methods --markdown`; a test fails when it is out
 
 ### contract: `rci contract derive`
 
-Lists: `stages/floor/contract.py`, `stages/defaults/contract.py`.
+Lists: `stages/contract/floor.py`, `stages/contract/defaults.py`.
 
 | Step | Checks or computes | Role | List | Eval method |
 | --- | --- | --- | --- | --- |
@@ -22,7 +22,7 @@ Lists: `stages/floor/contract.py`, `stages/defaults/contract.py`.
 
 ### data: `rci data check`
 
-Lists: `stages/floor/data.py`, `stages/defaults/data.py`, `stages/floor/source.py`.
+Lists: `stages/data/floor.py`, `stages/data/defaults.py`, `stages/data/source.py`.
 
 | Step | Checks or computes | Role | List | Eval method |
 | --- | --- | --- | --- | --- |
@@ -34,22 +34,22 @@ Lists: `stages/floor/data.py`, `stages/defaults/data.py`, `stages/floor/source.p
 | canary: reconciliation *(reference)* | The comparison catches altered values | blocks | floor | `data.reconcile.{compare, requests}` · `data.baseline.baseline` |
 | row-by-row code *(data.py, nulls/data.py)* | Row-by-row code in the idea's data files | warns | floor | — |
 | data is current | Warns when the newest row is too old | warns | default | — |
-| level shifts *(levels)* | Masks level jumps the source did not confirm | treats | default | `data.baseline.level_shift_anomalies` · `data.treatments.mask_windows` |
-| level sanity *(levels)* | Masks levels at zero, stuck, or spiking | treats | default | `data.sanity.{nonpositive, stale, spikes}` · `data.treatments.{mask_rows, apply_all}` |
-| identity breaks *(levels)* | Splits an entity that returns at another level | treats | default | `data.identity.{breaks, renames}` · `data.treatments.split_entities` |
-| coverage | Drops entities shorter than the longest horizon | treats | default | `data.treatments.{apply_all, drop_spans}` · `data.coverage.{short_lived, thin}` |
-| hedge guard *(hedge)* | Drops candidates whose legs are not one asset | treats | default | `data.invariants.{hedged_legs, hedge_check}` · `data.treatments.drop_candidates` |
+| level shifts *(levels)* | Masks level jumps the source did not confirm | treats | default | `data.baseline.level_shift_anomalies` |
+| level sanity *(levels)* | Masks levels at zero, stuck, or spiking | treats | default | `data.sanity.{nonpositive, stale, spikes}` |
+| identity breaks *(levels)* | Splits an entity that returns at another level | treats | default | `data.identity.{breaks, renames}` |
+| coverage | Drops entities shorter than the longest horizon | treats | default | `data.coverage.{short_lived, thin}` |
+| hedge guard *(hedge)* | Drops candidates whose legs are not one asset | treats | default | `data.invariants.{hedged_legs, hedge_check}` |
 | influence concentration | Shows the clusters most of the noise rests on | warns | default | `data.concentration.shares` |
-| eval validation *(data.py)* | Case evals pass their tests; covered pits are caught | blocks | floor | `data.treatments.{apply_all, apply_candidates}` · `data.pits.{unit, level_break, gap, duplicate, shift, leak, spike, swap}` |
-| the idea's evals *(data.py)* | Masks, drops, or asks about what a valid eval flags | treats | floor | `data.treatments.{mask_rows, drop_entities}` |
-| field grades | The decisive number reads only verified fields | warns | floor | `data.treatments.apply_candidates` |
-| treatment influence | Each treatment's move of the decisive number, in MDE | warns | floor | `data.treatments.{apply_all, apply_candidates}` · `data.influence.{spans, touched}` |
-| power | MDE per horizon, before and after the treatments | shown | floor | `data.treatments.apply_candidates` |
-| decisive test calibration | Stand-ins die and planted signals live | blocks | floor | `protocol.target_reads_score` · `calibration.stand_in.calibrate` |
+| eval validation *(data.py)* | Case evals pass their tests; covered pits are caught | blocks | floor | `data.pits.{unit, level_break, gap, duplicate, shift, leak, spike, swap}` |
+| the idea's evals *(data.py)* | Masks, drops, or asks about what a valid eval flags | treats | floor | — |
+| field grades | The decisive number reads only verified fields | warns | floor | — |
+| treatment influence | Each treatment's move of the decisive number, in MDE | warns | floor | — |
+| power | MDE per horizon, before and after the treatments | shown | floor | — |
+| decisive test calibration | Stand-ins die and planted signals live | blocks | floor | `protocol.target_reads_score` |
 
 ### feat: `rci feat submit`
 
-Lists: `stages/floor/feat.py`, `stages/defaults/feat.py`.
+Lists: `stages/feat/floor.py`, `stages/feat/defaults.py`.
 
 | Step | Checks or computes | Role | List | Eval method |
 | --- | --- | --- | --- | --- |
@@ -130,8 +130,6 @@ For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.
 | | `thin` | Decision times with some candidates but fewer than `floor`. | data, research code | 1 ex |
 | `identity` | `breaks` | Declared levels that come back elsewhere after a long gap. | data, research code | 6 ex |
 | | `renames` | What the split calls each new series: `entity`, `at`, `to`. | data, research code | 1 ex |
-| `influence` | `spans` | When each removed row was current in `fields`. | data | 6 ex |
-| | `touched` | Label rows whose window meets a span of a leg. | data | 6 ex |
 | `invariants` | `hedge_check` | The card's hedged-legs line, naming the pairs most often apart. | data | — |
 | | `hedged_legs` | Per candidate row: the legs' price ratio, correlation, and `ok`. | data | 1 ex |
 | `pits` | `duplicate` | A duplicate: one event repeated a millisecond later. | data, research code | 1 ex |
@@ -151,20 +149,6 @@ For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.
 | `sanity` | `nonpositive` | Events of a declared level at zero or below. | data, research code | 3 ex |
 | | `spikes` | Events of a declared level that jump and come back. | data, research code | 5 ex |
 | | `stale` | Events repeating the value before them in a long run. | data, research code | 3 ex |
-| `treatments` | `apply_all` | The field table after every field treatment. | data | — |
-| | `apply_candidates` | The candidate table after every candidate treatment, in order. | data | — |
-| | `drop_candidates` | Drop candidate rows (`t`, `entity`). | data | — |
-| | `drop_entities` | Drop every row of the named entities. | data | 1 ex |
-| | `drop_spans` | Drop the rows each span covers. | data | 1 ex |
-| | `mask_rows` | Drop the flagged rows. | data | 1 ex |
-| | `mask_windows` | Drop the flagged field's rows within `around_ns` of each window. | data | 1 ex |
-| | `split_entities` | Rename each split entity's rows from the split on. | data | 1 ex |
-
-### calibration
-
-| Module | Function | Does | Used by | Backing |
-| --- | --- | --- | --- | --- |
-| `stand_in` | `calibrate` | Stand-ins die as often as chance allows; planted signals live. | data | 2 ex |
 
 ### statistics
 
@@ -185,17 +169,8 @@ For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
 | `synthetic` | `hand` | A small evaluation table worked by hand, at one time. | worked examples | — |
-| | `market` | A synthetic evaluation table, one row per entity and time. | inside eval, worked examples | — |
+| | `market` | A synthetic evaluation table, one row per entity and time. | worked examples | — |
 | | `source` | A synthetic field table of hourly prices and settled flows. | worked examples | — |
-
-### obligations
-
-| Module | Function | Does | Used by | Backing |
-| --- | --- | --- | --- | --- |
-| `obligations` | `differs` | How `got` differs from `expect`; empty when it does not. | inside eval | — |
-| | `label` | How a test is named in its check. | inside eval | — |
-| | `obligations` | One check per case and property the module declares. | tests only | — |
-| | `run_tests` | One check per case and property, each named after `name`. | inside eval | — |
 
 ## Legend
 

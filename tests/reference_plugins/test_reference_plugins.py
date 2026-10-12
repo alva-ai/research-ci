@@ -2,7 +2,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from research_ci.api.methods import Source
+from research_ci.api.evals import Source
 from research_ci.eval import protocol as pr
 from research_ci.eval.synthetic import START_NS, source
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible

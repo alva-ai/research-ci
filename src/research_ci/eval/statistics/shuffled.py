@@ -18,7 +18,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Case
+from research_ci.api.evals import Case
 from research_ci.api.plugins import CostModel
 from research_ci.eval.synthetic import hand
 

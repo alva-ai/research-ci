@@ -5,8 +5,8 @@ import pytest
 
 from research_ci.runner import plugins
 from research_ci.runner.plugins import PluginError
-from research_ci.stages import contract as stage
-from research_ci.stages.contract import Settings
+from research_ci.stages.contract import run as stage
+from research_ci.stages.contract.run import Settings
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
 from toy import REGISTRY, NeverRun, ToyRelaunched, ToyZeros, label_contract, strategy_contract

@@ -7,17 +7,17 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from research_ci.cli import catalog
+from research_ci.catalog import collect
+from research_ci.catalog.markdown import FILE, REGENERATE
 from research_ci.cli.main import app
-from research_ci.render.catalog import FILE, REGENERATE
-from research_ci.stages import steps
-from research_ci.stages.defaults import contract as contract_defaults
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.defaults import feat as feat_defaults
-from research_ci.stages.floor import contract as contract_floor
-from research_ci.stages.floor import data as data_floor
-from research_ci.stages.floor import feat as feat_floor
-from research_ci.stages.floor import source as source_floor
+from research_ci.stages import skeleton
+from research_ci.stages.contract import defaults as contract_defaults
+from research_ci.stages.contract import floor as contract_floor
+from research_ci.stages.data import defaults as data_defaults
+from research_ci.stages.data import floor as data_floor
+from research_ci.stages.data import source as source_floor
+from research_ci.stages.feat import defaults as feat_defaults
+from research_ci.stages.feat import floor as feat_floor
 
 ROOT = Path(__file__).parents[2]
 LISTS = {
@@ -34,10 +34,10 @@ def test_the_catalog_in_docs_is_what_the_code_prints() -> None:
 
 
 def test_each_stage_table_is_its_floor_list_with_its_default_list_where_the_floor_marks_it() -> None:
-    stages = {s["stage"]: s for s in catalog.collect()["stages"]}
+    stages = {s["stage"]: s for s in collect.collect()["stages"]}
     for name, (floor, defaults) in LISTS.items():
         rows = stages[name]["sections"][-1][1]
-        listed = steps.ordered(floor.STEPS, defaults.CHECKS)
+        listed = skeleton.ordered(floor.STEPS, defaults.CHECKS)
         expected = [(s.name, s.role, "default" if s in defaults.CHECKS else "floor", s.what) for s in listed]
         assert [(r["item"], r["role"], r["list"], r["what"]) for r in rows] == expected, name
     admission = dict(stages["data"]["sections"])["admission, once per source"]
@@ -48,7 +48,7 @@ def test_each_stage_table_is_its_floor_list_with_its_default_list_where_the_floo
 
 def test_the_eval_functions_and_declarations_of_each_step_are_read_from_its_code() -> None:
     stages = {
-        s["stage"]: {r["item"]: r for _, rows in s["sections"] for r in rows} for s in catalog.collect()["stages"]
+        s["stage"]: {r["item"]: r for _, rows in s["sections"] for r in rows} for s in collect.collect()["stages"]
     }
     data = stages["data"]
     assert {k: (r["role"], r["needs"]) for k, r in data.items() if r["list"] == "default"} == {
@@ -61,12 +61,9 @@ def test_the_eval_functions_and_declarations_of_each_step_are_read_from_its_code
         "influence concentration": ("warns", ""),
     }
     assert "data.sanity.spikes" in data["level sanity"]["methods"]
-    assert {"data.influence.spans", "data.influence.touched"} <= set(data["treatment influence"]["methods"])
-    assert data["field grades"]["methods"] == ["data.treatments.apply_candidates"]
-    assert data["decisive test calibration"]["methods"] == [
-        "protocol.target_reads_score",
-        "calibration.stand_in.calibrate",
-    ]
+    assert {"data.reconcile.requests", "data.reconcile.compare"} <= set(data["independent source agrees"]["methods"])
+    assert data["field grades"]["methods"] == []
+    assert data["decisive test calibration"]["methods"] == ["protocol.target_reads_score"]
     assert data["independent source agrees"]["needs"] == "reference"
     feat = stages["feat"]
     assert [
@@ -81,15 +78,15 @@ def test_the_eval_functions_and_declarations_of_each_step_are_read_from_its_code
 
 def test_every_step_says_what_it_checks_in_a_few_words() -> None:
     for floor, defaults in [*LISTS.values(), (source_floor, None)]:
-        listed = steps.ordered(floor.STEPS, defaults.CHECKS if defaults else [])
+        listed = skeleton.ordered(floor.STEPS, defaults.CHECKS if defaults else [])
         for s in listed:
             assert len(s.what.split()) <= 10, f"{s.name}: {s.what!r} is long; the rest belongs in the docstring"
             assert inspect.getdoc(s.run), f"{s.name}: its function says the rest in a docstring"
 
 
 def test_every_eval_function_says_what_it_does_and_where_it_is_used() -> None:
-    library = catalog.collect()["library"]
-    assert [p["package"] for p in library][:7] == list(catalog.ORDER)
+    library = collect.collect()["library"]
+    assert [p["package"] for p in library][:7] == list(collect.ORDER)
     functions = {f["key"]: f for p in library for m in p["modules"] for f in m["functions"]}
     assert all(f["doc"] and f["used"] for f in functions.values())
     tests = "\n".join(p.read_text() for p in (ROOT / "tests").rglob("*.py") if p != Path(__file__))
@@ -108,18 +105,18 @@ def test_every_eval_function_says_what_it_does_and_where_it_is_used() -> None:
 
 
 def test_every_eval_function_says_what_it_does_in_a_few_words() -> None:
-    functions = [f for p in catalog.collect()["library"] for m in p["modules"] for f in m["functions"]]
+    functions = [f for p in collect.collect()["library"] for m in p["modules"] for f in m["functions"]]
     for f in functions:
         assert len(f["doc"].split()) <= 12, f"{f['key']}: {f['doc']!r} is long; the rest belongs in the docstring"
 
 
 def test_written_descriptions_stand_in_only_for_missing_docstrings() -> None:
     public = {
-        catalog._key(fn): fn
-        for p in catalog.packages()
-        for m in catalog.catalog._modules(f"{catalog.EVAL}.{p}")
-        for fn in catalog.public(m)
+        collect._key(fn): fn
+        for p in collect.packages()
+        for m in collect.listing._modules(f"{collect.EVAL}.{p}")
+        for fn in collect.public(m)
     }
-    for key in catalog.UNDOCUMENTED:
+    for key in collect.UNDOCUMENTED:
         assert key in public, f"{key} is no eval function; take it out of UNDOCUMENTED"
         assert not inspect.getdoc(public[key]), f"{key} has a docstring now; take it out of UNDOCUMENTED"

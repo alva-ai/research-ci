@@ -2,8 +2,8 @@
 
 Nothing here knows what a field or a strategy means; labels, targets, costs and candidates are plugins. Nothing here
 runs a backtest: a consumer the contract names only declares the decision times, and the algo layer runs it. Derive
-builds what its steps read, runs its default list (``stages/defaults/contract.py``) and its floor list
-(``stages/floor/contract.py``) side by side, and puts what they found into a JSON-ready spec. Planning numbers come
+builds what its steps read, runs its default list (``stages/contract/defaults.py``) and its floor list
+(``stages/contract/floor.py``) side by side, and puts what they found into a JSON-ready spec. Planning numbers come
 from dispersion only; no level of any target is reported.
 """
 
@@ -24,7 +24,7 @@ from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.runner.plugins import Registry, code_hash, load
-from research_ci.stages import steps
+from research_ci.stages import skeleton
 from research_ci.stages.common import (
     DEFAULT_TARGET,
     DeriveError,
@@ -36,9 +36,8 @@ from research_ci.stages.common import (
     quantile_times,
     target_use,
 )
-from research_ci.stages.defaults import contract as defaults
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.floor import contract as floor
+from research_ci.stages.contract import defaults, floor
+from research_ci.stages.data import defaults as data_defaults
 from research_ci.store import vault
 
 
@@ -72,9 +71,9 @@ class _Derivation:
         started = time.monotonic()
         seen = self._seen()
         with ThreadPoolExecutor(max_workers=self.s.workers) as pool:
-            listed = steps.ordered(floor.STEPS, defaults.CHECKS)
+            listed = skeleton.ordered(floor.STEPS, defaults.CHECKS)
             jobs = [pool.submit(step.run, read) for step, read in floor.runs(listed, seen)]
-            found = steps.combined(job.result() for job in jobs)
+            found = skeleton.combined(job.result() for job in jobs)
         self.spec["decisive"] = found.shown["decisive"]
         warnings = found.warnings + self._forward()
         self._rest(found.shown["decisive"], [(c.name, c.detail) for c in found.checks if c.status == "fail"])

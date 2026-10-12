@@ -10,14 +10,14 @@ from pathlib import Path
 import pytest
 
 from research_ci.render.common import card_id
-from research_ci.runner import evals as ev
 from research_ci.runner import plugins
 from research_ci.runner.meter import HIGH_WATER, SAMPLED, Cost, measured
 from research_ci.runner.research import ResearchError
-from research_ci.stages import feat as fs
-from research_ci.stages.contract import Settings
-from research_ci.stages.feat import FeatError, FeatSettings
-from research_ci.stages.floor import feat as feat_floor
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.feat import floor as feat_floor
+from research_ci.stages.feat import run as fs
+from research_ci.stages.feat.run import FeatError, FeatSettings
+from research_ci.validation import load as ev
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError

@@ -6,8 +6,8 @@ from typing import Any
 from research_ci.api.contract import Contract
 from research_ci.render.common import adder
 from research_ci.render.feat import calibration_lines, explore_card, result_card
-from research_ci.stages import feat as fs
 from research_ci.stages.common import jsonable
+from research_ci.stages.feat import run as fs
 from research_ci.store.freeze import drift
 from research_ci.store.workspace import hash_file
 from research_ci.workflow.base import DATA, FEAT, IdeaBase, StageFreeze

@@ -5,8 +5,8 @@ import typer
 
 from research_ci.cli import common
 from research_ci.render.common import MARK
-from research_ci.runner.evals import CASE_FORMAT, checked_file
 from research_ci.store.workspace import STATE_DIR
+from research_ci.validation.load import CASE_FORMAT, checked_file
 
 eval_app = typer.Typer(no_args_is_help=True, help="Case evals: the idea's own eval functions, held to their tests.")
 PITS = "pits that a data eval claims in covers are planted by `rci data check`, on the idea's data"

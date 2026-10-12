@@ -9,11 +9,11 @@ import pytest
 from research_ci.kernel.verdict.check import Check
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataError
-from research_ci.stages.defaults import data as data_defaults
-from research_ci.stages.feat import FeatSettings
-from research_ci.stages.steps import Found, Step
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data import defaults as data_defaults
+from research_ci.stages.data.run import DataError
+from research_ci.stages.feat.run import FeatSettings
+from research_ci.stages.skeleton import Found, Step
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from toy import REGISTRY, Backwards, ToyHindsight, label_contract

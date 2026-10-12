@@ -11,8 +11,7 @@ from research_ci.api.contract import (
     Use,
 )
 from research_ci.api.data import Hedge, Levels, OnFail, Pit
-from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
-from research_ci.api.methods import Case, Market, Power, Recovers, Size, Source
+from research_ci.api.evals import TABLE_KEYS, Case, Eval, Market, Power, Recovers, Size, Source, evals_of
 from research_ci.api.nulls import Null, PermuteWithin, nulls_of
 from research_ci.api.plugins import (
     ENTRY_POINTS,

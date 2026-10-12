@@ -9,12 +9,13 @@ import polars as pl
 import pytest
 
 import research_ci.eval
-from research_ci.api.methods import Case, Market, Power, Recovers
-from research_ci.eval.obligations import differs, obligations, run_tests
+from research_ci.api.evals import Case, Market, Power, Recovers
 from research_ci.eval.statistics.ic import rank_ic
 from research_ci.eval.statistics.spread import quantile_spread
+from research_ci.validation.tests import differs, obligations, run_tests
 
-DECLARING = ("data", "statistics", "structure", "calibration")
+DECLARING = ("data", "statistics", "structure")
+OUTSIDE_EVAL = ("research_ci.stages.data.treatments", "research_ci.validation.calibration")
 
 
 def _modules() -> list[ModuleType]:
@@ -23,6 +24,7 @@ def _modules() -> list[ModuleType]:
 
 
 METHODS = [m for m in _modules() if m.__name__.split(".")[2] in DECLARING]
+METHODS += [importlib.import_module(name) for name in OUTSIDE_EVAL]
 
 
 @pytest.mark.parametrize("module", METHODS, ids=lambda m: m.__name__.removeprefix("research_ci.eval."))

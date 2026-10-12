@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from research_ci.runner import plugins
-from research_ci.stages import feat
+from research_ci.stages.feat import run as feat
 from toy import REGISTRY
 
 

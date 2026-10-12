@@ -2,8 +2,8 @@
 
 Each submission names its own file of features: the engine reads it, and the idea's evals and null worlds, for
 row-by-row code, which the card shows as a warning, validates the idea's case evals by their tests, hands ``features``
-the frozen data and the candidates as polars DataFrames, and runs its floor list (``stages/floor/feat.py``) with the
-default diagnostics (``stages/defaults/feat.py``) where the floor marks them: the screen, the floors on the scores,
+the frozen data and the candidates as polars DataFrames, and runs its floor list (``stages/feat/floor.py``) with the
+default diagnostics (``stages/feat/defaults.py``) where the floor marks them: the screen, the floors on the scores,
 then the decisive test, which alone decides, next to the diagnostics and the idea's evals, which are shown. Only the
 candidates the features scored, with a finite score, are judged, in the real world and in every null world alike.
 What the calls cost, their wall time and the peak memory of the full one, is shown, never judged.
@@ -26,15 +26,15 @@ from research_ci.api.plugins import LabelPlugin
 from research_ci.kernel.hashing import hash_frame, hash_obj
 from research_ci.kernel.time.clock import TIME, from_ns, lit_time, span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
+from research_ci.kernel.verdict import rule
 from research_ci.kernel.verdict.judge import judge_all
-from research_ci.runner import evals as ev
+from research_ci.kernel.verdict.worlds import World
 from research_ci.runner.plugins import Registry, code_hash, load
-from research_ci.stages import steps
+from research_ci.stages import skeleton
 from research_ci.stages.common import label_values, norm_candidates, target_use
-from research_ci.stages.contract import use_named
-from research_ci.stages.defaults import feat as defaults
-from research_ci.stages.floor import feat as floor
-from research_ci.stages.floor.feat import (
+from research_ci.stages.contract.run import use_named
+from research_ci.stages.feat import defaults, floor
+from research_ci.stages.feat.floor import (
     EVALS_FORMAT,
     EXPLORED,
     FEAT_FILE,
@@ -44,11 +44,11 @@ from research_ci.stages.floor.feat import (
     FeatError,
     FeatSettings,
     Frozen,
-    World,
 )
-from research_ci.stages.floor.feat import screen as screen
+from research_ci.stages.feat.floor import screen as screen
 from research_ci.store import vault
 from research_ci.store.workspace import hash_file
+from research_ci.validation import load as ev
 
 JUDGED = ("decisive", "evals")
 NULLS_FORMAT = (
@@ -125,7 +125,7 @@ def frozen(
 
 
 def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, Any]:
-    """The decisive test in the floor world before anything is judged (``calibration`` in ``stages/floor/feat.py``):
+    """The decisive test in the floor world before anything is judged (``calibration`` in ``stages/feat/floor.py``):
     the data check runs it on the treated data, and feat again when anything it rests on changed."""
     return floor.calibration(frozen, settings or FeatSettings())
 
@@ -202,17 +202,17 @@ def submit(
     if "scores read nothing ahead" in failed:
         why = failed["scores read nothing ahead"].detail
         note = f"the scores read data from after their decision time (scores read nothing ahead, floor): {why}"
-        out["verdict"] = _verdict("TAINTED", [f"{note}; compute each score from rows with available_at <= t"])
+        out["verdict"] = rule.verdict("TAINTED", [f"{note}; compute each score from rows with available_at <= t"])
         return out | {"seconds": round(time.monotonic() - started, 1)}
     if "scores rank candidates" in failed:
         why = failed["scores rank candidates"].detail
         note = f"the scores do not rank the candidates (scores rank candidates, floor): {why}, needs ≥ 50%"
-        out["verdict"] = _verdict("FAILED", [f"{note}; give two or more candidates distinct scores at each time"])
+        out["verdict"] = rule.verdict("FAILED", [f"{note}; give two or more candidates distinct scores at each time"])
         return out | {"seconds": round(time.monotonic() - started, 1)}
     judged = _judge(seen, named, evals)
     out["decisive"] = judged.shown["decisive"]
     out["evals"] = judged.shown["evals"]
-    out["verdict"] = _combine(out["decisive"], need)
+    out["verdict"] = rule.combine(out["decisive"], need)
     out["seconds"] = round(time.monotonic() - started, 1)
     return out
 
@@ -235,11 +235,11 @@ def explore(root: Path, frozen: Frozen, path: Path, settings: FeatSettings | Non
     }
 
 
-def _run(listed: Sequence[steps.Step[floor.Seen]], seen: floor.Seen) -> steps.Found:
-    return steps.combined(steps.run(step, seen) for step in listed)
+def _run(listed: Sequence[skeleton.Step[floor.Seen]], seen: floor.Seen) -> skeleton.Found:
+    return skeleton.combined(skeleton.run(step, seen) for step in listed)
 
 
-def _judge(seen: floor.Seen, named: list[tuple[str, steps.Step[floor.Seen]]], evals: list[Eval]) -> steps.Found:
+def _judge(seen: floor.Seen, named: list[tuple[str, skeleton.Step[floor.Seen]]], evals: list[Eval]) -> skeleton.Found:
     """The decisive test and the evals side by side: each step says what it needs judged, and all of it is judged
     together, every shuffle once for each eval and world that reads it. An idea eval named like a default diagnostic
     is judged in its place. Only the candidates the features scored are judged: the rows of the evaluation tables
@@ -257,9 +257,9 @@ def _judge(seen: floor.Seen, named: list[tuple[str, steps.Step[floor.Seen]]], ev
     idea = {e.name: e for e in evals}
     rest = tuple(e for e in evals if e.name not in {name for name, _ in named})
     judging = replace(seen, scored=tables, evals=rest)
-    found: list[steps.Found] = []
+    found: list[skeleton.Found] = []
     for item in floor.JUDGE:
-        if isinstance(item, steps.Step):
+        if isinstance(item, skeleton.Step):
             found.append(item.run(judging))
         else:
             found += [_default(judging, name, step, idea) for name, step in named]
@@ -269,12 +269,12 @@ def _judge(seen: floor.Seen, named: list[tuple[str, steps.Step[floor.Seen]]], ev
     rows = {id(p): p.shown(results.get(id(p))) for p in pending}
     for f in found:
         f.shown |= {key: [row for p in f.shown[key] for row in rows[id(p)]] for key in JUDGED if key in f.shown}
-    out = steps.combined(found)
+    out = skeleton.combined(found)
     out.shown["evals"] = [r for f in found for r in f.shown.get("evals", [])]
     return out
 
 
-def _default(seen: floor.Seen, name: str, step: steps.Step[floor.Seen], idea: dict[str, Eval]) -> steps.Found:
+def _default(seen: floor.Seen, name: str, step: skeleton.Step[floor.Seen], idea: dict[str, Eval]) -> skeleton.Found:
     if name in idea:
         return floor.idea_eval(seen, idea[name])
     return step.run(replace(seen, name=name))
@@ -354,35 +354,6 @@ def _features_of(root: Path, path: Path, after: str) -> floor.Features:
     if not callable(found):
         raise FeatError(f"{path} defines no function features; {SHAPE}{after}")
     return found
-
-
-def _combine(decisive: list[dict[str, Any]], need: float) -> dict[str, Any]:
-    lines = [
-        f"{d['on']}: beats random, z {_num(d['z'])} ≥ {need:.2f}"
-        if d["outcome"] == "passed"
-        else f"{d['on']}: does not beat random, z {_num(d['z'])} < {need:.2f} (decisive test, floor): {_effect(d)}"
-        for d in decisive
-    ]
-    return _verdict("PASSED" if all(d["outcome"] == "passed" for d in decisive) else "FAILED", lines)
-
-
-def _effect(d: dict[str, Any]) -> str:
-    """What the decisive effect came to, for a FAILED verdict: the gain over random and its error at the best horizon,
-    or why no z could be computed."""
-    if d.get("best") is None:
-        return "no horizon has enough blocks for a z; the evaluation tables are too short for this contract"
-    per = f" per {d['per']}" if d.get("per") else ""
-    scale, unit = (1e4, " bp") if d.get("per") else (1.0, "")
-    gain, se = d["effect"] * scale, d["se"] * scale
-    return f"gain over random {gain:.3g}{unit}{per} ± {se:.3g} at {d['best']}"
-
-
-def _verdict(status: str, notes: list[str]) -> dict[str, Any]:
-    return {"status": status, "notes": notes}
-
-
-def _num(x: Any) -> str:
-    return "n/a" if x is None or not math.isfinite(x) else f"{x:.4g}"
 
 
 def _layer_file(

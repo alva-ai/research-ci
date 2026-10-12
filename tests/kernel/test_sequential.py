@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Market
+from research_ci.api.evals import Market
 from research_ci.eval.statistics.ic import rank_ic
 from research_ci.eval.statistics.shuffled import RankCorrelation
 from research_ci.eval.synthetic import HOUR_NS, market

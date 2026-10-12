@@ -1,11 +1,11 @@
-"""Engine code works on whole columns. In ``eval`` and ``stages/defaults``, the methods and default checks that run on
-every idea's data, a loop over data-sized things (rows, entities, clusters, decision times) is not allowed, and neither
-are the row APIs in ``ROW_APIS``. A structural loop, over horizons, folds, cut points, chunks, iterations of an
-algorithm, repetitions, or calls into plugin, research, or criterion code, and a row API on a handful of rows, such as
-a worked example's fixture, are allowed only through an entry in ``ALLOWED``: the file, the function, what it is
-(``for``, ``while``, or the API), and one line on why, which a reviewer reads. A recursion is written as a compiled
-function, not in Python. Comprehensions build small Python lists and are not counted; one over a frame's rows shows up
-through the row API it calls."""
+"""Engine code works on whole columns. In ``SCANNED``, the methods, default checks and treatments that run on every
+idea's data and what tests the evals, a loop over data-sized things (rows, entities, clusters, decision times) is not
+allowed, and neither are the row APIs in ``ROW_APIS``. A structural loop, over horizons, folds, cut points, chunks,
+iterations of an algorithm, repetitions, or calls into plugin, research, or criterion code, and a row API on a handful
+of rows, such as a worked example's fixture, are allowed only through an entry in ``ALLOWED``: the file, the function,
+what it is (``for``, ``while``, or the API), and one line on why, which a reviewer reads. A recursion is written as a
+compiled function, not in Python. Comprehensions build small Python lists and are not counted; one over a frame's rows
+shows up through the row API it calls."""
 
 import ast
 from pathlib import Path
@@ -13,11 +13,17 @@ from pathlib import Path
 import research_ci
 
 ROOT = Path(research_ci.__file__).parent
-SCANNED = ("eval", "stages/defaults")
+SCANNED = (
+    "eval/**/*.py",
+    "stages/*/defaults.py",
+    "stages/data/treatments.py",
+    "validation/tests.py",
+    "validation/calibration.py",
+)
 ROW_APIS = frozenset({"map_groups", "map_elements", "map_rows", "apply", "iter_rows", "iterrows", "itertuples"})
 Key = tuple[str, str, str]
 ALLOWED: dict[Key, str] = {
-    ("eval/calibration/stand_in.py", "_size", "for"): "doubling, then bisection: each step runs the criterion at a "
+    ("validation/calibration.py", "_size", "for"): "doubling, then bisection: each step runs the criterion at a "
     "weight the step before chose",
     ("eval/data/replay.py", "replay", "for"): "the data plugin fetches as of each cut point",
     ("eval/data/replay.py", "cut_points", "iter_rows"): "the few cut points become records, one plugin fetch each",
@@ -32,18 +38,25 @@ ALLOWED: dict[Key, str] = {
     ("eval/data/invariants.py", "_bad_share", "iter_rows"): "worked example: one share per pair of a two-pair market",
     ("eval/data/reconcile.py", "summarize", "iter_rows"): "one grade per field and one count per field or anomaly kind",
     ("eval/data/reconcile.py", "_statuses", "iter_rows"): "worked example: the statuses of each field",
-    ("eval/data/treatments.py", "apply_all", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite per "
+    ("stages/data/treatments.py", "apply_all", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite per "
     "treatment",
-    ("eval/data/treatments.py", "apply_candidates", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite "
+    ("stages/data/treatments.py", "apply_candidates", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite "
     "per treatment",
-    ("eval/data/treatments.py", "_removed", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
-    ("eval/data/treatments.py", "_split", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
-    ("eval/data/treatments.py", "_split", "iter_rows"): "worked example: rows per entity of a fixed five-entity source",
+    ("stages/data/treatments.py", "_counts", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
+    ("stages/data/treatments.py", "_split", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
+    ("stages/data/treatments.py", "_split", "iter_rows"): "worked example: rows per entity of a fixed five-entity "
+    "source",
+    ("stages/data/treatments.py", "Numbers.per_set", "for"): "the target plugin runs once per set of treatments and "
+    "key",
+    ("stages/data/treatments.py", "Numbers._build", "for"): "one label frame per key of the decisive numbers",
+    ("stages/data/treatments.py", "Numbers._values", "for"): "each label plugin runs once for all of its horizons",
+    ("stages/data/treatments.py", "Numbers._touch", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite "
+    "per split the table rests on",
 }
 FIX = (
     "fix: work on whole columns: group_by().agg() per group, .over() per entity or cluster, a join or join_asof per "
     "decision time, rolling_*_by for windows; a loop or a row API over rows, entities, clusters, or times does not "
-    "belong in eval or stages/defaults"
+    "belong in eval, stages/*/defaults.py, or the other files in SCANNED"
 )
 JUSTIFY = (
     "or justify: a structural loop (over horizons, folds, cut points, chunks, iterations of an algorithm, "
@@ -78,7 +91,7 @@ def _scan(text: str, rel: str) -> dict[Key, list[int]]:
 
 def _engine() -> dict[Key, list[int]]:
     found: dict[Key, list[int]] = {}
-    for path in sorted(p for root in SCANNED for p in (ROOT / root).rglob("*.py")):
+    for path in sorted({p for pattern in SCANNED for p in ROOT.glob(pattern)}):
         found |= _scan(path.read_text(), path.relative_to(ROOT).as_posix())
     return found
 

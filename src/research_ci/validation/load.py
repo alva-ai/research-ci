@@ -30,15 +30,14 @@ from types import CodeType, ModuleType
 from typing import Any, Literal
 
 from research_ci.api.contract import ContractError
-from research_ci.api.evals import Eval, unwrapped
-from research_ci.api.methods import Case, Power, Property, Recovers, Size
-from research_ci.eval.obligations import run_tests
+from research_ci.api.evals import Case, Eval, Power, Property, Recovers, Size, unwrapped
 from research_ci.kernel.hashing import hash_obj
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner import research
 from research_ci.runner.plugins import Registry
 from research_ci.store.environment import judging_deps
 from research_ci.store.workspace import Workspace, hash_file
+from research_ci.validation.tests import run_tests
 
 LIBRARY = "research_ci.eval"
 CACHE = "evals"

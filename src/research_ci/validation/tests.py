@@ -11,7 +11,7 @@ import numpy as np
 import polars as pl
 from scipy import stats
 
-from research_ci.api.methods import Case, Power, Property, Recovers, Size, Statistic
+from research_ci.api.evals import Case, Power, Property, Recovers, Size, Statistic
 from research_ci.eval.synthetic import HOUR_NS, market
 from research_ci.kernel.verdict.check import Check
 from research_ci.kernel.verdict.judge import judge, per_t

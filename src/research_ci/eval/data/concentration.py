@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 import polars as pl
 
-from research_ci.api.methods import Case, Market
+from research_ci.api.evals import Case, Market
 from research_ci.eval.synthetic import HOUR_NS, market
 from research_ci.kernel.verdict.power import block_se
 

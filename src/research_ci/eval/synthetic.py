@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Market, Source
+from research_ci.api.evals import Market, Source
 from research_ci.kernel.tables import field_table
 from research_ci.kernel.time.clock import TIME
 

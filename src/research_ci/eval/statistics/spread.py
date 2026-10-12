@@ -2,7 +2,7 @@
 
 import polars as pl
 
-from research_ci.api.methods import Case, Power, Size
+from research_ci.api.evals import Case, Power, Size
 from research_ci.eval.synthetic import hand
 
 

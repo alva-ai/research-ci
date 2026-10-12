@@ -11,9 +11,9 @@ from typing import Any, Self
 from research_ci.api.contract import Contract, ContractError
 from research_ci.render.common import card_id
 from research_ci.runner.plugins import Registry
-from research_ci.stages.contract import Settings
-from research_ci.stages.data import DataSettings
-from research_ci.stages.feat import FeatSettings, Frozen, calibration_key
+from research_ci.stages.contract.run import Settings
+from research_ci.stages.data.run import DataSettings
+from research_ci.stages.feat.run import FeatSettings, Frozen, calibration_key
 from research_ci.store.environment import environment_record, judging_deps
 from research_ci.store.freeze import Freeze, drift, make_freeze, write_freeze
 from research_ci.store.ledger import Ledger, LedgerError

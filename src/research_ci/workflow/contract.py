@@ -6,7 +6,7 @@ from typing import Any
 from research_ci.api.contract import Contract
 from research_ci.render.contract import contract_card
 from research_ci.stages.common import jsonable
-from research_ci.stages.contract import current_deps, derive
+from research_ci.stages.contract.run import current_deps, derive
 from research_ci.store.freeze import drift
 from research_ci.store.workspace import hash_file
 from research_ci.workflow.base import CONTRACT_FILE, IdeaBase, StageFreeze, load_contract

@@ -1,8 +1,9 @@
 """What a stage's two lists are made of.
 
-A stage runs two lists of steps. Its floor list (``stages/floor``) holds the steps every run takes; it is part of the
-engine hash, and no idea can change it. Its default list (``stages/defaults``) holds the checks to adjust from
-experience; the engine hash leaves it out. A floor list marks with ``DEFAULTS`` where the default list runs.
+A stage runs two lists of steps. Its floor list (``stages/<layer>/floor.py``) holds the steps every run takes; it is
+part of the engine hash, and no idea can change it. Its default list (``stages/<layer>/defaults.py``) holds the checks
+to adjust from experience; the engine hash leaves it out. A floor list marks with ``DEFAULTS`` where the default list
+runs.
 
 A step names the eval methods it runs through its function, the role it plays, and one short line on what it checks;
 its function's docstring says the rest. Every step reads one context object of its stage and returns what it found:
@@ -14,8 +15,8 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Generic, Literal, TypeVar
 
-from research_ci.eval.data.treatments import Treatment
 from research_ci.kernel.verdict.check import Check
+from research_ci.stages.common import Treatment
 
 Role = Literal["blocks", "decides", "treats", "warns", "shown"]
 ROLES: dict[str, str] = {

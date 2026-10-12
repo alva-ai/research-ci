@@ -12,8 +12,7 @@ from importlib.metadata import entry_points
 from types import CodeType, ModuleType
 from typing import Any
 
-from research_ci.api.evals import FORMAT, Eval
-from research_ci.api.methods import Case, Market, Power, Recovers, Size, Source
+from research_ci.api.evals import FORMAT, Case, Eval, Market, Power, Recovers, Size, Source
 from research_ci.api.nulls import Null, PermuteWithin
 from research_ci.api.plugins import ENTRY_POINTS
 from research_ci.runner import plugins as loader
@@ -142,7 +141,7 @@ def formats() -> dict[str, str]:
 
 
 def case_evals() -> list[dict[str, Any]]:
-    """How a case eval is written: ``Eval``, and the tests a case eval's module declares, from ``api/methods.py``."""
+    """How a case eval is written: ``Eval``, and the tests a case eval's module declares, from ``api/evals.py``."""
     return [
         {
             "use": "case eval",

@@ -1,4 +1,4 @@
-"""The steps a feat submission takes, around its default list (``stages/defaults/feat.py``).
+"""The steps a feat submission takes, around its default list (``stages/feat/defaults.py``).
 
 ``SCREEN`` refuses a features file that cannot be a trial before anything runs. ``FLOORS`` checks the scores: they
 must rank the candidates and read nothing ahead of their time; a submission that fails one is TAINTED or FAILED and
@@ -30,27 +30,27 @@ from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, ContractError
 from research_ci.api.evals import FORMAT, Eval
 from research_ci.api.plugins import CostModel, TargetPlugin
 from research_ci.eval import protocol as pr
-from research_ci.eval.calibration.stand_in import calibrate
-from research_ci.kernel.time.clock import TIME, lit_time, span_ns
+from research_ci.kernel.time.clock import TIME, lit_time
 from research_ci.kernel.verdict import power as pw
+from research_ci.kernel.verdict import worlds
 from research_ci.kernel.verdict.judge import (
     Batched,
     EvalError,
     Evaluate,
-    Index,
-    Lane,
     Request,
     Sequential,
     Statistic,
     per_t,
 )
-from research_ci.kernel.verdict.permute import Layout, Permutation
-from research_ci.runner import evals as ev
+from research_ci.kernel.verdict.permute import Permutation
+from research_ci.kernel.verdict.worlds import World, lanes
 from research_ci.runner import research
 from research_ci.runner.meter import Cost, measured
 from research_ci.runner.plugins import Registry, load
 from research_ci.stages.common import default_workers, iso, owner, quantile_times, target_use, units
-from research_ci.stages.steps import DEFAULTS, Found, Step
+from research_ci.stages.skeleton import DEFAULTS, Found, Step
+from research_ci.validation import load as ev
+from research_ci.validation.calibration import calibrate
 
 FEAT_FILE = "feat.py"
 NULLS_FILE = Path("nulls") / "feat.py"
@@ -90,32 +90,6 @@ class FeatSettings:
     min_blocks: int = 5
     cuts: int = 3
     z_base: float = pw.Z_BASE
-
-
-@dataclass(frozen=True)
-class World:
-    """A null world as the engine runs it: scores shuffled within ``bucket`` (``None``: each decision time), whole
-    ``clusters`` at a time, the same way within ``block``; it claims to keep what lives in ``keeps``. It judges the
-    evals named in ``evals``, or every eval when empty."""
-
-    name: str
-    explains: tuple[str, ...]
-    bucket: str | None
-    clusters: str | None
-    block: str | None
-    keeps: str | None
-    evals: tuple[str, ...]
-    reps: int
-    by: str
-    note: str = ""
-
-    def block_ns(self, h_ns: int) -> int:
-        if self.block is None:
-            return 1
-        return h_ns if self.block == "horizon" else span_ns(span(self.block))
-
-    def describe(self) -> str:
-        return f"PermuteWithin({self.bucket or 'time'}, clusters={self.clusters}, block={self.block})"
 
 
 @dataclass
@@ -347,15 +321,6 @@ def judged(seen: Seen, e: Eval, by: str, validation: "ev.Validation | None" = No
     return found
 
 
-def lanes(tables: dict[str, tuple[pl.DataFrame, int]], w: World) -> dict[str, Lane]:
-    """The world's shuffle of each horizon's table; two evals or worlds on the same table and layout share it."""
-    out = {}
-    for h, (table, h_ns) in tables.items():
-        layout = Layout(w.bucket, w.clusters, w.block_ns(h_ns))
-        out[h] = Lane(table, h_ns, (id(table), layout), partial(_shuffle, table, layout))
-    return out
-
-
 def label_of(e: Eval, frozen: Frozen) -> str:
     names = [label.name for label in frozen.contract.labels]
     if not names:
@@ -379,18 +344,7 @@ def horizons_of(e: Eval, frozen: Frozen) -> tuple[str, ...]:
 
 def floor_world(frozen: Frozen, s: FeatSettings) -> World:
     assert frozen.contract.universe is not None
-    return World(
-        name="floor",
-        explains=FLOOR_ALTERNATIVES,
-        bucket=None,
-        clusters=frozen.contract.universe.clusters,
-        block="horizon",
-        keeps=None,
-        evals=(),
-        reps=s.shown_reps,
-        by="engine",
-        note="scores shuffled across clusters at each decision time, the same way within a horizon",
-    )
+    return worlds.floor_world(frozen.contract.universe.clusters, s.shown_reps)
 
 
 def target(effect: Effect, frozen: Frozen) -> tuple[dict[str, Evaluate], Use, dict[str, Any]]:
@@ -461,10 +415,6 @@ def computed(
 
 def _renamed(form: Batched, back: dict[str, str]) -> Batched:
     return lambda table: form(table.rename(back))
-
-
-def _shuffle(table: pl.DataFrame, layout: Layout) -> Index:
-    return Permutation(table, layout.bucket, layout.clusters, layout.block_ns).index
 
 
 def _decided(

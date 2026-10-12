@@ -10,7 +10,7 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from research_ci.api.methods import Market
+from research_ci.api.evals import Market
 from research_ci.eval.statistics.ic import rank_ic
 from research_ci.eval.statistics.shuffled import Prepared, QuantileSpread, RankCorrelation
 from research_ci.eval.statistics.spread import quantile_spread

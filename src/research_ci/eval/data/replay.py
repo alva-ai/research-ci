@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 
-from research_ci.api.methods import Case, Source
+from research_ci.api.evals import Case, Source
 from research_ci.eval.data.baseline import events
 from research_ci.eval.synthetic import HOUR_NS, START_NS, source
 from research_ci.kernel.time.clock import from_ns, lit_time
