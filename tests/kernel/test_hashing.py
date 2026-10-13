@@ -4,23 +4,24 @@ import pandas as pd
 import polars as pl
 import pytest
 
-from research_ci.kernel.hashing import canonical_json, hash_frame, hash_obj
-from research_ci.kernel.tables import field_table
+from research_ci.kernel.hashing import canonical_json, hash_frame, hash_obj, hash_tables
+from research_ci.kernel.tables import source_table
 
 T0 = pd.Timestamp("2026-01-01", tz="UTC")
 
 
 def _frame() -> pl.DataFrame:
-    return field_table(
+    return source_table(
+        "s",
         pd.DataFrame(
             {
                 "inst": ["a", "b", "a"],
-                "field": ["x", "x", "y"],
-                "event_time": [T0, T0, T0],
+                "event_time": [T0, T0, T0 + pd.Timedelta(hours=1)],
                 "available_at": [T0, T0, T0 + pd.Timedelta(hours=1)],
-                "value": [1.0, 2.0, float("nan")],
+                "vintage": [0, 0, 0],
+                "x": [1.0, 2.0, float("nan")],
             }
-        )
+        ),
     )
 
 
@@ -42,7 +43,7 @@ def test_frame_hash_ignores_row_and_column_order() -> None:
 
 def test_frame_hash_sees_a_changed_value() -> None:
     frame = _frame()
-    changed = frame.with_columns(pl.when(pl.col("inst") == "b").then(2.5).otherwise(pl.col("value")).alias("value"))
+    changed = frame.with_columns(pl.when(pl.col("inst") == "b").then(2.5).otherwise(pl.col("x")).alias("x"))
     assert hash_frame(changed) != hash_frame(frame)
 
 
@@ -73,3 +74,10 @@ def test_frame_hash_treats_negative_zero_as_zero() -> None:
 def test_frame_hash_rejects_unsupported_dtypes() -> None:
     with pytest.raises(TypeError):
         hash_frame(pl.DataFrame({"v": [[1, 2]]}))
+
+
+def test_tables_hash_by_name_and_content() -> None:
+    frame = _frame()
+    assert hash_tables({"a": frame, "b": frame.head(1)}) == hash_tables({"b": frame.head(1), "a": frame})
+    assert hash_tables({"a": frame}) != hash_tables({"b": frame})
+    assert hash_tables({"a": frame}) != hash_tables({"a": frame.head(1)})

@@ -51,7 +51,7 @@ class DataCommands(IdeaBase):
         note = "" if ready else f"blocked: {verdict['notes'][0]}"
         self._apply(DATA, Command.CHECK, ready, {"note": note}, effect=card)
         if previous is not None:
-            self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["panel"], spec["panel"])
+            self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["treated"], spec["treated"])
         return spec, text
 
     def _stage_freeze(self, stage: str, current: StageStatus) -> StageFreeze | None:
@@ -71,7 +71,7 @@ class DataCommands(IdeaBase):
 
     def _drop_unfrozen(self, source: str, old: dict[str, Any], new: dict[str, Any]) -> None:
         deps = [r["payload"]["deps"] for r in self.ledger.records() if r["kind"] == "approve"]
-        for key, kind in (("hash", "panel"), ("exclusions", "exclusions")):
+        for key, kind in (("sources", "treated"), ("wide", "wide"), ("exclusions", "exclusions")):
             frozen = {d.get(kind) for d in deps}
             if old[key] != new[key] and old[key] not in frozen:
                 vault.drop(f"{source}.{kind}", old[key])
@@ -105,6 +105,12 @@ def _admit(source: dict[str, Any], who: Approval) -> dict[str, Any]:
 
 
 def _data_deps(record: dict[str, Any]) -> dict[str, str]:
-    """What a data freeze pins beyond the usual: the check's ledger record and the treated data it produced."""
-    panel = record["payload"]["spec"]["panel"]
-    return {"data_check": record["hash"], "panel": panel["hash"], "exclusions": panel["exclusions"]}
+    """What a data freeze pins beyond the usual: the check's ledger record, the treated sources it produced, ``wide``
+    built on them, and the candidate rows the treatments exclude."""
+    treated = record["payload"]["spec"]["treated"]
+    return {
+        "data_check": record["hash"],
+        "treated": treated["sources"],
+        "wide": treated["wide"],
+        "exclusions": treated["exclusions"],
+    }

@@ -151,4 +151,4 @@ class FeatCommands(IdeaBase):
         if approval is None:
             raise WorkflowError("the data is not frozen yet")
         deps = approval["payload"]["deps"]
-        return fs.frozen(contract, deps["panel"], deps["exclusions"], self.registry, self.feat_settings)
+        return fs.frozen(contract, deps["treated"], deps["wide"], deps["exclusions"], self.registry, self.feat_settings)

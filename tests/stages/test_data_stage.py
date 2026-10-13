@@ -6,9 +6,10 @@ import pytest
 
 from research_ci.api.contract import Use, span
 from research_ci.api.evals import Source
+from research_ci.eval import synthetic
 from research_ci.eval.data import coverage as cv
-from research_ci.eval.synthetic import HOUR_NS, START_NS, source
-from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
+from research_ci.eval.synthetic import HOUR_NS, START_NS
+from research_ci.kernel.time.clock import span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.render.common import card_id
 from research_ci.runner import plugins
@@ -36,11 +37,11 @@ from toy import (
     ToyShort,
     ToySwapped,
     ToyZeros,
+    carry_contract,
     lab,
-    label_contract,
 )
 
-FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
+FAST = Settings(workers=2, universe_cuts=2, outcome_cuts=1)
 RELAYED = Approval(by="human", channel="relayed", words="ok")
 
 LEGS = '''
@@ -52,20 +53,21 @@ import polars as pl
 from research_ci.api import Case, Pit
 
 
-def drifting_legs(fields):
+def drifting_legs(sources):
     """Venues of one symbol whose hourly returns do not move with the symbol's other venues."""
-    close = fields.filter(pl.col("field") == "close").sort("inst", "event_time")
-    r = close.with_columns(r=(pl.col("value") / pl.col("value").shift(1).over("inst")).log())
+    close = sources["candles"].sort("inst", "event_time")
+    r = close.with_columns(r=(pl.col("close") / pl.col("close").shift(1).over("inst")).log())
     r = r.with_columns(symbol=pl.col("inst").str.split(":").list.last())
     mean = r.group_by("symbol", "event_time").agg(pl.col("r").mean().alias("m"))
     r = r.join(mean, on=["symbol", "event_time"])
     corr = r.group_by("inst").agg(pl.corr("r", "m").alias("c"))
     bad = corr.filter(pl.col("c") < 0.8)["inst"]
-    return close.filter(pl.col("inst").is_in(bad.implode())).select("inst", "event_time")
+    flagged = close.filter(pl.col("inst").is_in(bad.implode()))
+    return flagged.select(pl.lit("candles").alias("source"), "inst", "event_time")
 
 
-def nothing(fields):
-    return fields.head(0).select("inst", "event_time")
+def nothing(sources):
+    return sources["candles"].head(0).select(pl.lit("candles").alias("source"), "inst", "event_time")
 
 
 def _venues(apart):
@@ -73,19 +75,18 @@ def _venues(apart):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     t = pl.datetime_range(start, start + timedelta(hours=47), "1h", eager=True)
     closes = {"a:X": walks[0], "b:X": walks[0], "c:X": walks[1] if apart else walks[0]}
-    return pl.concat(
-        [pl.DataFrame({"inst": e, "field": "close", "event_time": t, "value": v}) for e, v in closes.items()]
-    )
+    return {"candles": pl.concat([pl.DataFrame({"inst": e, "event_time": t, "close": v}) for e, v in closes.items()])}
 
 
-def _wander(fields, field, rng):
+def _wander(sources, column, rng):
     """One venue's closes walking off on their own: the same moves, in another order."""
-    inst = sorted(fields.filter(pl.col("field") == field)["inst"].unique().to_list())[0]
-    hit = (pl.col("inst") == inst) & (pl.col("field") == field)
-    rows = fields.filter(hit).sort("event_time")
-    moves = rng.permutation(np.diff(np.log(rows["value"].to_numpy())))
-    walk = rows["value"][0] * np.exp(np.concatenate([[0.0], np.cumsum(moves)]))
-    return pl.concat([fields.filter(~hit), rows.with_columns(value=pl.Series(walk))])
+    candles = sources["candles"]
+    inst = sorted(candles["inst"].unique().to_list())[0]
+    hit = pl.col("inst") == inst
+    found = candles.filter(hit).sort("event_time")
+    moves = rng.permutation(np.diff(np.log(found[column].to_numpy())))
+    walk = found[column][0] * np.exp(np.concatenate([[0.0], np.cumsum(moves)]))
+    return {**sources, "candles": pl.concat([candles.filter(~hit), found.with_columns(pl.Series(column, walk))])}
 
 
 CASES = [
@@ -120,7 +121,7 @@ def _relayed(idea: Idea, stage: str) -> Approval:
 
 def _idea(tmp_path: Path, settings: DataSettings | None = None) -> Idea:
     idea = Idea.init(tmp_path / "idea", settings=FAST, data_settings=settings)
-    (idea.root / "contract.py").write_text(label_contract())
+    (idea.root / "contract.py").write_text(carry_contract())
     idea.derive_contract()
     idea.approve("contract")
     lab(idea.root)
@@ -153,7 +154,7 @@ def test_the_data_layer_runs_from_admission_to_a_passed_verdict(tmp_path: Path) 
     checks = {c["name"]: c for c in spec["checks"]}
     assert checks["hedged legs are one asset"]["status"] == "pass"
     assert checks["influence concentration"]["status"] == "warn", "Z is a third of the toy, so it often carries half"
-    assert "READY" in card and "noise from one symbol: Z 55% at carry 24h" in card
+    assert "READY" in card and "noise from one symbol: Z 55% at ref.mean 24h" in card
     assert idea.status().stage("data").state is State.REVIEW
     assert [(a.who, a.command) for a in idea.next_actions()] == [("human", "rci approve --stage data")]
     idea.approve("data", approval=_relayed(idea, "data"))
@@ -192,7 +193,7 @@ def test_a_swapped_leg_is_filtered_and_its_influence_measured(tmp_path: Path, mo
     idea = _idea(tmp_path)
     spec, card = idea.check_data()
     guard = next(t for t in spec["treatments"] if t["name"] == "hedge guard at each decision time")
-    assert guard["rows"] > 0 and set(guard["influence"]) == {"carry 8h", "carry 24h"}
+    assert guard["rows"] > 0 and set(guard["influence"]) == {"ref.mean 8h", "ref.mean 24h"}
     assert all(v["mde"] >= 0 for v in guard["influence"].values())
     assert all(p["mde"] < p["mde_before"] for p in spec["power"])
     assert "hedge guard" in card
@@ -219,7 +220,7 @@ def test_a_person_can_keep_a_treatment_from_being_applied(tmp_path: Path, monkey
     kept, card = idea.check_data(keep=("hedge guard at each decision time",))
     assert kept["kept"] == ["hedge guard at each decision time"]
     assert next(t for t in kept["treatments"] if t["name"].startswith("hedge"))["kept"] is True
-    assert kept["panel"]["exclusions"] != applied["panel"]["exclusions"]
+    assert kept["treated"]["exclusions"] != applied["treated"]["exclusions"]
     assert all(p["mde"] == p["mde_before"] for p in kept["power"])
     assert "kept, not applied" in card
     with pytest.raises(data_stage.DataError, match="no treatment named"):
@@ -233,9 +234,9 @@ def test_treated_data_of_a_superseded_check_leaves_the_vault_unless_frozen(tmp_p
     idea.approve("data", approval=_relayed(idea, "data"))
     second, _ = idea.check_data(keep=("hedge guard at each decision time",))
     third, _ = idea.check_data()
-    assert vault.has("toy.data.exclusions", first["panel"]["exclusions"])
-    assert not vault.has("toy.data.exclusions", second["panel"]["exclusions"])
-    assert third["panel"]["exclusions"] == first["panel"]["exclusions"]
+    assert vault.has("toy.data.exclusions", first["treated"]["exclusions"])
+    assert not vault.has("toy.data.exclusions", second["treated"]["exclusions"])
+    assert third["treated"]["exclusions"] == first["treated"]["exclusions"]
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -272,7 +273,7 @@ def test_the_default_list_decides_which_checks_run_and_which_pits_calibrate(tmp_
     idea = _idea(tmp_path, DataSettings(materiality=0.05, seeds=1))
     _evals(idea, SWAP_TEST.replace("{lazy}", ""))
     spec, card = idea.check_data()
-    assert [c["name"] for c in spec["checks"]] == ["data is current", "drifting legs", "field grades"]
+    assert [c["name"] for c in spec["checks"]] == ["data is current", "drifting legs", "column grades"]
     tests = spec["evals"][0]["validation"]["tests"]
     assert spec["evals"][0]["validation"]["status"] == "invalid" and tests[-1]["name"] == "pits: swap in close"
     assert (
@@ -293,8 +294,8 @@ def test_a_ticker_relaunched_for_another_asset_is_split_and_a_person_decides(tmp
     split = _treatment(spec, SPLIT)
     assert split["rows"] > 0 and split["largest"] >= spec["materiality"]
     assert spec["verdict"]["status"] == "decide" and any(d.startswith(SPLIT) for d in spec["decide"])
-    panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    z = panel.filter(pl.col("inst").str.starts_with("c:Z")).group_by("inst").agg(pl.col("event_time").min())
+    candles = vault.get("toy.data.treated", spec["treated"]["sources"])["candles"]
+    z = candles.filter(pl.col("inst").str.starts_with("c:Z")).group_by("inst").agg(pl.col("event_time").min())
     assert dict(z.iter_rows())["c:Z#2"] == pd.Timestamp("2026-01-07T18:00Z")
     assert set(z["inst"]) == {"c:Z", "c:Z#2"}
     assert all(p["mde"] < p["mde_before"] / 100 for p in spec["power"] if p["horizon"] == "24h")
@@ -306,25 +307,26 @@ def test_a_ticker_relaunched_for_another_asset_is_split_and_a_person_decides(tmp
 def test_one_cluster_carrying_the_noise_is_shown_and_only_warned(tmp_path: Path, monkeypatch) -> None:
     _, applied, card = _checked(tmp_path, monkeypatch, ToyRelaunched)
     shares = dict(applied["concentration"]["shares"])
-    assert set(shares) == {"carry 8h", "carry 24h"} and all(s == 0 for _, s in shares["carry 8h"])
+    assert set(shares) == {"ref.mean 8h", "ref.mean 24h"} and all(s == 0 for _, s in shares["ref.mean 8h"])
     assert "clusters   share of the noise that goes away without each symbol" in card
     kept, card = _checked(tmp_path / "kept", monkeypatch, ToyRelaunched, keep=(SPLIT,))[1:]
-    top, share = dict(kept["concentration"]["shares"])["carry 24h"][0]
-    assert top == "Z" and share > 0.99 > dict(shares["carry 24h"])["Z"], "the split takes the relaunch's noise away"
+    top, share = dict(kept["concentration"]["shares"])["ref.mean 24h"][0]
+    assert top == "Z" and share > 0.99 > dict(shares["ref.mean 24h"])["Z"], "the split takes the relaunch's noise away"
     check = {c["name"]: c for c in kept["checks"]}["influence concentration"]
     assert check["status"] == "warn" and "one symbol: Z " in check["detail"]
     assert not [d for d in kept["decide"] if "symbol Z" in d], "concentration asks no person"
-    assert kept["panel"]["rows"] == kept["data"]["rows"], "concentration never drops anything"
+    assert kept["treated"]["rows"] == kept["data"]["rows"], "concentration never drops anything"
 
 
 MASK = "mask b:Z before the relaunch"
 
 
 def _mask_b_z(seen: Seen) -> Found:
-    """Masks b:Z's closes over the hours before c:Z is delisted, when the labels of c:Z's pairs read the relaunch."""
+    """Masks b:Z's closes over the hours before c:Z is delisted, when the outcomes of c:Z's pairs read the relaunch."""
     hours = pl.col("event_time").is_between(START + pd.Timedelta(hours=140), START + pd.Timedelta(hours=146))
-    rows = seen.fields.filter((pl.col("inst") == "b:Z") & (pl.col("field") == "close") & hours)
-    return Found(treatments=[tr.mask_rows(MASK, f"{rows.height} rows", rows, seen.fields)])
+    found = seen.sources["candles"].filter((pl.col("inst") == "b:Z") & hours)
+    cells = found.select(pl.lit("candles").alias("source"), "inst", "event_time", pl.lit("close").alias("column"))
+    return Found(treatments=[tr.mask_cells(MASK, f"{cells.height} cells", cells, seen.sources)])
 
 
 def test_other_treatments_are_weighed_on_top_of_the_split(tmp_path: Path, monkeypatch) -> None:
@@ -335,33 +337,33 @@ def test_other_treatments_are_weighed_on_top_of_the_split(tmp_path: Path, monkey
     apart = _checked(tmp_path / "apart", monkeypatch, ToyRenamed)[1]
     assert SPLIT not in {t["name"] for t in apart["treatments"]}
     ours, theirs = _treatment(split, MASK)["influence"], _treatment(apart, MASK)["influence"]
-    assert ours["carry 24h"]["bp"] > 0
+    assert ours["ref.mean 24h"]["bp"] > 0
     assert {k: v["bp"] for k, v in ours.items()} == pytest.approx({k: v["bp"] for k, v in theirs.items()}, rel=1e-9)
     assert _treatment(split, SPLIT)["largest"] >= split["materiality"] > _treatment(split, MASK)["largest"]
 
 
 def _from_scratch(spec: dict) -> dict[str, float]:
-    """The MDE per horizon from the frozen panel and exclusions alone, computed the way feat reads them."""
-    panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    excluded = vault.get("toy.data.exclusions", spec["panel"]["exclusions"])
-    start = int(panel.select(pl.col("available_at").min().dt.epoch("ns")).item())
+    """The MDE per horizon from the frozen sources, wide and exclusions alone, computed the way feat reads them."""
+    treated = vault.get("toy.data.treated", spec["treated"]["sources"])
+    table = vault.get("toy.data.wide", spec["treated"]["wide"])["wide"]
+    excluded = vault.get("toy.data.exclusions", spec["treated"]["exclusions"])["exclusions"]
+    start = min(int(t.select(pl.col("available_at").min().dt.epoch("ns")).item()) for t in treated.values())
     end = to_ns(pd.Timestamp("2026-01-15T00:00:00Z"))
-    times = [from_ns(t) for t in pw.decision_grid(HOUR_NS, 0, start, end)]
-    cands = ToyPairs().candidates(panel, times).join(excluded, on=["t", "inst"], how="anti")
-    label = plugins.load(Use("ref.carry", {"flow": "funding_rate"}))
+    cands = ToyPairs().candidates(table, treated).join(excluded, on=["t", "inst"], how="anti")
+    outcome = plugins.load(Use("ref.carry", {"flow": "funding_rate"}))
     target = plugins.load(Use("ref.mean", {"cluster": "symbol", "top": 0.34}))
     costs = plugins.load(Use("ref.flat_costs", {"commission_bps": 1, "slippage_bps": 1, "legs": 2}))
     out = {}
     for h in ("8h", "24h"):
-        rows = label.values(panel, cands, span(h)).join(cands, on=["t", "inst"], suffix="_candidate")
-        per_t = target.reduce(rows, span(h), costs)
+        found = outcome.values(treated, cands, span(h)).join(cands, on=["t", "inst"], suffix="_candidate")
+        per_t = target.reduce(found, span(h), costs)
         out[h] = pw.power(pw.block_se(per_t, span_ns(span(h))), end - start, span_ns(span(h))).mde
     return out
 
 
 def test_the_power_after_is_that_of_the_treated_data_computed_again(tmp_path: Path, monkeypatch) -> None:
-    """Weighing a mask leaves out the label rows that read what it masks; the power after does not stand in like
-    that: the labels are computed again on the treated data, as feat will read it."""
+    """Weighing a mask leaves out the outcome rows that read what it masks; the power after does not stand in like
+    that: the outcomes are computed again on the treated data, as feat will read it."""
     _, spec, _ = _checked(tmp_path, monkeypatch, ToyZeros)
     assert {p["horizon"]: p["mde"] for p in spec["power"]} == pytest.approx(_from_scratch(spec), rel=1e-9)
 
@@ -371,31 +373,32 @@ def test_prices_at_zero_are_masked(tmp_path: Path, monkeypatch) -> None:
     zero = _treatment(spec, "mask levels at zero or below")
     assert zero["rows"] == 3
     assert spec["verdict"]["status"] == "decide", "a number that is not finite before the treatment is for a person"
-    panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    assert panel.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).is_empty()
+    candles = vault.get("toy.data.treated", spec["treated"]["sources"])["candles"]
+    assert candles.filter(pl.col("close") <= 0).is_empty() and candles["close"].null_count() == 3
     assert "mask levels at zero or below" in card and "inf" in card
 
 
 def test_an_inst_shorter_than_the_longest_horizon_is_dropped(tmp_path: Path, monkeypatch) -> None:
     _, spec, _ = _checked(tmp_path, monkeypatch, ToyShort)
     short = _treatment(spec, "drop insts too short for the horizon")
-    assert short["rows"] == 24
+    assert short["rows"] == 22, "twenty candles and two funding rows"
     assert "c:Y" in {c["name"]: c for c in spec["checks"]}["coverage"]["detail"]
-    panel = vault.get("toy.data.panel", spec["panel"]["hash"])
-    assert "c:Y" not in set(panel["inst"])
+    treated = vault.get("toy.data.treated", spec["treated"]["sources"])
+    assert all("c:Y" not in set(t["inst"]) for t in treated.values())
 
 
 def test_dropping_a_short_series_a_split_made_does_the_same_with_or_without_the_split() -> None:
-    fields = source(Source(insts=3), 0)
+    sources = synthetic.sources(Source(insts=3), 0)
     at = pl.lit(START_NS + 330 * HOUR_NS).cast(pl.Datetime("ns")).dt.replace_time_zone("UTC")
     splits = pl.DataFrame({"inst": ["e0"], "to": ["e0#2"]}).with_columns(at=at)
-    split = tr.split_insts("split", "", splits, fields)
-    short = cv.short_lived(split.apply(fields), 24 * HOUR_NS)
+    split = tr.split_insts("split", "", splits, sources)
+    short = cv.short_lived(split.apply(sources), 24 * HOUR_NS)
     assert short["inst"].to_list() == ["e0#2"]
-    drop = tr.drop_spans("drop", "", data_defaults._origins(short, fields), fields)
-    alone, both = drop.apply(fields), drop.apply(split.apply(fields))
-    assert drop.rows == fields.height - alone.height > 0
-    assert alone.equals(both)
+    drop = tr.drop_spans("drop", "", data_defaults._origins(short, sources), sources)
+    alone, both = drop.apply(sources), drop.apply(split.apply(sources))
+    gone = sum(t.height for t in sources.values()) - sum(t.height for t in alone.values())
+    assert drop.rows == gone > 0
+    assert all(alone[name].equals(both[name]) for name in sources)
 
 
 ROW_TEST = """
@@ -403,13 +406,13 @@ import polars as pl
 from research_ci.api import Case, Eval
 
 
-def zeros(fields):
-    flagged = [(e, t) for e, f, t, v in fields.select("inst", "field", "event_time", "value").iter_rows() if v == 0]
-    return pl.DataFrame(flagged, schema=["inst", "event_time"], orient="row")
+def zeros(sources):
+    flagged = [(e, t) for e, t, v in sources["candles"].select("inst", "event_time", "close").iter_rows() if v == 0]
+    return pl.DataFrame(flagged, schema=["inst", "event_time"], orient="row").with_columns(source=pl.lit("candles"))
 
 
-CASES = [Case("no zeros, no flags", zeros, 0, given=pl.DataFrame({"inst": ["a"], "field": ["close"],
-                                                                   "event_time": [0], "value": [1.0]}))]
+CASES = [Case("no zeros, no flags", zeros, 0, given={"candles": pl.DataFrame({"inst": ["a"], "event_time": [0],
+                                                                              "close": [1.0]})})]
 EVALS = [Eval(zeros, h0="no value is zero", covers=[("spike", "close")])]
 """
 
@@ -428,7 +431,7 @@ def test_a_wrong_eval_file_says_how_to_fix_it_and_a_row_wise_one_runs_with_a_war
     with pytest.raises(data_stage.DataError, match=r"EVALS\[0\] is a int: an entry is a function or Eval.*methods"):
         idea.check_data()
     (idea.root / "data.py").write_text("from research_ci.api import Eval\nEVALS = [Eval(print, covers=[('x',)])]\n")
-    with pytest.raises(data_stage.DataError, match=r"covers is a list of \(category, field\) pairs"):
+    with pytest.raises(data_stage.DataError, match=r"covers is a list of \(category, column\) pairs"):
         idea.check_data()
     assert not [r for r in idea.ledger.records() if r["kind"] == "check"]
     (idea.root / "data.py").write_text(ROW_TEST)
@@ -482,8 +485,8 @@ def test_a_lab_eval_that_blocks_vetoes_what_the_treatments_before_it_leave_with_
     (note,) = spec["verdict"]["notes"]
     assert note.startswith(
         "lab eval 'closes_at_zero' (slot 3) vetoes the data: H0: every close is above zero; it flagged 3 rows that the "
-        "treatments before it left, such as b:X close 2026-01-05T04:00Z, b:X close 2026-01-05T05:00Z, b:X close "
-        "2026-01-05T06:00Z; with on_fail='block'"
+        "treatments before it left, such as candles.close b:X 2026-01-05T04:00Z, candles.close b:X 2026-01-05T05:00Z, "
+        "candles.close b:X 2026-01-05T06:00Z; with on_fail='block'"
     )
     assert "FAIL closes_at_zero (evals/toy.py) · H0: every close is above zero" in card and note in card
     assert "on_fail block: valid 1/1 · flagged 3 rows of the data as it came; on_fail=block: a veto" in card
@@ -558,3 +561,46 @@ def test_a_data_eval_is_tested_on_the_pits_of_its_own_module(tmp_path: Path) -> 
         "by": "",
     }
     assert spec["verdict"]["status"] == "ready" and "1/1 pits caught" in card
+
+
+STALE = '''
+from datetime import datetime, timedelta, timezone
+
+import polars as pl
+
+from research_ci.api import Case
+
+T = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def stale_closes(wide):
+    """Rows of wide whose close became known more than two hours before the decision."""
+    return wide.filter(pl.col("age_candles") > pl.duration(hours=2)).select("t", "inst")
+
+
+AGES = pl.DataFrame({"t": [T, T], "inst": ["a", "b"], "age_candles": [timedelta(hours=1), timedelta(hours=3)]})
+CASES = [Case("a close three hours old is stale", stale_closes, 1, given=AGES)]
+'''
+STALE_DATA = """
+from research_ci.api import Eval
+from evals.stale import stale_closes
+
+EVALS = [Eval(stale_closes, h0="every close a decision reads is fresh")]
+"""
+
+
+def test_a_data_eval_on_wide_masks_the_candidate_rows_that_read_what_it_flags(tmp_path: Path, monkeypatch) -> None:
+    """After venue c stops listing Y, wide carries its last close forward, older every hour: an eval on wide flags
+    those rows, and masking them drops the candidate rows whose legs read them, and nothing else."""
+    monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.data": ToyShort})
+    idea = _idea(tmp_path)
+    _evals(idea, STALE_DATA)
+    (idea.root / "evals" / "stale.py").write_text(STALE)
+    spec, card = idea.check_data()
+    mask = _treatment(spec, "eval stale_closes: mask")
+    assert mask["on"] == "candidates" and mask["rows"] > 0
+    excluded = vault.get("toy.data.exclusions", spec["treated"]["exclusions"])["exclusions"]
+    legs = {tuple(pair.split(":")[1].split(">")) for pair in excluded["inst"]}
+    assert excluded.height > 0 and all(pair.startswith("Y:") for pair in excluded["inst"])
+    assert all("c" in pair for pair in legs), "only the pairs with a leg on venue c"
+    assert "on_fail mask: valid 1/1 · flagged" in card and "masked" in card

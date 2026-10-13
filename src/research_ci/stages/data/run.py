@@ -1,13 +1,15 @@
 """Checking an idea's data against its approved contract.
 
 The source must pass admission (fidelity: the rows are what the venue reported, ``stages/data/source.py``), which runs
-once per source and is approved with the first idea's data, and the decisive number may read only fields an independent
-source verified, or the history is explore-grade. Before anything heavy runs, the data check refuses a ``data.py``
-without a lab eval, or with one whose tests fail (``stages/lab.py``). It then builds what its steps read and runs its
-floor list (``stages/data/floor.py``) with its default list (``stages/data/defaults.py``; fitness: whether faithful
-rows can be used for research) where the floor marks it: first the steps that find treatments, the default list, the
-pits the evals cover, the library evals and the lab evals, then, on the data with every treatment found, the steps
-that weigh them, and last, once nothing blocks, the calibration of the decisive test on the treated data.
+once per source and is approved with the first idea's data, and the decisive number may read only columns an
+independent source verified, or the history is explore-grade. Before anything heavy runs, the data check refuses a
+``data.py`` without a lab eval, or with one whose tests fail (``stages/lab.py``). It then builds what its steps read,
+the explore sources, ``wide`` on the contract's decision times and the candidates, and runs its floor list
+(``stages/data/floor.py``) with its default list (``stages/data/defaults.py``; fitness: whether faithful rows can be
+used for research) where the floor marks it: first the steps that find treatments, the default list, the pits the
+evals cover, the library evals and the lab evals, then, on the data with every treatment found, the steps that weigh
+them, and last, once nothing blocks, the calibration of the decisive test on the treated data. The freeze pins the
+treated sources, ``wide`` built on them, and the candidate rows the treatments exclude.
 """
 
 import time
@@ -19,18 +21,20 @@ from typing import Any
 import pandas as pd
 import polars as pl
 
-from research_ci.api.contract import Contract, Use, as_use, span
+from research_ci.api.contract import Contract, Use, as_use, horizons_of, span
 from research_ci.api.evals import evals_of
-from research_ci.api.plugins import CostModel
+from research_ci.api.plugins import CostModel, Sources
+from research_ci.eval.data.baseline import rows
 from research_ci.kernel.holdout.tiers import Tier, Tiers, visible
-from research_ci.kernel.tables import field_table
-from research_ci.kernel.time.clock import from_ns, span_ns, to_ns
+from research_ci.kernel.tables import source_tables
+from research_ci.kernel.time.asof import wide
+from research_ci.kernel.time.clock import span_ns, to_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner import research
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages import lab, skeleton
-from research_ci.stages.common import iso, norm_candidates, target_use
+from research_ci.stages.common import cadence, iso, norm_candidates, target_use
 from research_ci.stages.contract.run import use_named
 from research_ci.stages.data import defaults, floor
 from research_ci.stages.data import treatments as tr
@@ -38,7 +42,8 @@ from research_ci.stages.data.floor import ALL, DataError, DataSettings
 from research_ci.stages.data.source import admit
 from research_ci.stages.feat import run as fs
 from research_ci.store import vault
-from research_ci.store.sources import Sources, source_key
+from research_ci.store.sources import Sources as Admissions
+from research_ci.store.sources import source_key
 from research_ci.validation import load as ev
 
 EVALS_FILE = "data.py"
@@ -58,14 +63,14 @@ def check_data(
     root: Path,
     registry: Registry | None = None,
     settings: DataSettings | None = None,
-    sources: Sources | None = None,
+    admissions: Admissions | None = None,
     keep: tuple[str, ...] = (),
     feat_settings: fs.FeatSettings | None = None,
     key: Key | None = None,
 ) -> Checked:
     """``keep`` names treatments a person chose not to apply; their influence is still measured and shown. ``key``
     says what a calibration of the decisive test rests on, as feat compares it."""
-    check = _DataCheck(contract, Path(root), registry, settings or DataSettings(), sources or Sources(), keep)
+    check = _DataCheck(contract, Path(root), registry, settings or DataSettings(), admissions or Admissions(), keep)
     return check.run(feat_settings, key or (lambda frozen: fs.calibration_key(frozen, feat_settings)))
 
 
@@ -76,10 +81,11 @@ class _DataCheck:
         root: Path,
         registry: Registry | None,
         s: DataSettings,
-        sources: Sources,
+        admissions: Admissions,
         keep: tuple[str, ...] = (),
     ) -> None:
-        self.c, self.root, self.registry, self.s, self.sources, self.keep = c, root, registry, s, sources, keep
+        self.c, self.root, self.registry, self.s, self.keep = c, root, registry, s, keep
+        self.admissions = admissions
         self.deps: dict[str, str] = {}
         self.spec: dict[str, Any] = {}
 
@@ -91,19 +97,23 @@ class _DataCheck:
         if unknown:
             raise DataError(f"no treatment named {', '.join(map(repr, unknown))}; see the DataCard for the names")
         applied = [t for t in found.treatments if t.name not in self.keep]
-        panel = tr.apply_all(applied, seen.fields)
-        treated = replace(seen, prior=tuple(applied), found=tuple(found.treatments), panel=panel)
-        weighed = skeleton.combined(skeleton.run(step, treated) for step in floor.WEIGH)
+        treated = tr.apply_all(applied, seen.sources)
+        after = replace(seen, prior=tuple(applied), found=tuple(found.treatments), treated=treated)
+        weighed = skeleton.combined(skeleton.run(step, after) for step in floor.WEIGH)
         found.shown.pop("validated", None)
         self.spec |= {"evals": []} | found.shown | weighed.shown
         self.spec["kept"] = sorted(self.keep)
-        use = as_use(self.c.data)
-        panel_hash, _ = vault.put(f"{use.name}.panel", panel)
-        excluded = _exclusions(seen.candidates, applied)
-        exclusions_hash, _ = vault.put(f"{use.name}.exclusions", excluded)
-        self.spec["panel"] = {"hash": panel_hash, "rows": panel.height, "exclusions": exclusions_hash}
-        self.deps["panel"] = panel_hash
-        self.deps["exclusions"] = exclusions_hash
+        name = as_use(self.c.data).name
+        treated_hash, _ = vault.put(f"{name}.treated", treated)
+        wide_hash, _ = vault.put(f"{name}.wide", {"wide": wide(treated, seen.times)})
+        exclusions_hash, _ = vault.put(f"{name}.exclusions", {"exclusions": _exclusions(seen.candidates, applied)})
+        self.spec["treated"] = {
+            "sources": treated_hash,
+            "wide": wide_hash,
+            "rows": sum(t.height for t in treated.values()),
+            "exclusions": exclusions_hash,
+        }
+        self.deps |= {"treated": treated_hash, "wide": wide_hash, "exclusions": exclusions_hash}
         checks = found.checks + weighed.checks
         self.spec["checks"] = [asdict(ch) for ch in checks]
         self.spec["warnings"] = found.warnings + weighed.warnings
@@ -113,10 +123,10 @@ class _DataCheck:
             feat = feat_settings or fs.FeatSettings()
 
             def frozen() -> fs.Frozen:
-                return fs.frozen(self.c, panel_hash, exclusions_hash, self.registry, feat_settings)
+                return fs.frozen(self.c, treated_hash, wide_hash, exclusions_hash, self.registry, feat_settings)
 
-            treated = replace(treated, frozen=frozen, key=key, feat=feat)
-        last = skeleton.combined(skeleton.run(step, treated) for step in floor.LAST)
+            after = replace(after, frozen=frozen, key=key, feat=feat)
+        last = skeleton.combined(skeleton.run(step, after) for step in floor.LAST)
         if "calibration" in last.shown:
             self._calibrated(last.shown["calibration"])
         self.spec["seconds"] = round(time.monotonic() - started, 1)
@@ -138,16 +148,25 @@ class _DataCheck:
             raise DataError(f"{refused}{NOTHING}")
         use = as_use(self.c.data)
         plugin = self._plugin(use)
-        everything = field_table(plugin.fetch())
+        everything = source_tables(plugin.fetch())
         digest, _ = vault.put(use.name, everything)
         self.deps["data"] = digest
         admission = self._source(use, plugin, everything)
-        fields = self._explore(everything, digest)
-        cands, universe = self._candidates(fields)
-        numbers = self._numbers(fields, cands, universe)
+        sources = self._explore(everything, digest)
+        timing, _ = cadence(self.c, self._plugin)
+        self.times = pw.decision_grid(
+            span_ns(span(timing.every)), span_ns(span(timing.offset)), self.start, self.explore_end
+        )
+        self.wide = wide(sources, self.times)
+        cands, universe = self._candidates(sources)
+        horizons = horizons_of(self.c, timing.every)
+        numbers = self._numbers(sources, cands, universe, horizons)
         return floor.Seen(
             contract=self.c,
-            fields=fields,
+            horizons=horizons,
+            sources=sources,
+            times=self.times,
+            wide=self.wide,
             candidates=cands,
             source=plugin,
             universe=universe,
@@ -180,11 +199,11 @@ class _DataCheck:
         self.deps[f"plugin:{use.name}"] = code_hash(plugin)
         return plugin
 
-    def _source(self, use: Use, plugin: Any, everything: pl.DataFrame) -> dict[str, Any]:
+    def _source(self, use: Use, plugin: Any, everything: Sources) -> dict[str, Any]:
         key = source_key(use.name, dict(use.options), code_hash(plugin))
-        record = self.sources.latest(key)
+        record = self.admissions.latest(key)
         if record is None:
-            record = self.sources.record(key, admit(use, plugin, everything, self.s.source))
+            record = self.admissions.record(key, admit(use, plugin, everything, self.s.source))
             record = {**record, "approved": None}
         spec = record["payload"]["spec"]
         approved = record["approved"]
@@ -201,7 +220,7 @@ class _DataCheck:
             "failed": [c["name"] for c in spec["checks"] if c["status"] == "fail"],
             "approval": None if approved is None else approved["payload"]["approval"],
             "code": spec["code"],
-            "fields": spec["fields"],
+            "sources": spec["sources"],
             "insts": spec["insts"],
             "rows": spec["rows"],
             "checks": spec["checks"],
@@ -209,58 +228,58 @@ class _DataCheck:
         }
         return spec
 
-    def _explore(self, everything: pl.DataFrame, digest: str) -> pl.DataFrame:
+    def _explore(self, everything: Sources, digest: str) -> dict[str, pl.DataFrame]:
         self.now = time.time_ns()
-        self.latest = latest = int(everything.select(pl.col("available_at").max().dt.epoch("ns")).item())
+        known = rows(everything).select(pl.col("available_at").dt.epoch("ns"))["available_at"]
+        self.latest = latest = int(known.max())  # type: ignore[arg-type]
         self.explore_end = latest if self.c.explore_end == "latest" else to_ns(pd.Timestamp(self.c.explore_end))
         seal_end = to_ns(pd.Timestamp(self.c.seal_end)) if self.c.seal_end else None
-        fields = visible(everything, Tier.EXPLORE, Tiers(self.explore_end, seal_end))
-        self.start = int(fields.select(pl.col("available_at").min().dt.epoch("ns")).item())
+        sources = visible(everything, Tier.EXPLORE, Tiers(self.explore_end, seal_end))
+        explored = rows(sources)
+        self.start = int(explored.select(pl.col("available_at").min().dt.epoch("ns")).item())
         age = (self.now - latest) / pw.DAY_NS
         self.spec["data"] = {
             "source": as_use(self.c.data).name,
             "hash": digest,
-            "rows": fields.height,
-            "insts": fields["inst"].n_unique(),
+            "sources": list(sources),
+            "rows": explored.height,
+            "insts": explored["inst"].n_unique(),
             "first": iso(self.start),
             "explore_end": iso(self.explore_end),
             "age_days": round(age, 1),
         }
-        return fields
+        return sources
 
-    def _candidates(self, fields: pl.DataFrame) -> tuple[pl.DataFrame | None, Any]:
+    def _candidates(self, sources: Sources) -> tuple[pl.DataFrame | None, Any]:
         u = self.c.universe
         if u is None:
             return None, None
-        if self.c.consumer is not None:
-            timing = load(as_use(self.c.consumer), self.registry).timing()
-            every, offset = timing.every, timing.offset
-        else:
-            assert self.c.execution is not None
-            every, offset = self.c.execution.every, self.c.execution.offset
-        self.times = pw.decision_grid(span_ns(span(every)), span_ns(span(offset)), self.start, self.explore_end)
         universe = self._plugin(as_use(u.use))
-        return self._universe(universe, fields), universe
+        return norm_candidates(universe.candidates(self.wide, sources)), universe
 
-    def _universe(self, universe: Any, fields: pl.DataFrame) -> pl.DataFrame:
-        return norm_candidates(universe.candidates(fields, [from_ns(t) for t in self.times]))
+    def _universe(self, universe: Any, sources: Sources) -> pl.DataFrame:
+        return norm_candidates(universe.candidates(wide(sources, self.times), sources))
 
-    def _numbers(self, fields: pl.DataFrame, cands: pl.DataFrame | None, universe: Any) -> tr.Numbers | None:
-        """The decisive numbers per horizon: every decisive effect's label rows, and its target per decision time."""
+    def _numbers(
+        self, sources: Sources, cands: pl.DataFrame | None, universe: Any, horizons: tuple[str, ...]
+    ) -> tr.Numbers | None:
+        """The decisive numbers per effect and horizon: the outcome rows, and each effect's target per decision
+        time."""
         if cands is None:
             return None
+        assert self.c.outcome is not None
         costs: CostModel = self._plugin(as_use(self.c.costs))
-        plans = []
-        for effect in self.c.decisive:
-            label = next(lab for lab in self.c.labels if lab.name == effect.on)
-            values = self._plugin(as_use(label.use))
-            target = self._plugin(target_use(effect, self.c))
-            plans += [tr.Plan(f"{effect.on} {h}", values, target, span(h)) for h in label.horizons]
+        outcome = self._plugin(as_use(self.c.outcome))
+        plans = [
+            tr.Plan(f"{effect.name} {h}", self._plugin(target_use(effect, self.c)), span(h))
+            for effect in self.c.decisive
+            for h in horizons
+        ]
 
-        def candidates(f: pl.DataFrame) -> pl.DataFrame:
+        def candidates(f: Sources) -> pl.DataFrame:
             return self._universe(universe, f)
 
-        return tr.Numbers(fields, cands, candidates, plans, costs, self.explore_end - self.start)
+        return tr.Numbers(sources, cands, candidates, outcome, plans, costs, self.explore_end - self.start)
 
     def _verdict(self, failed: list[Check], inspect: list[str]) -> dict[str, Any]:
         """Blocked when the source is not admitted or a check failed, each with what failed, why, and what to do;
@@ -324,10 +343,11 @@ def _eval_note(row: dict[str, Any]) -> str:
 
 
 def _exclusions(cands: pl.DataFrame | None, ts: list[tr.Treatment]) -> pl.DataFrame:
+    """The candidate rows the candidate treatments drop."""
     empty = pl.DataFrame(schema={"t": pl.Datetime("ns", "UTC"), "inst": pl.String})
     if cands is None:
         return empty
-    kept = tr.apply_candidates(ts, cands.select("t", "inst"))
+    kept = tr.apply_candidates(ts, cands).select("t", "inst")
     return cands.select("t", "inst").join(kept, on=["t", "inst"], how="anti").sort("t", "inst")
 
 
@@ -341,11 +361,9 @@ def current_data_deps(
             now[key] = code_hash(load(use_named(contract, key.removeprefix("plugin:")), registry))
     name = as_use(contract.data).name
     now["data"] = recorded["data"] if vault.has(name, recorded["data"]) else "missing"
-    now["panel"] = recorded["panel"] if vault.has(f"{name}.panel", recorded["panel"]) else "missing"
-    if "exclusions" in recorded:
-        found = vault.has(f"{name}.exclusions", recorded["exclusions"])
-        now["exclusions"] = recorded["exclusions"] if found else "missing"
-    record = Sources().latest(spec["source"]["key"])
+    for kind in ("treated", "wide", "exclusions"):
+        now[kind] = recorded[kind] if vault.has(f"{name}.{kind}", recorded[kind]) else "missing"
+    record = Admissions().latest(spec["source"]["key"])
     now["source"] = "missing" if record is None else record["hash"]
     return now
 

@@ -44,16 +44,16 @@ def combine(decisive: list[dict[str, Any]], vetoes: list[dict[str, Any]], need: 
         beats = passing(d, need)
         rejected = {h: _rejections(h, vetoes, covered) for h in beats}
         ok = [h for h in beats if not rejected[h]]
-        passed[d["on"]] = ok
+        passed[d["name"]] = ok
         z = f"z {_num(d['z'])}"
         if ok:
             them = "it" if len(ok) == 1 else "them"
             lines.append(
-                f"{d['on']}: passes at {', '.join(ok)}: the decisive test beats random there, {z} ≥ {need:.2f} "
+                f"{d['name']}: passes at {', '.join(ok)}: the decisive test beats random there, {z} ≥ {need:.2f} "
                 f"(slot 1), and every lab eval and null world that covers {them} reaches z ≥ {VETO_Z:.2f} (slot 3)"
             )
             lines += [
-                f"{d['on']} {h}: beats random, but slot 3 rejects it: {'; '.join(rejected[h])}"
+                f"{d['name']} {h}: beats random, but slot 3 rejects it: {'; '.join(rejected[h])}"
                 for h in beats
                 if rejected[h]
             ]
@@ -61,12 +61,12 @@ def combine(decisive: list[dict[str, Any]], vetoes: list[dict[str, Any]], need: 
             slots.add(3)
             why = " · ".join(f"{h}: {'; '.join(rejected[h])}" for h in beats)
             lines.append(
-                f"{d['on']}: beats random at {', '.join(beats)}, {z} ≥ {need:.2f} (decisive test, slot 1), but slot 3 "
-                f"rejects every one of them: {why}; {FIX}"
+                f"{d['name']}: beats random at {', '.join(beats)}, {z} ≥ {need:.2f} (decisive test, slot 1), but slot "
+                f"3 rejects every one of them: {why}; {FIX}"
             )
         else:
             slots.add(1)
-            lines.append(f"{d['on']}: does not beat random, {z} < {need:.2f} (decisive test, slot 1): {_effect(d)}")
+            lines.append(f"{d['name']}: does not beat random, {z} < {need:.2f} (decisive test, slot 1): {_effect(d)}")
     status = "PASSED" if all(passed.values()) else "FAILED"
     return verdict(status, lines) | {"horizons": passed, "slots": sorted(slots)}
 

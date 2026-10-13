@@ -1,51 +1,49 @@
-"""Sanity of the fields a source declares as levels, such as prices: a level is positive, it changes now and then, and
-it does not jump to another level for a moment and back. Each check returns the rows it flags (``inst``,
-``field``, ``event_time``). A lasting jump is not flagged here: the baseline calls it a level shift, and admission asks
-the independent source about it."""
+"""Sanity of the value columns a plugin declares as levels, such as prices: a level is positive, it changes now and
+then, and it does not jump to another level for a moment and back. Each check reads the sources and returns the cells
+it flags (``source``, ``column``, ``inst``, ``event_time``), at the source's own cadence. A lasting jump is not flagged
+here: the baseline calls it a level shift, and admission asks the independent source about it."""
+
+from collections.abc import Mapping
 
 import numpy as np
 import polars as pl
 
 from research_ci.api.evals import Case, Source
-from research_ci.eval.data.baseline import events
-from research_ci.eval.synthetic import HOUR_NS, START_NS, source
+from research_ci.eval import synthetic
+from research_ci.eval.data.baseline import CELL, cells, events
+from research_ci.eval.synthetic import HOUR_NS, START_NS
 
-KEYS = ["inst", "field", "event_time"]
-BY = ["inst", "field"]
+FLAGS = ["source", "column", "inst", "event_time"]
 
 
-def nonpositive(fields: pl.DataFrame, levels: tuple[str, ...]) -> pl.DataFrame:
+def nonpositive(sources: Mapping[str, pl.DataFrame], levels: tuple[str, ...]) -> pl.DataFrame:
     """Events of a declared level at zero or below."""
-    return _levels(fields, levels).filter(pl.col("value") <= 0).select(KEYS)
+    return cells(sources, levels).filter(pl.col("value") <= 0).select(FLAGS)
 
 
-def stale(fields: pl.DataFrame, levels: tuple[str, ...], runs: float) -> pl.DataFrame:
+def stale(sources: Mapping[str, pl.DataFrame], levels: tuple[str, ...], runs: float) -> pl.DataFrame:
     """Events repeating the value before them in a long run. The run of one value lasts longer than ``runs`` of the
-    inst's usual spacings; the first event of the run, the last one that changed, is kept."""
-    e = events(_levels(fields, levels))
+    column's usual spacings for the inst; the first event of the run, the last one that changed, is kept."""
+    e = events(cells(sources, levels), CELL)
     new = (pl.col("value") != pl.col("value").shift(1)).fill_null(True)
-    e = e.with_columns(run=new.cum_sum().over(BY))
-    first = pl.col("event_time").min().over(*BY, "run")
-    long = (pl.col("event_time").max().over(*BY, "run") - first).dt.total_nanoseconds() > runs * pl.col("spacing")
-    return e.filter(long.fill_null(False) & (pl.col("event_time") > first)).select(KEYS)
+    e = e.with_columns(run=new.cum_sum().over(CELL))
+    first = pl.col("event_time").min().over(*CELL, "run")
+    long = (pl.col("event_time").max().over(*CELL, "run") - first).dt.total_nanoseconds() > runs * pl.col("spacing")
+    return e.filter(long.fill_null(False) & (pl.col("event_time") > first)).select(FLAGS)
 
 
-def spikes(fields: pl.DataFrame, levels: tuple[str, ...], factor: float, window: int) -> pl.DataFrame:
+def spikes(sources: Mapping[str, pl.DataFrame], levels: tuple[str, ...], factor: float, window: int) -> pl.DataFrame:
     """Events of a declared level that jump and come back. An event is ``factor`` or more away from the median of the
     last ``window`` events, and its move does not last: the median of the ``window`` events from this one is back within
     ``factor`` of the one before."""
     level = pl.col("value")
-    e = events(_levels(fields, levels)).with_columns(
-        before=level.rolling_median(window, min_samples=1).shift(1).over(BY),
-        after=level.reverse().rolling_median(window, min_samples=1).reverse().over(BY),
+    e = events(cells(sources, levels), CELL).with_columns(
+        before=level.rolling_median(window, min_samples=1).shift(1).over(CELL),
+        after=level.reverse().rolling_median(window, min_samples=1).reverse().over(CELL),
     )
     away = (pl.col("before") > 0) & (level > 0) & _apart(level / pl.col("before"), factor)
     lasting = _apart(pl.col("after") / pl.col("before"), factor)
-    return e.filter((away & ~lasting).fill_null(False)).select(KEYS)
-
-
-def _levels(fields: pl.DataFrame, levels: tuple[str, ...]) -> pl.DataFrame:
-    return fields.filter(pl.col("field").is_in(list(levels)))
+    return e.filter((away & ~lasting).fill_null(False)).select(FLAGS)
 
 
 def _apart(ratio: pl.Expr, k: float) -> pl.Expr:
@@ -57,39 +55,39 @@ def _hours(flagged: pl.DataFrame) -> list[tuple[str, int]]:
     return [(str(e), int(h)) for e, h in flagged.select("inst", t).sort("inst", "event_time").rows()]
 
 
-def _set(inst: str, hours: range, value: float | None = None, k: float = 1.0) -> pl.DataFrame:
-    """A synthetic source with ``inst``'s prices in ``hours`` set to ``value``, or times ``k``."""
-    f = source(Source(), 0)
+def _set(inst: str, hours: range, value: float | None = None, k: float = 1.0) -> dict[str, pl.DataFrame]:
+    """Synthetic sources with ``inst``'s prices in ``hours`` set to ``value``, or times ``k``."""
+    tables = synthetic.sources(Source(), 0)
     t = (pl.col("event_time").dt.epoch("ns") - START_NS) // HOUR_NS
-    hit = (pl.col("inst") == inst) & (pl.col("field") == "price") & t.is_between(hours.start, hours.stop - 1)
-    new = pl.lit(value) if value is not None else pl.col("value") * k
-    return f.with_columns(value=pl.when(hit).then(new).otherwise("value"))
+    hit = (pl.col("inst") == inst) & t.is_between(hours.start, hours.stop - 1)
+    new = pl.lit(value) if value is not None else pl.col("price") * k
+    return {**tables, "prices": tables["prices"].with_columns(price=pl.when(hit).then(new).otherwise("price"))}
 
 
-def _held(hours: range) -> pl.DataFrame:
+def _held(hours: range) -> dict[str, pl.DataFrame]:
     """e0's price held at its value of the hour before ``hours`` throughout them."""
-    f = source(Source(), 0)
+    tables = synthetic.sources(Source(), 0)
+    prices = tables["prices"]
     t = (pl.col("event_time").dt.epoch("ns") - START_NS) // HOUR_NS
-    price = (pl.col("inst") == "e0") & (pl.col("field") == "price")
-    held = f.filter(price & (t == hours.start - 1))["value"][0]
-    return f.with_columns(
-        value=pl.when(price & t.is_between(hours.start, hours.stop - 1)).then(pl.lit(held)).otherwise("value")
-    )
+    e0 = pl.col("inst") == "e0"
+    held = prices.filter(e0 & (t == hours.start - 1))["price"][0]
+    kept = pl.when(e0 & t.is_between(hours.start, hours.stop - 1)).then(pl.lit(held)).otherwise("price")
+    return {**tables, "prices": prices.with_columns(price=kept)}
 
 
-def _flags(f: pl.DataFrame) -> int:
+def _flags(f: Mapping[str, pl.DataFrame]) -> int:
     return nonpositive(f, ("price",)).height + stale(f, ("price",), 24).height + spikes(f, ("price",), 5.0, 24).height
 
 
 def _clean(seeds: int = 10) -> int:
-    return sum(_flags(source(Source(lag=2, revised=0.3), s)) for s in range(seeds))
+    return sum(_flags(synthetic.sources(Source(lag=2, revised=0.3), s)) for s in range(seeds))
 
 
 def _planted(pit: str, seeds: int = 10) -> int:
     """On how many sources a built-in pit planted in prices is flagged as a spike."""
     from research_ci.eval.data.pits import BUILTIN
 
-    planted = (BUILTIN[pit](source(Source(), s), "price", np.random.default_rng(s)) for s in range(seeds))
+    planted = (BUILTIN[pit](synthetic.sources(Source(), s), "price", np.random.default_rng(s)) for s in range(seeds))
     return sum(spikes(f, ("price",), 5.0, 24).height == 1 for f in planted)
 
 
@@ -125,4 +123,9 @@ CASES = [
         0,
     ),
     Case("the built-in spike pit is flagged, on every source", lambda: _planted("spike"), 10),
+    Case(
+        "a flagged cell names its source and column",
+        lambda: nonpositive(_set("e0", range(5, 6), 0.0), ("price",)).select("source", "column").rows(),
+        [("prices", "price")],
+    ),
 ]

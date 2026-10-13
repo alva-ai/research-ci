@@ -13,7 +13,6 @@ from research_ci.api import (
     Eval,
     Execution,
     Forward,
-    Label,
     Null,
     PermuteWithin,
     Universe,
@@ -21,8 +20,9 @@ from research_ci.api import (
     Use,
     evals_of,
 )
+from research_ci.api.contract import default_horizons
 
-CARRY = Label("carry", Use("ref.carry", {"flow": "funding_rate"}), horizons=("8h", "24h", "72h"))
+CARRY = Use("ref.carry", {"flow": "funding_rate"})
 COSTS = Use("ref.flat_costs", {"commission_bps": 5, "slippage_bps": 5, "legs": 2})
 USED = Usage("2026-04-08T00:00:00Z", "2026-09-14T12:00:00Z", "fc parameters tuned", ("claim",))
 
@@ -30,14 +30,15 @@ USED = Usage("2026-04-08T00:00:00Z", "2026-09-14T12:00:00Z", "fc parameters tune
 def _contract(**kw: object) -> Contract:
     base: dict[str, object] = {
         "claim": "cross-venue funding spreads persist",
-        "decisive": (Effect(on="carry", target="perp.breakeven"),),
+        "decisive": (Effect(target="perp.breakeven"),),
         "alternatives": (Alternative("tail", "a few symbols carry it"),),
         "used": (),
         "data": "fc.raw",
         "costs": COSTS,
         "execution": Execution(every="1h"),
         "universe": Universe(Use("perp.pairs", {"venues": ["a", "b"]}), clusters="symbol"),
-        "labels": (CARRY,),
+        "outcome": CARRY,
+        "horizons": ("8h", "24h", "72h"),
         "forward": Forward("fc.raw.live"),
     }
     return Contract(**{**base, **kw})  # type: ignore[arg-type]
@@ -47,7 +48,8 @@ def test_a_complete_contract_serializes_with_its_plugins_and_their_options() -> 
     contract = _contract(budget={"feat": 12, "signal": 8})
     plain = json.loads(json.dumps(asdict(contract)))
     assert plain["universe"]["use"]["options"] == {"venues": ["a", "b"]}
-    assert plain["labels"][0]["use"] == {"name": "ref.carry", "options": {"flow": "funding_rate"}}
+    assert plain["outcome"] == {"name": "ref.carry", "options": {"flow": "funding_rate"}}
+    assert plain["horizons"] == ["8h", "24h", "72h"]
     assert plain["costs"]["name"] == "ref.flat_costs"
     assert plain["decisive"][0]["target"] == {"name": "perp.breakeven", "options": {}}
     assert (contract.budget_for("feat"), contract.budget_for("algo")) == (12, 20)
@@ -66,8 +68,10 @@ def test_a_complete_contract_serializes_with_its_plugins_and_their_options() -> 
         ({"execution": None}, "execution"),
         ({"consumer": "fc.backtest"}, "not both"),
         ({"universe": None}, "per candidate"),
-        ({"labels": (CARRY, CARRY)}, "unique"),
-        ({"decisive": (Effect(on="return"),)}, "not a label"),
+        ({"outcome": None}, "name the outcome plugin"),
+        ({"horizons": ()}, "at least one horizon"),
+        ({"horizons": ("24h", "8h")}, "ascending"),
+        ({"decisive": (Effect(), Effect("ref.mean"))}, "ref.mean twice"),
         ({"budget": {"feat": 0}}, "budget"),
     ],
 )
@@ -86,17 +90,23 @@ def test_a_sealed_segment_must_be_fresh_and_follow_a_fixed_explore_end() -> None
 
 def test_a_contract_names_a_consumer_only_for_its_decision_times_and_reserves_only_chance_and_timing() -> None:
     b = _contract(execution=None, consumer="fc.backtest", used=(USED,))
-    assert (b.consumer, b.decisive[0].on) == (Use("fc.backtest"), "carry")
+    assert (b.consumer, b.decisive[0].name) == (Use("fc.backtest"), "perp.breakeven")
     assert _contract(alternatives=(Alternative("fewer", "fewer candidates alone carry it"),))
-    with pytest.raises(ContractError, match="affects must be some of claim, costs, labels"):
+    with pytest.raises(ContractError, match="affects must be some of claim, costs, outcome"):
         Usage("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z", "tuned", ("baseline",))
 
 
-def test_a_backtest_is_refused_as_the_decisive_effect_because_the_algo_layer_judges_it() -> None:
-    effect = Effect(on="consumer")
-    with pytest.raises(ContractError, match="algo layer") as refused:
-        _contract(decisive=(effect,), execution=None, consumer="fc.backtest")
-    assert "label effect" in str(refused.value) and "top" in str(refused.value)
+def test_an_effect_names_only_its_target_and_goes_by_its_name() -> None:
+    assert Effect().name == "ref.mean" and Effect(Use("perp.breakeven", {"k": 1})).name == "perp.breakeven"
+    with pytest.raises(TypeError):
+        Effect(on="carry")  # type: ignore[call-arg]
+
+
+def test_without_horizons_a_contract_takes_the_decision_period_times_1_4_and_16() -> None:
+    assert _contract(horizons=None).horizons is None
+    assert default_horizons("1h") == ("1h", "4h", "16h")
+    assert default_horizons("24h") == ("1d", "4d", "16d")
+    assert default_horizons("15min") == ("15min", "1h", "4h")
 
 
 def test_evals_and_nulls_are_validated() -> None:
@@ -121,14 +131,24 @@ def test_evals_and_nulls_are_validated() -> None:
     listed = [Eval(ic, h0=h0), Eval(ic, name="b", h0=h0, horizons=["8h"])]
     feat = evals_of(types.SimpleNamespace(EVALS=listed), "feat")
     assert [(e.name, e.combine, e.horizons) for e in feat] == [("ic", "max", None), ("b", "max", ("8h",))]
-    data = evals_of(types.SimpleNamespace(EVALS=[Eval(ic, h0=h0, on_fail="block")]), "data")
-    assert [(e.name, e.on_fail) for e in data] == [("ic", "block")]
+
+    def rows(wide, sources):
+        return wide
+
+    data = evals_of(types.SimpleNamespace(EVALS=[Eval(rows, h0=h0, on_fail="block")]), "data")
+    assert [(e.name, e.on_fail) for e in data] == [("rows", "block")]
+    with pytest.raises(ValueError, match="eval 'ic' takes table: a data eval takes wide, sources, or both"):
+        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, h0=h0)]), "data")
     with pytest.raises(ValueError, match="unique; give these a name=: ic"):
         evals_of(types.SimpleNamespace(EVALS=[Eval(ic, h0=h0), Eval(ic, h0=h0)]), "feat")
     with pytest.raises(ValueError, match="sets on_fail, which only data.py reads"):
         evals_of(types.SimpleNamespace(EVALS=[Eval(ic, on_fail="ask")]), "feat")
     with pytest.raises(ValueError, match="sets label, which only feat.py reads"):
-        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, label="carry")]), "data")
+        evals_of(types.SimpleNamespace(EVALS=[Eval(ic, label="y_flow")]), "data")
+    with pytest.raises(ValueError, match="label names the column read as y"):
+        Eval(ic, label="carry")
+    with pytest.raises(ValueError, match="label names the column read as y"):
+        Eval(ic, label="y_end")
     with pytest.raises(ValueError, match="EVALS must be a list"):
         evals_of(types.SimpleNamespace(EVALS=ic), "data")
     with pytest.raises(ValueError, match="on_fail is mask, drop_insts, ask or block"):
@@ -141,10 +161,10 @@ def test_a_lab_eval_must_name_its_h0_and_a_library_eval_must_not() -> None:
     from research_ci.eval.data.sanity import nonpositive
     from research_ci.eval.statistics.ic import rank_ic
 
-    def flags(fields):
-        return fields
+    def flags(sources):
+        return sources
 
-    for layer, example in (("feat", "the scores do not rank the funding part"), ("data", "every close is a price")):
+    for layer, example in (("feat", "the scores do not rank the flow part"), ("data", "every close is a price")):
         with pytest.raises(ValueError) as refused:
             evals_of(types.SimpleNamespace(EVALS=[flags]), layer)  # type: ignore[arg-type]
         said = str(refused.value)

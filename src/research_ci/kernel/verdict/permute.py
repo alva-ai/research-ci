@@ -1,9 +1,9 @@
-"""Null worlds on the evaluation table. A world says, for every row, which row's score it takes; the labels stay.
+"""Null worlds on the evaluation table. A world says, for every row, which row's score it takes; the outcomes stay.
 
 ``PermuteWithin`` shuffles scores across the rows of each decision time and bucket. Whole clusters move: a cluster's
 rows take the scores of another cluster with as many rows at that time, in random order, so what a cluster's scores
-share survives while their link to its members' labels does not. Both shuffles are uniformly random and the same at
-every decision time of a block, so overlapping label windows see one shuffle.
+share survives while their link to its members' outcomes does not. Both shuffles are uniformly random and the same at
+every decision time of a block, so overlapping outcome windows see one shuffle.
 
 The sort layout is computed once per table: which clusters can trade places (a group: the same time, bucket and size),
 which rows make up each cluster, and the distinct keys a seed draws for. A seed then hashes those keys, orders each

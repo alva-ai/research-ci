@@ -1,26 +1,26 @@
 """The checks the data layer runs on every idea's data by default, like feat's diagnostics: one list, to adjust from
 experience.
 
-Admitting the source (replay as of past times, the independent source, the canaries, the field grades) is not here:
-it checks fidelity, that the rows are what the venue reported, and the data layer runs it first. The checks in
-``CHECKS`` come after it, in order, and check fitness, whether faithful rows can be used for research: a ticker reused
-for another asset, a price at zero or stuck, an inst too short for the horizons; the last only shows how much of
-the noise rests on one cluster. They read only the FieldTable, what the plugins declare (``levels``, ``hedge``) and
-the contract; none needs reference data or knows an asset class. Each is a step (``stages/skeleton.py``) that reads the
-data check's context (``Seen`` in ``stages/data/floor.py``) and returns lines for the DataCard, warnings, treatments,
-and items a person must decide. The data layer applies the treatments by default and weighs each by its influence on
-the decisive number; a check sees the data with the treatments before it applied (``Seen.prior``). This list is slot 2
-of the data layer, with the library evals an idea lists; the idea's lab evals (``EVALS`` in ``data.py``, slot 3) run
-after these, once validated; the built-in pits of the categories in ``PITS``, with those of an eval's own module
-(``PITS`` next to its ``CASES``), test the ones that claim to cover them. Tools that need knowledge of a case, such as
-adjusting stock prices for splits or rolling futures, are not defaults: they are evals an idea lists on purpose, from
-the engine's library or its own lab evals.
+Admitting the source (replay as of past times, the independent source, the canaries, the column grades) is not here: it
+checks fidelity, that the rows are what the venue reported, and the data layer runs it first. The checks in ``CHECKS``
+come after it, in order, and check fitness, whether faithful rows can be used for research: a ticker reused for another
+asset, a price at zero or stuck, an inst too short for the horizons; the last only shows how much of the noise rests on
+one cluster. They read only the sources, ``wide``, what the plugins declare (``levels``, ``hedge``) and the contract;
+none needs reference data or knows an asset class. Each is a step (``stages/skeleton.py``) that reads the data check's
+context (``Seen`` in ``stages/data/floor.py``) and returns lines for the DataCard, warnings, treatments, and items a
+person must decide. The data layer applies the treatments by default and weighs each by its influence on the decisive
+number; a check sees the data with the treatments before it applied (``Seen.prior``). This list is slot 2 of the data
+layer, with the library evals an idea lists; the idea's lab evals (``EVALS`` in ``data.py``, slot 3) run after these,
+once validated; the built-in pits of the categories in ``PITS``, with those of an eval's own module (``PITS`` next to
+its ``CASES``), test the ones that claim to cover them. Tools that need knowledge of a case, such as adjusting stock
+prices for splits or rolling futures, are not defaults: they are evals an idea lists on purpose, from the engine's
+library or its own lab evals.
 
 The engine hash leaves ``stages/data/defaults.py`` out: the data freeze pins the treated data by content, so a changed
 list cannot change a frozen result; it shows at the next ``rci data check``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import polars as pl
@@ -32,7 +32,7 @@ from research_ci.eval.data import coverage as cv
 from research_ci.eval.data import identity as idn
 from research_ci.eval.data import invariants as inv
 from research_ci.eval.data import sanity as sn
-from research_ci.eval.data.baseline import level_shift_anomalies
+from research_ci.eval.data.baseline import cells, level_shift_anomalies, rows
 from research_ci.kernel.time.clock import from_ns, span_ns
 from research_ci.kernel.verdict.check import Check
 from research_ci.kernel.verdict.power import DAY_NS
@@ -48,7 +48,7 @@ MIN_CANDIDATES = 5
 CONCENTRATION = 0.5
 CONCENTRATION_SHOWN = 3
 PITS = ("unit", "level_break", "gap", "duplicate", "shift", "leak", "spike", "swap")
-KEYS = ["inst", "field", "event_time"]
+KEYS = ["source", "column", "inst", "event_time"]
 
 
 def fresh(seen: Seen) -> Found:
@@ -67,15 +67,16 @@ def freshness(latest: int, now: int) -> Found:
 
 
 def level_shifts(seen: Seen) -> Found:
-    """Lasting jumps in the fields the source declares as levels (``Levels``): those the independent source did not
-    confirm at admission are masked for the source's ``mask`` on each side; confirmed ones are kept."""
+    """Lasting jumps in the columns the plugin declares as levels (``Levels``): those the independent source did not
+    confirm at admission are masked, in their column, for the plugin's ``mask`` on each side; confirmed ones are
+    kept."""
     found = Found()
-    shifts = level_shift_anomalies(seen.fields, *declared_levels(seen.source))
-    unconfirmed = shifts.join(_confirmed(seen.admission), on=["inst", "field", "end"], how="anti")
+    shifts = level_shift_anomalies(seen.sources, *declared_levels(seen.source))
+    unconfirmed = shifts.join(_confirmed(seen.admission), on=["source", "column", "inst", "end"], how="anti")
     if unconfirmed.height:
         around = span_ns(span(seen.source.levels.mask))
         reason = f"{unconfirmed.height} level shifts the independent source did not confirm"
-        mask = tr.mask_windows("mask unconfirmed level shifts", reason, unconfirmed, around, seen.fields)
+        mask = tr.mask_windows("mask unconfirmed level shifts", reason, unconfirmed, around, seen.sources)
         found.treatments.append(mask)
     if shifts.height > unconfirmed.height:
         kept = f"{shifts.height - unconfirmed.height} confirmed by the source; kept"
@@ -86,10 +87,10 @@ def level_shifts(seen: Seen) -> Found:
 def level_sanity(seen: Seen) -> Found:
     """In the declared levels: values at zero or below; the repeats in a run of one value longer than ``STALE_RUN``
     usual spacings; and moves of the declared factor or more that do not last, which the source did not confirm. Each
-    kind is a mask of the rows it flags; rows a treatment before it already removes are left to that one."""
+    kind is a mask of the cells it flags; cells a treatment before it already takes away are left to that one."""
     names, factor, window = declared_levels(seen.source)
     if not names:
-        return Found([Check("level sanity", "skip", "the source declares no level fields")])
+        return Found([Check("level sanity", "skip", "the source declares no level columns")])
     kinds = [
         ("at zero or below", "mask levels at zero or below"),
         (f"repeated in a run longer than {STALE_RUN:g} usual spacings", "mask stale level runs"),
@@ -97,17 +98,16 @@ def level_sanity(seen: Seen) -> Found:
     ]
     flagged = pl.concat(
         [
-            sn.nonpositive(seen.fields, names).with_columns(kind=pl.lit(0)),
-            sn.stale(seen.fields, names, STALE_RUN).with_columns(kind=pl.lit(1)),
-            _unconfirmed(sn.spikes(seen.fields, names, factor, window), seen.admission).with_columns(kind=pl.lit(2)),
+            sn.nonpositive(seen.sources, names).with_columns(kind=pl.lit(0)),
+            sn.stale(seen.sources, names, STALE_RUN).with_columns(kind=pl.lit(1)),
+            _unconfirmed(sn.spikes(seen.sources, names, factor, window), seen.admission).with_columns(kind=pl.lit(2)),
         ]
     )
-    near = seen.fields.join(flagged.select(KEYS).unique(), on=KEYS, how="semi")
-    flagged = _still_there(flagged, near, seen.prior)
+    flagged = _still_there(flagged, seen.sources, seen.prior)
     per_kind = flagged.partition_by("kind", as_dict=True, include_key=False)
     found = Found()
     found.treatments += [
-        tr.mask_rows(name, f"{per_kind[(k,)].height:,} events {what}", per_kind[(k,)], near)
+        tr.mask_cells(name, f"{per_kind[(k,)].height:,} events {what}", per_kind[(k,)], seen.sources)
         for k, (what, name) in enumerate(kinds)
         if (k,) in per_kind
     ]
@@ -121,16 +121,16 @@ def level_sanity(seen: Seen) -> Found:
 
 def identity_breaks(seen: Seen) -> Found:
     """A declared level that comes back after a gap longer than ``IDENTITY_GAP`` usual spacings at the declared factor
-    or more away from where it was is another asset under the same name: the inst is split there, and its rows from
-    the break on become ``<inst>#2`` (``#3`` after a second break)."""
+    or more away from where it was is another asset under the same name: the inst is split there, in every source,
+    and its rows from the break on become ``<inst>#2`` (``#3`` after a second break)."""
     names, factor, window = declared_levels(seen.source)
     name = "identity breaks"
     if not names:
-        return Found([Check(name, "skip", "the source declares no level fields")])
-    found = idn.breaks(seen.fields, names, factor, window, IDENTITY_GAP)
+        return Found([Check(name, "skip", "the source declares no level columns")])
+    found = idn.breaks(seen.sources, names, factor, window, IDENTITY_GAP)
     if found.is_empty():
         return Found([Check(name, "pass", f"no declared level comes back {factor:g}x away after a long gap")])
-    splits = idn.renames(found, seen.fields["inst"].unique())
+    splits = idn.renames(found, rows(seen.sources)["inst"].unique())
     shown = found.head(6).select("inst", _ns("at"), "ratio").rows()
     where = ", ".join(f"{e} {_iso(int(at))} (x{r:.3g})" for e, at, r in shown)
     more = f" and {found.height - 6} more" if found.height > 6 else ""
@@ -138,27 +138,23 @@ def identity_breaks(seen: Seen) -> Found:
     detail = f"{_count(insts, 'inst comes', 'insts come')} back at another level after a long gap: "
     detail += where + more
     reason = f"{_count(found.height, 'break', 'breaks')}; the rows from each are a new inst"
-    split = tr.split_insts("split insts at identity breaks", reason, splits, seen.fields)
+    split = tr.split_insts("split insts at identity breaks", reason, splits, seen.sources)
     return Found([Check(name, "warn", detail + "; split")], treatments=[split])
 
 
 def coverage(seen: Seen) -> Found:
     """Insts whose whole history is shorter than the contract's longest horizon are dropped; decision times with
     fewer than ``MIN_CANDIDATES`` candidates are only counted, for a cross shape, which ranks them."""
-    horizons = [span(h) for label in seen.contract.labels for h in label.horizons]
-    if not horizons:
-        return Found([Check("coverage", "skip", "the contract has no labels")])
-    longest = max(horizons)
-    treated = tr.apply_all(seen.prior, seen.fields.select("inst", "field", "event_time"))
-    short = cv.short_lived(treated, span_ns(longest))
+    longest = max(span(h) for h in seen.horizons)
+    short = cv.short_lived(tr.apply_all(seen.prior, seen.sources), span_ns(longest))
     found, notes = Found(), []
     if short.height:
         found.treatments.append(
             tr.drop_spans(
                 "drop insts too short for the horizon",
                 f"{_count(short.height, 'inst', 'insts')} with less than {_days(longest)} of data",
-                _origins(short, seen.fields),
-                seen.fields,
+                _origins(short, seen.sources),
+                seen.sources,
             )
         )
         names = short["inst"].to_list()
@@ -191,7 +187,7 @@ def hedge_guard(seen: Seen) -> Found:
         return Found()
     keep = (u.clusters,) if u.clusters in cands.columns else ()
     h = hedge
-    legs = inv.hedged_legs(cands, seen.fields, h.price, h.max_ratio, h.min_corr, h.window, h.min_obs, h.min_move, keep)
+    legs = inv.hedged_legs(cands, seen.wide, h.price, h.max_ratio, h.min_corr, h.window, h.min_obs, h.min_move, keep)
     found = Found([inv.hedge_check(legs, h.price, h.max_ratio, h.min_corr, keep[0] if keep else "pair")])
     bad = legs.filter(~pl.col("ok"))
     if bad.height:
@@ -208,7 +204,7 @@ def concentration(seen: Seen) -> Found:
     d, u = seen.decisive, seen.contract.universe
     if d is None or u is None:
         return Found()
-    found = cc.shares(d.rows(seen.prior, [u.clusters, "value"]), u.clusters, "h_ns", by=["key"])
+    found = cc.shares(d.rows(seen.prior, [u.clusters, "y"]), u.clusters, "h_ns", by=["key"])
     top = found.group_by("key", maintain_order=True).head(CONCENTRATION_SHOWN)
     shown = [[str(k), [list(x) for x in zip(c, v, strict=True)]] for k, c, v in _listed(top).rows()]
     out = Found(shown={"concentration": {"clusters": u.clusters, "shares": shown, "threshold": CONCENTRATION}})
@@ -239,11 +235,12 @@ CHECKS = [
 
 
 def _confirmed(admission: dict[str, Any]) -> pl.DataFrame:
-    """Level shifts the independent source confirmed at admission: ``inst``, ``field``, ``end``. Admission records
-    the end of the window it asked about, the reconciliation tolerance after the shift."""
-    rows = admission.get("confirmed_shifts", [])
+    """Level shifts the independent source confirmed at admission: ``source``, ``column``, ``inst``, ``end``. Admission
+    records the end of the window it asked about, the reconciliation tolerance after the shift."""
+    confirmed = admission.get("confirmed_shifts", [])
     tol = span_ns(span(admission.get("settings", {}).get("tolerance", "0s")))
-    frame = pl.DataFrame(rows, schema={"inst": pl.String, "field": pl.String, "end": pl.String}, orient="row")
+    schema = {"source": pl.String, "column": pl.String, "inst": pl.String, "end": pl.String}
+    frame = pl.DataFrame(confirmed, schema=schema, orient="row")
     end = pl.col("end").str.to_datetime(time_zone="UTC").cast(pl.Datetime("ns", "UTC"))
     return frame.with_columns(end - pl.duration(nanoseconds=tol, time_unit="ns"))
 
@@ -253,19 +250,26 @@ def _unconfirmed(flagged: pl.DataFrame, admission: dict[str, Any]) -> pl.DataFra
     return flagged.join(confirmed, on=KEYS, how="anti")
 
 
-def _still_there(flagged: pl.DataFrame, near: pl.DataFrame, prior: Sequence[tr.Treatment]) -> pl.DataFrame:
-    """The flagged rows the treatments before this check leave in the data; ``near`` holds the rows of the data the
-    flags name, and a treatment decides about each row by itself."""
-    if flagged.is_empty() or not any(t.on == "fields" for t in prior):
+def _still_there(
+    flagged: pl.DataFrame, sources: Mapping[str, pl.DataFrame], prior: Sequence[tr.Treatment]
+) -> pl.DataFrame:
+    """The flagged cells the treatments before this check leave in the sources; each treatment decides about each
+    row by itself, so they are applied to the flagged rows alone."""
+    if flagged.is_empty() or not any(t.on == "sources" for t in prior):
         return flagged
-    left = tr.apply_all(prior, near).select(KEYS).unique()
+    keys = flagged.select("source", "inst", "event_time").unique()
+    near = {
+        name: t.join(keys.filter(pl.col("source") == name).drop("source"), on=["inst", "event_time"], how="semi")
+        for name, t in sources.items()
+    }
+    left = cells(tr.apply_all(prior, near)).select(KEYS).unique()
     return flagged.join(left, on=KEYS, how="semi", maintain_order="left")
 
 
-def _origins(short: pl.DataFrame, fields: pl.DataFrame) -> pl.DataFrame:
+def _origins(short: pl.DataFrame, sources: Mapping[str, pl.DataFrame]) -> pl.DataFrame:
     """Spans to drop for short insts; an inst a split made also covers the rows it came from, so the drop does the
     same with or without the split."""
-    raw = fields.select("inst").unique()
+    raw = rows(sources).select("inst").unique()
     base = pl.col("inst").str.replace(r"#\d+$", "").alias("_base")
     made = short.join(raw, on="inst", how="anti").with_columns(base)
     came = made.join(raw.with_columns(base), on="_base", suffix="_raw").select(

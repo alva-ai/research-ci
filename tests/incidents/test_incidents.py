@@ -22,11 +22,11 @@ def _at(text: str) -> pl.Expr:
 
 
 def _requests(ours: pl.DataFrame, venue: pl.DataFrame) -> dict[str, set[str]]:
-    _, anomalies = baseline(ours, ("close",), 5.0, 24)
-    reqs = rc.requests(ours, anomalies, 10, 10, TOL, 0)
-    ref = Reference(venue.select("inst", "field", "event_time", "value"), reqs.select("rid"))
+    _, anomalies = baseline({"candles": ours}, ("close",), 5.0, 24)
+    reqs = rc.requests({"candles": ours}, anomalies, 10, 10, TOL, 0)
+    ref = Reference({"candles": venue.select("inst", "event_time", "close")}, reqs.select("rid"))
     out: dict[str, set[str]] = {}
-    for r in rc.compare(reqs, ours, ref, TOL):
+    for r in rc.compare(reqs, {"candles": ours}, ref, TOL):
         out.setdefault(r["kind"], set()).add(r["status"])
     return out
 
@@ -36,7 +36,7 @@ def test_candles_dropped_with_hindsight_around_a_jump_are_a_gap_the_venue_does_n
     first version of the source dropped those candles. As of 03:00 nobody knew where the jump would end. The venue
     still has the candles: the gap we made must not pass as faithful, while the venue's own gap before the jump, and
     the jump itself, are kept."""
-    venue = pl.read_parquet(HERE / "hindsight-repair" / "venue.parquet")
+    venue = pl.read_parquet(HERE / "hindsight-repair" / "candles.parquet")
     window = pl.col("event_time").is_between(_at("2026-07-06T00:00:00Z"), _at("2026-07-06T07:00:00Z"))
     ours = venue.filter(~window)
     assert _requests(ours, venue) == {"sample": {"match"}, "gap": {"mismatch"}, "shift": {"match"}}
@@ -48,9 +48,9 @@ def test_a_ticker_reused_for_a_new_contract_leaves_a_gap_until_it_is_split() -> 
     April is the old contract's. Under one name the series has a three-month hole; split at the relaunch, neither
     contract has one."""
     funding = pl.read_parquet(HERE / "ticker-reuse" / "funding.parquet")
-    _, merged = baseline(funding)
+    _, merged = baseline({"funding": funding})
     gaps = merged.filter(pl.col("kind") == "gap")
     assert gaps.height == 1 and gaps["start"][0].month == 4 and gaps["end"][0].month == 7
     later = pl.col("event_time") >= _at("2026-07-14T06:00:00Z")
     split = funding.with_columns(inst=pl.when(later).then(pl.col("inst") + "#2").otherwise("inst"))
-    assert baseline(split)[1].filter(pl.col("kind") == "gap").is_empty()
+    assert baseline({"funding": split})[1].filter(pl.col("kind") == "gap").is_empty()

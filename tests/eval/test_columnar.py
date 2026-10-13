@@ -28,27 +28,31 @@ ALLOWED: dict[Key, str] = {
     ("eval/data/replay.py", "replay", "for"): "the data plugin fetches as of each cut point",
     ("eval/data/replay.py", "cut_points", "iter_rows"): "the few cut points become records, one plugin fetch each",
     ("eval/protocol.py", "universe_pit", "for"): "the universe plugin runs on the data cut at each cut point",
-    ("eval/protocol.py", "label_cases", "for"): "the label plugin runs on each worked example and on each of its "
+    ("eval/protocol.py", "outcome_cases", "for"): "the outcome plugin runs on each worked example and on each of its "
     "mutations",
-    ("eval/protocol.py", "label_truncation", "for"): "the label plugin runs on the data cut at each cut point",
+    ("eval/protocol.py", "outcome_truncation", "for"): "the outcome plugin runs on the sources cut at each cut point",
     ("eval/protocol.py", "consumer_pit", "for"): "the consumer runs on the data cut at each cut point",
-    ("eval/protocol.py", "matches_labels", "iter_rows"): "one note per component the consumer books, a handful",
-    ("eval/data/baseline.py", "_count", "iter_rows"): "names the three fields with the most flagged rows",
+    ("eval/protocol.py", "matches_outcome", "iter_rows"): "one note per component the consumer books, a handful",
+    ("eval/data/baseline.py", "_count", "iter_rows"): "names the three sources or columns with the most flagged rows",
     ("eval/data/baseline.py", "_kinds", "iter_rows"): "worked example: one count per anomaly kind",
     ("eval/data/invariants.py", "_bad_share", "iter_rows"): "worked example: one share per pair of a two-pair market",
-    ("eval/data/reconcile.py", "summarize", "iter_rows"): "one grade per field and one count per field or anomaly kind",
-    ("eval/data/reconcile.py", "_statuses", "iter_rows"): "worked example: the statuses of each field",
+    (
+        "eval/data/reconcile.py",
+        "summarize",
+        "iter_rows",
+    ): "one grade per column and one count per column or anomaly kind",
+    ("eval/data/reconcile.py", "_statuses", "iter_rows"): "worked example: the statuses of each column",
     ("stages/data/treatments.py", "apply_all", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite per "
     "treatment",
     ("stages/data/treatments.py", "apply_candidates", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite "
     "per treatment",
     ("stages/data/treatments.py", "_counts", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
+    ("stages/data/treatments.py", "_masked", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
     ("stages/data/treatments.py", "_split", "apply"): "worked example: Treatment.apply, a whole-frame rewrite",
-    ("stages/data/treatments.py", "_split", "iter_rows"): "worked example: rows per inst of a fixed five-inst source",
+    ("stages/data/treatments.py", "_split", "iter_rows"): "worked example: rows per inst of fixed five-inst sources",
     ("stages/data/treatments.py", "Numbers.per_set", "for"): "the target plugin runs once per set of treatments and "
     "key",
-    ("stages/data/treatments.py", "Numbers._build", "for"): "one label frame per key of the decisive numbers",
-    ("stages/data/treatments.py", "Numbers._values", "for"): "each label plugin runs once for all of its horizons",
+    ("stages/data/treatments.py", "Numbers._build", "for"): "one outcome frame per key of the decisive numbers",
     ("stages/data/treatments.py", "Numbers._touch", "apply"): "Treatment.apply, not pandas: one whole-frame rewrite "
     "per split the table rests on",
 }

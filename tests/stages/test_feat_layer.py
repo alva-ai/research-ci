@@ -25,9 +25,9 @@ from research_ci.validation import load as ev
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
-from toy import FEAT_EVALS, REGISTRY, TOY_NULLS, Backwards, NeverRun, lab, label_contract, strategy_contract
+from toy import FEAT_EVALS, REGISTRY, TOY_NULLS, Backwards, NeverRun, carry_contract, lab, strategy_contract
 
-FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
+FAST = Settings(workers=2, universe_cuts=2, outcome_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
 
 EVALS = FEAT_EVALS
@@ -57,7 +57,7 @@ SPREAD = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 """
 
@@ -65,7 +65,7 @@ NOISE = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     return candidates.select("t", "inst", (pl.struct("t", "inst").hash(7) / 2.0**64).alias("score"))
 """
 
@@ -73,10 +73,10 @@ PEEK = """
 import polars as pl
 
 
-def features(fields, candidates):
-    rate = fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg(pl.col("value").mean())
-    short = rate.rename({"inst": "short", "value": "s"})
-    long = rate.rename({"inst": "long", "value": "l"})
+def features(wide, candidates):
+    rate = wide.group_by("inst").agg(pl.col("funding_rate").mean())
+    short = rate.rename({"inst": "short", "funding_rate": "s"})
+    long = rate.rename({"inst": "long", "funding_rate": "l"})
     rows = candidates.join(short, on="short").join(long, on="long")
     return rows.select("t", "inst", (pl.col("s") - pl.col("l")).alias("score"))
 """
@@ -84,7 +84,7 @@ def features(fields, candidates):
 
 def _idea(tmp_path: Path, contract: str | None = None, nulls: str = NULLS, evals: str | None = EVALS) -> Idea:
     idea = Idea.init(tmp_path / "idea", settings=FAST, feat_settings=QUICK)
-    (idea.root / "contract.py").write_text(contract or label_contract())
+    (idea.root / "contract.py").write_text(contract or carry_contract())
     for name, text in (("strategy.toml", "[s]\nk = 2\n"), ("live.toml", "[s]\nk = 2\n"), ("strategy.py", "K = 2\n")):
         (idea.root / name).write_text(text)
     idea.derive_contract()
@@ -150,11 +150,11 @@ def test_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> No
     assert result["decisive"][0]["passing"] == [], "whatever the lab evals say, they pass no horizon"
     assert "ResultCard" in text and "submission 1 of 3" in text
     calibration = _checked(idea)["calibration"]
-    assert [(r["effect"], r["world"], r["ok"]) for r in calibration["rows"]] == [("carry", "floor", True)]
-    assert "calibrate  ok   carry at 8h vs floor: stand-ins die" in idea.card("data")
+    assert [(r["effect"], r["world"], r["ok"]) for r in calibration["rows"]] == [("ref.mean", "floor", True)]
+    assert "calibrate  ok   ref.mean at 8h vs floor: stand-ins die" in idea.card("data")
     assert result["calibration"]["by"] == "check" and not result["calibration"]["ran"] and "calibrate" not in text
     assert _calibrations(idea) == []
-    assert idea.next_actions()[0].reason.startswith("submission 1 FAILED: carry: does not beat random")
+    assert idea.next_actions()[0].reason.startswith("submission 1 FAILED: ref.mean: does not beat random")
     with pytest.raises(FeatError, match="same scores as submission 1"):
         idea.submit_feat(_file(idea, "noise again", NOISE))
 
@@ -167,8 +167,8 @@ def test_a_spread_passes_noise_fails_and_a_peek_is_tainted(tmp_path: Path) -> No
     decisive = result["decisive"][0]
     assert result["need"] > 2.8 and decisive["z"] >= result["need"] and decisive["outcome"] == "passed"
     assert decisive["effect"] > 0 and "gain over random" in text and "bp/entry" in text and "%/yr if rolled" in text
-    assert result["verdict"]["horizons"] == {"carry": decisive["passing"]} and decisive["passing"]
-    assert f"verdict    PASSED at carry {', '.join(decisive['passing'])}" in text
+    assert result["verdict"]["horizons"] == {"ref.mean": decisive["passing"]} and decisive["passing"]
+    assert f"verdict    PASSED at ref.mean {', '.join(decisive['passing'])}" in text
     assert [(a.who, a.command) for a in idea.next_actions()] == [("human", "rci approve --stage feat")]
     assert idea.card("feat") == text
     idea.approve("feat", approval=_relayed(idea, "feat"))
@@ -227,7 +227,7 @@ def test_a_world_that_shuffles_like_the_floor_is_judged_once_and_the_card_says_h
     decisive = result["decisive"][0]
     assert decisive["shuffles"] in (QUICK.floor_batch, QUICK.floor_reps)
     assert f"z {decisive['z']:.4g} ≥ {result['need']:.2f} · {decisive['shuffles']} shuffles · PASSED" in text
-    world = rows[("carry", "null 2")]
+    world = rows[("ref.mean", "null 2")]
     assert world["by"] == "decisive" and world["combine"] == "each" and set(world["votes"]) == {"8h", "24h"}
     assert "✓ null 2 (tail: a few symbols carry the result) judges the decisive effect" in text
 
@@ -280,7 +280,7 @@ def test_a_lab_eval_below_two_fails_the_claim_where_it_covers_and_the_card_says_
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     assert state is State.OPEN and result["decisive"][0]["passing"] == ["8h", "24h"], text
     v = result["verdict"]
-    assert v["status"] == "FAILED" and v["slots"] == [3] and v["horizons"] == {"carry": []}
+    assert v["status"] == "FAILED" and v["slots"] == [3] and v["horizons"] == {"ref.mean": []}
     row = next(r for r in result["vetoes"] if r["name"] == "ic of the reversed score")
     assert not row["passed"] and row["votes"] == {"8h": False, "24h": False}
     assert row["shuffles"] == QUICK.floor_batch < QUICK.floor_reps, "far below the bar, the veto settles early"
@@ -298,13 +298,13 @@ def test_a_lab_eval_below_two_fails_the_claim_where_it_covers_and_the_card_says_
 
 
 def test_a_horizon_no_lab_eval_covers_does_not_pass(tmp_path: Path) -> None:
-    feat = FEAT_EVALS.replace('carry")', 'carry", horizons=("24h",))')
+    feat = FEAT_EVALS.replace('outcome")', 'outcome", horizons=("24h",))')
     idea = _idea(tmp_path, evals=feat)
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     assert state is State.REVIEW and result["decisive"][0]["passing"] == ["8h", "24h"], text
-    assert result["verdict"]["horizons"] == {"carry": ["24h"]}
-    assert "carry 8h: beats random, but slot 3 rejects it: no lab eval covers 8h" in result["verdict"]["notes"]
-    assert "verdict    PASSED at carry 24h" in text
+    assert result["verdict"]["horizons"] == {"ref.mean": ["24h"]}
+    assert "ref.mean 8h: beats random, but slot 3 rejects it: no lab eval covers 8h" in result["verdict"]["notes"]
+    assert "verdict    PASSED at ref.mean 24h" in text
 
 
 def test_a_null_world_that_cannot_run_is_refused_without_a_trial(tmp_path: Path) -> None:
@@ -319,17 +319,18 @@ def test_a_decisive_test_that_cannot_be_calibrated_blocks_the_data_check(tmp_pat
     data stays OPEN with the reason."""
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.backwards": Backwards})
     idea = Idea.init(tmp_path / "idea", settings=FAST, feat_settings=QUICK)
-    (idea.root / "contract.py").write_text(label_contract().replace("'ref.mean'", "'toy.backwards'"))
+    (idea.root / "contract.py").write_text(carry_contract().replace("'ref.mean'", "'toy.backwards'"))
     idea.derive_contract()
     idea.approve("contract")
     lab(idea.root)
     spec, text = idea.check_data()
-    assert spec["verdict"]["status"] == "blocked" and "FAIL carry at 8h vs floor" in text
+    assert spec["verdict"]["status"] == "blocked" and "FAIL toy.backwards at 8h vs floor" in text
     assert spec["verdict"]["notes"][0].startswith(
-        "the decisive test cannot be calibrated on this data (decisive test calibration, floor): carry in the floor"
+        "the decisive test cannot be calibrated on this data (decisive test calibration, floor): toy.backwards in the "
+        "floor"
     )
     (row,) = spec["calibration"]["rows"]
-    assert (row["effect"], row["world"], row["ok"]) == ("carry", "floor", False) and row["planted_lives"] < 0.8
+    assert (row["effect"], row["world"], row["ok"]) == ("toy.backwards", "floor", False) and row["planted_lives"] < 0.8
     assert idea.status().stage("data").state is State.OPEN
     reason = idea.next_actions()[0].reason
     assert reason.startswith("blocked: the decisive test cannot be calibrated") and "`rci contract derive`" in reason
@@ -341,16 +342,16 @@ def test_feat_calibrates_again_when_what_the_data_check_calibrated_changed(tmp_p
     idea = _idea(tmp_path)
     other = Idea(idea.root, settings=FAST, feat_settings=replace(QUICK, calibration_reps=41))
     result, text, _ = other.submit_feat(_file(idea, "noise", NOISE))
-    assert result["calibration"]["ran"] and "calibrate  ok   carry at 8h vs floor" in text
+    assert result["calibration"]["ran"] and "calibrate  ok   ref.mean at 8h vs floor" in text
     assert len(_calibrations(idea)) == 1
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "ref.mean": Backwards})
     with pytest.raises(WorkflowError, match="failed its calibration.*a planted signal lived.*no submission was spent"):
         idea.submit_feat(_file(idea, "spread", SPREAD))
-    assert idea.next_actions()[0].reason.startswith("calibration failed: carry in the floor world at 8h")
+    assert idea.next_actions()[0].reason.startswith("calibration failed: ref.mean in the floor world at 8h")
     with pytest.raises(WorkflowError, match="no submission was spent"):
         idea.submit_feat(_file(idea, "spread", SPREAD))
     assert len(_calibrations(idea)) == 2 and idea.ledger.n_trials("feat") == 1
-    assert "FAIL carry at 8h vs floor" in idea.results()[0]
+    assert "FAIL ref.mean at 8h vs floor" in idea.results()[0]
 
 
 def test_what_a_submission_used_is_recorded_and_checked_again_when_a_person_accepts_it(tmp_path: Path) -> None:
@@ -367,13 +368,13 @@ def test_what_a_submission_used_is_recorded_and_checked_again_when_a_person_acce
     assert approval["deps"]["features"] == deps["features"] and "feat_submission" in approval["deps"]
 
 
-def test_a_strategy_contract_judges_its_label_effect_and_never_runs_the_backtest(tmp_path: Path, monkeypatch) -> None:
+def test_a_strategy_contract_judges_its_effect_and_never_runs_the_backtest(tmp_path: Path, monkeypatch) -> None:
     """Improving an existing strategy: its backtester gives the decision times, and only the algo layer runs it."""
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.carry": NeverRun})
     idea = _idea(tmp_path, contract=strategy_contract(), nulls=NULLS.replace('"tail"', '"level"'))
     result, text, state = idea.submit_feat(_file(idea, "spread", SPREAD))
     decisive = result["decisive"][0]
-    assert (decisive["kind"], decisive["target"]) == ("label", "ref.mean"), text
+    assert (decisive["kind"], decisive["target"]) == ("outcome", "ref.mean"), text
     assert decisive["outcome"] == "passed" and state is State.REVIEW, text
 
 
@@ -381,22 +382,19 @@ EAGER = """
 import polars as pl
 
 
-def features(fields, candidates):
-    assert isinstance(fields, pl.DataFrame) and isinstance(candidates, pl.DataFrame)
-    rate = fields.filter(pl.col("field") == "funding_rate").select(
-        "inst", pl.col("available_at").alias("at"), "value"
-    ).sort("at")
-    rows = candidates.sort("t")
+def features(wide, candidates):
+    assert isinstance(wide, pl.DataFrame) and isinstance(candidates, pl.DataFrame)
+    rate = wide.select("t", "inst", "funding_rate")
+    rows = candidates
     for leg in ("long", "short"):
-        table = rate.rename({"inst": leg, "at": f"{leg}_at", "value": leg + "_rate"})
-        rows = rows.join_asof(table, left_on="t", right_on=f"{leg}_at", by=leg, check_sortedness=False)
+        rows = rows.join(rate.rename({"inst": leg, "funding_rate": leg + "_rate"}), on=["t", leg], how="left")
     return rows.select("t", "inst", (pl.col("short_rate") - pl.col("long_rate")).alias("score"))
 """
 
-LAZY = EAGER.replace("fields.filter(", "fields.lazy().filter(").replace("candidates.sort(", "candidates.lazy().sort(")
+LAZY = EAGER.replace("wide.select(", "wide.lazy().select(").replace("rows = candidates\n", "rows = candidates.lazy()\n")
 
 PANDAS = """
-def features(fields, candidates):
+def features(wide, candidates):
     frame = candidates.to_pandas()
     frame["score"] = frame.groupby("t")["spread_h"].rank()
     return frame[["t", "inst", "score"]]
@@ -407,14 +405,14 @@ def test_features_get_dataframes_and_may_return_polars_lazy_or_pandas(tmp_path: 
     idea = _idea(tmp_path)
     eager, _ = idea.explore_feat(_file(idea, "eager", EAGER))
     assert [f["status"] for f in eager["floors"]] == ["pass", "pass"] and eager["scores"]["share"] > 0.9
-    assert "fields.lazy()" in LAZY and "candidates.lazy()" in LAZY
+    assert "wide.lazy()" in LAZY and "candidates.lazy()" in LAZY
     lazy, _ = idea.explore_feat(_file(idea, "lazy", LAZY))
     assert [f["status"] for f in lazy["floors"]] == ["pass", "pass"]
     assert lazy["scores"]["hash"] == eager["scores"]["hash"]
     pandas, _ = idea.explore_feat(_file(idea, "pandas", PANDAS))
     assert [f["status"] for f in pandas["floors"]] == ["pass", "pass"]
     example = (idea.root / "research" / "example.py").read_text()
-    mine = example.replace('FIELD = "TODO"', 'FIELD = "funding_rate"').splitlines()[2:]
+    mine = example.replace('COLUMN = "TODO"', 'COLUMN = "funding_rate"').splitlines()[2:]
     explored, _ = idea.explore_feat(_file(idea, "mine", "\n".join(mine)))
     assert explored["scores"]["rows"] == 0, "the example scores insts; the toy's candidates are pairs"
 
@@ -459,7 +457,7 @@ ROWS = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     frame = candidates.sort("t", "inst")
     scores = [s for _, _, s in frame.select("t", "inst", "spread_h").iter_rows()]
     return frame.select("t", "inst", pl.Series("score", scores))
@@ -503,9 +501,9 @@ def test_what_is_refused_before_anything_runs_says_how_to_fix_it(tmp_path: Path)
     spread = _file(idea, "spread", SPREAD)
     refusals = [
         (idea.root / "research" / "example.py", "is still the example; write your own"),
-        (idea.root / "research" / "missing.py", "does not exist; a features file defines features(fields, candidates)"),
+        (idea.root / "research" / "missing.py", "does not exist; a features file defines features(wide, candidates)"),
         (_file(idea, "columns", SPREAD.replace('alias("score")', 'alias("s")')), "features returned t, inst, s"),
-        (_file(idea, "fails", SPREAD.replace("spread_h", "spread_x")), "features(fields, candidates) failed"),
+        (_file(idea, "fails", SPREAD.replace("spread_h", "spread_x")), "features(wide, candidates) failed"),
         (_file(idea, "nothing", "import polars as pl\n"), "defines no function features"),
     ]
     for path, said in refusals:
@@ -523,7 +521,7 @@ def test_what_is_refused_before_anything_runs_says_how_to_fix_it(tmp_path: Path)
         idea.submit_feat(spread)
     (idea.root / "feat.py").write_text(EVALS)
     (idea.root / "nulls" / "feat.py").write_text(NULLS.replace('"time", clusters', '"venue", clusters'))
-    with pytest.raises(FeatError, match=r"no column venue; its columns are .*symbol, t, venue_pair, y, y_flow"):
+    with pytest.raises(FeatError, match=r"no column venue; its columns are .*t, venue_pair, y, y_end, y_flow, y_price"):
         idea.submit_feat(spread)
     assert idea.status().stage("feat").trials == 0 and _calibrations(idea) == []
 
@@ -631,7 +629,7 @@ PARTIAL = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     score = pl.when(pl.col("symbol") != "Z").then(pl.col("spread_h"))
     return candidates.select("t", "inst", score.alias("score"))
 """
@@ -646,7 +644,7 @@ def scored_y(table):
     return table.filter(pl.col("score").is_not_null()).group_by("t").agg(pl.col("y").mean().alias("value"))
 
 
-CASES = [Case("the mean label of the scored rows", scored_y, 0.2, given=hand({"score": [1.0, None, 2.0],
+CASES = [Case("the mean outcome of the scored rows", scored_y, 0.2, given=hand({"score": [1.0, None, 2.0],
                                                                                 "y": [0.1, 0.9, 0.3]}))]
 EVALS = [Eval(scored_y, h0="the scored rows earn what every row earns")]
 """
@@ -669,7 +667,7 @@ HALF_NOISE = """
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     noise = pl.struct("t", "inst").hash(7) / 2.0**64
     half = pl.struct("t", "inst").hash(3) % 2 == 0
     return candidates.select("t", "inst", pl.when(half).then(noise).alias("score"))
@@ -684,3 +682,35 @@ def test_random_scores_on_half_the_candidates_do_not_beat_random(tmp_path: Path)
     result, text, _ = idea.submit_feat(_file(idea, "half", HALF_NOISE))
     assert 0.4 < result["scores"]["share"] < 0.6
     assert result["verdict"]["status"] == "FAILED" and result["decisive"][0]["z"] < 2.0, text
+
+
+ON_A_PART = """
+import polars as pl
+
+from research_ci.api import Case, Eval
+from evals.toy import FOUR, funding_ic
+
+
+def ic(table):
+    rows = table.filter(pl.col("y").is_not_null())
+    return rows.group_by("t").agg(pl.corr("score", "y", method="spearman").alias("value")).sort("t")
+
+
+CASES = [Case("one swap in four", ic, 0.8, given=FOUR.with_columns(y=pl.col("y_flow")))]
+EVALS = [
+    Eval(funding_ic, h0="the scores do not rank the flow part of the outcome"),
+    Eval(ic, name="flow ic", label="y_flow", h0="the scores do not rank the flow"),
+]
+"""
+
+
+def test_an_eval_reads_a_part_of_the_outcome_as_y_when_its_label_names_it(tmp_path: Path) -> None:
+    idea = _idea(tmp_path, evals=ON_A_PART)
+    result, text, _ = idea.submit_feat(_file(idea, "spread", SPREAD))
+    rows = {r["name"]: r for r in result["vetoes"] if r["world"] == "floor"}
+    flow, funding = rows["flow ic"], rows["funding_ic"]
+    assert (flow["label"], funding["label"]) == ("y_flow", "y")
+    assert [h["real"] for h in flow["horizons"]] == pytest.approx([h["real"] for h in funding["horizons"]])
+    (idea.root / "feat.py").write_text(ON_A_PART.replace('label="y_flow"', 'label="y_basis"'))
+    with pytest.raises(FeatError, match=r"label 'y_basis' is not the outcome or one of its parts \(y, y_price, y_flow"):
+        idea.submit_feat(_file(idea, "doubled", SPREAD.replace('pl.col("spread_h")', '(2 * pl.col("spread_h"))')))

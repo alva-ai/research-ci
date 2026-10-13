@@ -24,7 +24,7 @@ SYMBOLS = {"symbol": ["a", "a", "b", "c", "d"], "y": [0.9, -0.7, 0.1, -0.2, 0.05
 
 CASES = [
     Case(
-        "leaves out the symbol with the largest mean absolute label",
+        "leaves out the symbol with the largest mean absolute outcome",
         lambda: sorted(without_top(hand(SYMBOLS), "symbol", 0.25)["symbol"].unique().to_list()),
         ["b", "c", "d"],
     ),

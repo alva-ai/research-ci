@@ -15,46 +15,42 @@ from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State
 from toy import SHAPED_FEAT, SHAPED_H0, shaped_contract, shaped_lab
 
-FAST = Settings(workers=2, universe_cuts=2, label_cuts=1)
+FAST = Settings(workers=2, universe_cuts=2, outcome_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
 REGIME = """
 import polars as pl
 
 
-def regime(fields, candidates):
-    known = fields.filter(pl.col("field") == "regime").select("inst", pl.col("available_at").alias("at"), "value")
-    rows = candidates.sort("t")
-    return rows.join_asof(known.sort("at"), left_on="t", right_on="at", by="inst", check_sortedness=False)
+def regime(wide, candidates):
+    return candidates.join(wide.select("t", "inst", pl.col("regime").alias("value")), on=["t", "inst"])
 """
 FUTURE = """
 import polars as pl
 
 
-def future(fields, candidates):
-    close = fields.filter(pl.col("field") == "close").sort("available_at")
-    later = pl.col("value").shift(-24).over("inst") / pl.col("value") - 1
-    ahead = close.select("inst", pl.col("available_at").alias("t"), later.alias("value"))
-    return candidates.join(ahead, on=["t", "inst"])
+def future(wide, candidates):
+    later = pl.col("close").shift(-24).over("inst") / pl.col("close") - 1
+    return candidates.join(wide.select("t", "inst", later.alias("value")), on=["t", "inst"])
 """
 FEATURES = {
     "series": {
-        "planted": REGIME + "\n\ndef features(fields, candidates):\n"
-        "    return regime(fields, candidates).select('t', 'inst', (pl.col('value') * SCALE).alias('score'))\n",
-        "noise": "import polars as pl\n\n\ndef features(fields, candidates):\n"
+        "planted": REGIME + "\n\ndef features(wide, candidates):\n"
+        "    return regime(wide, candidates).select('t', 'inst', (pl.col('value') * SCALE).alias('score'))\n",
+        "noise": "import polars as pl\n\n\ndef features(wide, candidates):\n"
         "    noise = pl.struct('t', 'inst').hash(7) / 2.0**64 - 0.5\n"
         "    return candidates.select('t', 'inst', noise.alias('score'))\n",
-        "peek": FUTURE + "\n\ndef features(fields, candidates):\n"
-        "    return future(fields, candidates).select('t', 'inst', pl.col('value').alias('score'))\n",
+        "peek": FUTURE + "\n\ndef features(wide, candidates):\n"
+        "    return future(wide, candidates).select('t', 'inst', pl.col('value').alias('score'))\n",
     },
     "events": {
-        "planted": REGIME + "\n\ndef features(fields, candidates):\n"
-        "    rows = regime(fields, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
+        "planted": REGIME + "\n\ndef features(wide, candidates):\n"
+        "    rows = regime(wide, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
         "    return rows.select('t', 'inst', pl.lit(SCALE).alias('score'))\n",
-        "noise": "import polars as pl\n\n\ndef features(fields, candidates):\n"
+        "noise": "import polars as pl\n\n\ndef features(wide, candidates):\n"
         "    rows = candidates.filter(pl.struct('t', 'inst').hash(7) / 2.0**64 < 0.06)\n"
         "    return rows.select('t', 'inst', pl.lit(1.0).alias('score'))\n",
-        "peek": FUTURE + "\n\ndef features(fields, candidates):\n"
-        "    rows = future(fields, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
+        "peek": FUTURE + "\n\ndef features(wide, candidates):\n"
+        "    rows = future(wide, candidates).filter((pl.col('value') > 0) & (pl.col('t').dt.hour() % 8 == 0))\n"
         "    return rows.select('t', 'inst', pl.lit(1.0).alias('score'))\n",
     },
 }
@@ -92,7 +88,8 @@ def test_a_planted_signal_passes_noise_fails_a_peek_is_tainted_and_lab_evals_and
     contract = idea.card("contract")
     assert f"shape      {shape}: " in contract and "floor world ShiftInTime(min_shift=horizon)" in contract
     assert "(engine floor: chance)" in contract
-    assert "calibrate  ok   return at 8h vs floor: stand-ins die" in idea.card("data")
+    target = "ref.timing" if shape == "series" else "ref.mean"
+    assert f"calibrate  ok   {target} at 8h vs floor: stand-ins die" in idea.card("data")
 
     result, text, state = idea.submit_feat(_file(idea, shape, "noise"))
     assert state is State.OPEN and result["verdict"]["status"] == "FAILED", text

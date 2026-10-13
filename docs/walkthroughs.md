@@ -2,7 +2,7 @@
 
 > **Status:** everything below runs today. The signal and algo layers and the checkpoints are planned.
 
-One idea, from an empty directory to a passed feat layer. Every block is what the command printed, with only the features paths shortened. The idea runs on the toy plugins of the engine's tests: `toy.data` (hourly closes and funding rates for three symbols on three venues) and `toy.pairs` (every venue pair of a symbol, long the venue with the lower latest funding rate; `spread_h` is the latest spread per hour). A lab registers its own plugins the same way. The toy data ends in January 2026, so the cards warn that it is old.
+One idea, from an empty directory to a passed feat layer. Every block is what the command printed, with only the features paths shortened. The idea runs on the toy plugins of the engine's tests: `toy.data`, two sources for three symbols on three venues (`candles`, an hourly `close`, and `funding`, a `funding_rate` and its `funding_interval_hours` every 8 hours), and `toy.pairs` (every venue pair of a symbol, read from `wide`, long the venue with the lower latest funding rate; `spread_h` is the latest spread per hour). The printed blocks were recorded before sources, `wide`, and the outcome replaced the field table and labels: today's commands print sources, columns, and the outcome where these print fields and labels, while the files the agent writes are shown as they are written now. A lab registers its own plugins the same way. The toy data ends in January 2026, so the cards warn that it is old.
 
 The contract sets the floor; the loops of data and feat set how far it goes. Only the contract needs a person before work starts: it defines the question and the one bar, the decisive test. Every layer after it is a loop the agent runs on its own, and a person looks at the result after the loop and approves it, or not. The agent here starts with no context but the idea's name: everything it needs is on the paths it takes, in `START.md`, `rci next`, `rci plugins`, `rci methods`, and the messages of what the engine refuses or warns about.
 
@@ -77,7 +77,7 @@ $ rci next -i ideas/carry
 agent      rci contract derive                  fill in contract.py (START.md says how; `rci plugins` lists the plugins, their options and fields), then derive the contract
 ```
 
-`rci plugins` lists what a contract can name, read from the installed code: each plugin's kind, where it goes in the contract, its options with their defaults, and what it declares. The agent does not need to read a plugin's source to know that `toy.data` gives `close` and `funding_rate`, or what `ref.mean` takes:
+`rci plugins` lists what a contract can name, read from the installed code: each plugin's kind, where it goes in the contract, its options with their defaults, and what it declares. The agent does not need to read a plugin's source to know that `toy.data` gives a source `candles` with `close` and a source `funding` with `funding_rate`, or what `ref.mean` takes:
 
 ```text
 $ rci plugins
@@ -121,27 +121,28 @@ The claim, the decisive effect, and the alternative explanations are written bef
 
 ```python
 # ideas/carry/contract.py
-from research_ci.api import Alternative, Contract, Effect, Execution, Label, Universe, Use
+from research_ci.api import Alternative, Contract, Effect, Execution, Universe, Use
 
 CONTRACT = Contract(
     claim="Cross-venue funding spreads persist long enough to pay the round trip",
-    decisive=(Effect(on="carry", target=Use("ref.mean", {"cluster": "symbol", "top": 0.34})),),
+    decisive=(Effect(target=Use("ref.mean", {"cluster": "symbol", "top": 0.34})),),
     alternatives=(Alternative("tail", "a few symbols with extreme funding carry the whole result"),),
     used=(),
     data="toy.data",
     costs=Use("ref.flat_costs", {"commission_bps": 1, "slippage_bps": 1, "legs": 2}),
     execution=Execution(every="1h", note="decide on the hour; fill both legs at the close known then"),
     universe=Universe("toy.pairs", clusters="symbol", groups=("venue_pair",)),
-    labels=(Label("carry", Use("ref.carry", {"flow": "funding_rate"}), horizons=("8h", "24h")),),
+    outcome=Use("ref.carry", {"flow": "funding_rate"}),
+    horizons=("8h", "24h"),
     explore_end="2026-01-15T00:00:00Z",
     seal_end="2026-01-20T00:00:00Z",
     budget=3,
 )
 ```
 
-The decisive effect names its target: at each decision time, the mean carry after the round trip of the third of the candidates with the highest scores, each symbol weighted once. Feat will pass it when, with the submitted scores, it beats random scores significantly, and no lab eval or null world rejects it. The default target, `ref.mean` without `top`, averages every candidate whatever the scores say, so it could not judge any features; derive blocks a contract whose decisive number cannot move with the scores, and the contract stays OPEN with the reason. A plugin name that is not installed, or options a plugin rejects, stop derive with the close names or the plugin's signature.
+The outcome is what a unit position in each pair earns over each horizon, gross: `ref.carry` gives `y`, its price part `y_price` and its funding part `y_flow`, and `y_end`, the last time it reads; without `horizons` the contract would take the decision period times 1, 4 and 16. The decisive effect names its target, and goes by its name: at each decision time, the mean carry after the round trip of the third of the candidates with the highest scores, each symbol weighted once. Feat will pass it when, with the submitted scores, it beats random scores significantly, and no lab eval or null world rejects it. The default target, `ref.mean` without `top`, averages every candidate whatever the scores say, so it could not judge any features; derive blocks a contract whose decisive number cannot move with the scores, and the contract stays OPEN with the reason. A plugin name that is not installed, or options a plugin rejects, stop derive with the close names or the plugin's signature.
 
-`rci contract derive` loads the plugins, stores the data in the vault, runs the protocol tests on the universe and the label, and computes power from the dispersion of the target alone:
+`rci contract derive` loads the plugins, stores the sources in the vault, runs the protocol tests on the universe and the outcome, and computes power from the dispersion of the target alone:
 
 ```text
 $ rci contract derive -i ideas/carry
@@ -181,7 +182,7 @@ up for review; a person approves it with `rci approve --stage contract`
 ```
 
 - `decisive`: the target with its options, next to the median of 9 candidates on the `universe` line, so a person sees that the top third is 3 candidates.
-- `checks`: the universe gives the same candidates on data cut at three times and does not change when later values change; the label matches its worked examples, moves when its inputs move, and reads nothing after `t + h`; the target gives other numbers for other scores. A label option that names no field of the data would add a line listing the fields there are.
+- `checks`: the universe gives the same candidates on the sources cut at three times, with `wide` built again on them, and does not change when later values change; the outcome matches its worked examples, moves when its inputs move, and reads nothing after `t + h`; the target gives other numbers for other scores. An outcome option that names no column of the sources would add a line listing the columns there are.
 - `power`: the smallest gain over random the data can detect, from the dispersion of the target alone: 5.9 bp per entry at 8h, about 65% a year if entered back to back, and 19.5 bp at 24h. `ref.mean` declares what one value is (`per = "entry"`) and that its values roll over a year (`rolls = True`); a target without them gets raw numbers. The noise can be measured, so the contract is DECIDABLE and goes up for review. The card shows only the scale of the noise, never where the target sits.
 - `alts`: the engine adds `chance` and `timing` to the idea's own alternative; at feat the floor world answers them, and the idea's `tail` needs a null world of its own: feat refuses a submission until it has one, and that world can veto.
 - `warnings`: Z, one of three symbols, carries 55% of the noise at 24h; derive only warns, and so does the data check.
@@ -283,7 +284,7 @@ CASES = [
 #          EVALS = [Eval(flags, h0="TODO: such as: every value of the field is above zero", on_fail="block")]
 ```
 
-The toy's pairs earn their carry from both legs' prices, and a leg whose close is at zero has no price to carry. The agent writes one lab eval for that, in a module of its own with its case worked by hand, and lists it in `data.py` with the H0 it rejects and `on_fail="block"`: a single close at zero blocks the data, rather than being masked:
+The toy's pairs earn their carry from both legs' prices, and a leg whose close is at zero has no price to carry. The agent writes one lab eval for that, in a module of its own with its case worked by hand, and lists it in `data.py` with the H0 it rejects and `on_fail="block"`: a single close at zero blocks the data, rather than being masked. A data eval reads what its parameters name: `sources`, each source at its own cadence, as here, or `wide`, the sources as of each decision time, or both; it returns cells of a source (`source`, `inst`, `event_time`, and `column` when it names one) or rows of `wide` (`t`, `inst`):
 
 ```python
 # ideas/carry/evals/closes.py
@@ -296,12 +297,13 @@ import polars as pl
 from research_ci.api import Case
 
 T = datetime(2026, 1, 1, tzinfo=UTC)
-TWO = pl.DataFrame({"inst": ["a:X", "a:X"], "field": ["close", "close"], "event_time": [T, T], "value": [101.0, 0.0]})
+TWO = {"candles": pl.DataFrame({"inst": ["a:X", "a:X"], "event_time": [T, T], "close": [101.0, 0.0]})}
 
 
-def closes_at_zero(fields: pl.DataFrame) -> pl.DataFrame:
-    """The closes at zero or below, as the rows to flag."""
-    return fields.filter((pl.col("field") == "close") & (pl.col("value") <= 0)).select("inst", "field", "event_time")
+def closes_at_zero(sources: dict[str, pl.DataFrame]) -> pl.DataFrame:
+    """The closes at zero or below, as the cells to flag."""
+    zero = sources["candles"].filter(pl.col("close") <= 0)
+    return zero.select(pl.lit("candles").alias("source"), "inst", "event_time", pl.lit("close").alias("column"))
 
 
 CASES = [Case("of a close above zero and one at zero, the one at zero is flagged", closes_at_zero, 1, given=TWO)]
@@ -326,7 +328,7 @@ ideas/carry/evals/closes.py
 pits that a data eval claims in covers, built in or in PITS, are planted by `rci data check`, on the idea's data
 ```
 
-`rci data check` runs the lab eval's tests first, before anything heavy (slot 4). Then the source's admission, the first time this plugin, with these options and this code, is used anywhere on the machine: the rows replayed as of past times must agree with the full fetch, an independent source must agree on rows the engine picks, and two canaries make sure both checks can fail. That is fidelity: the rows are what the venue reported. Then it checks fitness, whether faithful rows can be used for this research, with the mandatory default list in `stages/data/defaults.py` (freshness, level shifts the independent source did not confirm, level sanity, identity breaks, coverage, the hedge guard on legs of one asset, and influence concentration) and the lab evals of `data.py`. Last, it calibrates the decisive test on the treated data, before any features exist. The DataCard is laid out by slot; no one has admitted `toy.data` yet, so slot 1 shows the admission under `source`:
+`rci data check` runs the lab eval's tests first, before anything heavy (slot 4). Then the source's admission, the first time this plugin, with these options and this code, is used anywhere on the machine: the rows replayed as of past times must agree with the full fetch, an independent source must agree on cells the engine picks, each about one column of one source, and two canaries make sure both checks can fail. That is fidelity, source by source and column by column at each source's own cadence: the rows are what the venue reported. Then it checks fitness, whether faithful rows can be used for this research, with the mandatory default list in `stages/data/defaults.py` (freshness, level shifts the independent source did not confirm, level sanity, identity breaks, coverage, the hedge guard on legs of one asset, and influence concentration) and the lab evals of `data.py`. Last, it calibrates the decisive test on the treated data, before any features exist. The DataCard is laid out by slot; no one has admitted `toy.data` yet, so slot 1 shows the admission under `source`:
 
 ```text
 $ rci data check -i ideas/carry
@@ -377,14 +379,14 @@ card 4de2b4ef
 up for review; a person approves it with `rci approve --stage data`
 ```
 
-- `1 floor`: the source's admission, the field grades, the treatments with their influence on the decisive number (none here), the power before and after, and the calibration. `calibrate` tests the decisive test itself, in the floor world (the scores shuffled across symbols at each decision time): a stand-in that carries only each decision time's level must die at least 92% of the time, since it may beat the floor only by chance, and a signal planted at 1.5 MDE must live at least 80% of the time. It needs the contract, the treated data, and the labels, but no scores, so it runs here; a target that cannot tell them apart blocks the data check, and the agent changes the target before writing any features. Feat submissions reuse it.
-- `2 engine lists`: the default checks, each marked `default`; a library eval that `data.py` listed would follow, marked `library`. The `clusters` line shows how much of the label's noise, over all nine candidates, goes away without each symbol: Z carries 55% at 24h. Above half, the card warns and does nothing else: broken data is what the identity and sanity checks catch, an effect can sit in one symbol too, and with only three symbols one of them often carries this much.
+- `1 floor`: the source's admission, the column grades (each column as `<source>.<column>`), the treatments with their influence on the decisive number (none here), the power before and after, and the calibration. `calibrate` tests the decisive test itself, in the floor world (the scores shuffled across symbols at each decision time): a stand-in that carries only each decision time's level must die at least 92% of the time, since it may beat the floor only by chance, and a signal planted at 1.5 MDE must live at least 80% of the time. It needs the contract, the treated sources, and the outcomes, but no scores, so it runs here; a target that cannot tell them apart blocks the data check, and the agent changes the target before writing any features. Feat submissions reuse it.
+- `2 engine lists`: the default checks, each marked `default`; a library eval that `data.py` listed would follow, marked `library`. The `clusters` line shows how much of the outcome's noise, over all nine candidates, goes away without each symbol: Z carries 55% at 24h. Above half, the card warns and does nothing else: broken data is what the identity and sanity checks catch, an effect can sit in one symbol too, and with only three symbols one of them often carries this much.
 - `3 lab evals`: each lab eval with its H0, what it flagged, and what its `on_fail` did with it. With `on_fail="block"` the eval judges the data after the treatments found before it, here none, so it vetoes only what they leave; a flagged row would make the card BLOCKED, naming the eval, its H0, how many rows, and a few of them.
-- `4 tests of lab evals`: how each lab eval stood before the data was fetched, and the pits it claims to cover, planted in clean copies of the data (none here).
+- `4 tests of lab evals`: how each lab eval stood before the data was fetched, and the pits it claims to cover, planted in a column of clean copies of the sources (none here).
 
-The toy data needs no treatment, and the card is READY. When a check flags rows, the card lists each treatment with its influence on the decisive number in MDE units; above half an MDE a person decides, and `rci data check --keep "<name>"` leaves a treatment unapplied. A blocked check keeps the layer OPEN with the reason.
+The toy data needs no treatment, and the card is READY. When a check flags something, the card lists each treatment, cells of a source masked to null, an inst dropped or split in every source, or candidate rows dropped, with its influence on the decisive number in MDE units; above half an MDE a person decides, and `rci data check --keep "<name>"` leaves a treatment unapplied. A blocked check keeps the layer OPEN with the reason.
 
-A person approves the card. That freezes the check, its calibration, and the treated data, which is all feat reads, and, since this is the first approval of data from `toy.data`, admits the source for every idea on the machine, in the shared sources ledger:
+A person approves the card. That freezes the check, its calibration, the treated sources, and `wide` built on them on the contract's decision times, which is all feat reads, and, since this is the first approval of data from `toy.data`, admits the source for every idea on the machine, in the shared sources ledger:
 
 ```text
 $ rci next -i ideas/carry
@@ -555,7 +557,7 @@ null world: nulls/feat.py: NULLS = [Null(explains, world, evals=(...))]; every a
   for example: NULLS = [Null("<id>", PermuteWithin("time", clusters="<cluster column>", block="horizon"), evals=("<eval>",))]
 ```
 
-Here the world for `tail` shuffles the scores across whole symbols at each decision time while the labels stay, and judges the default `rank ic without top symbol`, which leaves out the symbol with the largest outcomes; it must reach `z ≥ 2` there too:
+Here the world for `tail` shuffles the scores across whole symbols at each decision time while the outcomes stay, and judges the default `rank ic without top symbol`, which leaves out the symbol with the largest outcomes; it must reach `z ≥ 2` there too:
 
 ```python
 # ideas/carry/nulls/feat.py
@@ -566,7 +568,7 @@ NULLS = [
 ]
 ```
 
-A features file defines `features(fields, candidates)`: one score per candidate row, for every decision time at once, from the frozen data. Both arrive as polars DataFrames, so eager polars code and pandas run as they are; `features` returns a polars DataFrame or LazyFrame, or a pandas DataFrame, and labels never reach it. `research/example.py`, from `rci init`, shows the shape and the usual patterns, polars first, with `.lazy()` and `.collect()` around a pipeline that polars plans as a whole, and carries a marker line:
+A features file defines `features(wide, candidates)`: one score per candidate row, for every decision time at once, from `wide`, the frozen sources as of each decision time, one row per decision time and inst with every source's columns and `age_<source>`, how long before `t` that row became known. Both arrive as polars DataFrames, so eager polars code and pandas run as they are; `features` returns a polars DataFrame or LazyFrame, or a pandas DataFrame, and outcomes never reach it. A row of `wide` holds only what was known by its `t`, so the engine's check that nothing is read ahead builds `wide` again on the sources cut at a few decision times and runs the features on it. `research/example.py`, from `rci init`, shows the shape and the usual patterns, polars first, with `.lazy()` and `.collect()` around a pipeline that polars plans as a whole, and carries a marker line:
 
 ```text
 $ cat ideas/carry/research/example.py
@@ -620,7 +622,7 @@ The engine refuses to run the example as it is. Any other file runs: research co
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     rows = candidates.sort("t", "inst")
     scores = [(t, e, s) for t, e, s in rows.select("t", "inst", "spread_h").iter_rows()]
     return pl.DataFrame(scores, schema=["t", "inst", "score"], orient="row")
@@ -648,7 +650,7 @@ Both cards have a `cost` line: the wall time of the full call and of the calls o
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
 ```
 
@@ -659,10 +661,10 @@ def features(fields, candidates):
 import polars as pl
 
 
-def features(fields, candidates):
-    rate = fields.filter(pl.col("field") == "funding_rate").group_by("inst").agg(pl.col("value").mean())
-    short = rate.rename({"inst": "short", "value": "s"})
-    long = rate.rename({"inst": "long", "value": "l"})
+def features(wide, candidates):
+    rate = wide.group_by("inst").agg(pl.col("funding_rate").mean())
+    short = rate.rename({"inst": "short", "funding_rate": "s"})
+    long = rate.rename({"inst": "long", "funding_rate": "l"})
     rows = candidates.join(short, on="short").join(long, on="long")
     return rows.select("t", "inst", (pl.col("s") - pl.col("l")).alias("score"))
 ```
@@ -685,7 +687,7 @@ Submitted, it would be TAINTED and cost a trial. The agent submits random scores
 import polars as pl
 
 
-def features(fields, candidates):
+def features(wide, candidates):
     return candidates.select("t", "inst", (pl.struct("t", "inst").hash(7) / 2.0**64).alias("score"))
 ```
 

@@ -33,7 +33,7 @@ from research_ci.workflow.templates import (
 )
 
 LEDGER_FILE = "ledger.jsonl"
-FORMAT = 2
+FORMAT = 3
 DATA = "data"
 FEAT = "feat"
 DEFAULT_BUDGET = 20

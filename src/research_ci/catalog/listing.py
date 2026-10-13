@@ -22,7 +22,7 @@ from research_ci.runner.plugins import Registry, annotation, signature
 KINDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("data", ("fetch",)),
     ("universe", ("candidates",)),
-    ("label", ("values", "cases")),
+    ("outcome", ("values", "cases")),
     ("target", ("reduce",)),
     ("cost", ("round_trip", "fees")),
     ("consumer", ("timing", "run")),
@@ -36,8 +36,9 @@ METHODS: tuple[tuple[str, str, str], ...] = (
     (
         "pit",
         "research_ci.eval.data.pits",
-        "a data eval's module: PITS = [Pit(category, plant)] next to its CASES; plant(fields, field, rng) returns a "
-        "copy with the pit planted; a built-in pit is planted for every eval that covers its category",
+        "a data eval's module: PITS = [Pit(category, plant)] next to its CASES; plant(sources, column, rng) returns "
+        "copies of the sources with the pit planted in that column; a built-in pit is planted for every eval that "
+        "covers its category",
     ),
 )
 LAB_EVAL = (
@@ -59,7 +60,7 @@ CASE_EXAMPLE = (
 CASE_FIELDS: dict[type, str] = {
     Eval: (
         "an entry of EVALS with what its layer reads: h0, the H0 a lab eval rejects (required for one, refused on a "
-        "library eval); on_fail, covers (data.py); label, horizons, combine (feat.py)"
+        "library eval); on_fail, covers (data.py); label (the column read as y), horizons, combine (feat.py)"
     ),
     Case: "",
     Size: "",
@@ -82,7 +83,7 @@ NULLS_EXAMPLE = (
 NULL_FIELDS: dict[type, dict[str, str]] = {
     Null: {
         "explains": "the id of the contract's alternative this world answers",
-        "world": "a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay",
+        "world": "a PermuteWithin or a ShiftInTime: how the scores are shuffled while the outcomes stay",
         "keeps": "the column the alternative lives in; None means the world's bucket_by, or inst for a ShiftInTime",
         "evals": "the names of the evals this world judges, any eval of the layer; () means the decisive effect",
         "reps": "the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default",
@@ -93,11 +94,11 @@ NULL_FIELDS: dict[type, dict[str, str]] = {
         "decision time",
         "clusters": "a column whose members move together and are shuffled as one",
         "block": 'repeat the same shuffle for every decision time inside a block this long; "horizon" uses each '
-        "label horizon",
+        "horizon",
     },
     ShiftInTime: {
         "min_shift": "shift each inst's scores along its decision times, by one offset for all insts, at least "
-        'this far either way round; "horizon" uses each label horizon',
+        'this far either way round; "horizon" uses each horizon',
     },
 }
 
@@ -211,7 +212,8 @@ def _plugin(name: str, origin: str, get: Callable[[], Any]) -> dict[str, Any]:
     if cls is None:
         return out
     if "data" in kinds:
-        out["fields"] = list(getattr(cls, "fields", None) or [])
+        declared = getattr(cls, "sources", None)
+        out["sources"] = {str(k): list(v) for k, v in declared.items()} if isinstance(declared, dict) else {}
         levels = getattr(cls, "levels", None)
         out["levels"] = asdict(levels) if is_dataclass(levels) and not isinstance(levels, type) else None
         out["reference"] = callable(getattr(cls, "reference", None))

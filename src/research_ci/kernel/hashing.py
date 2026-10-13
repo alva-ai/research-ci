@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -41,6 +42,11 @@ def hash_frame(df: pl.DataFrame) -> str:
         digest.update(np.packbits(series.is_null().to_numpy()).tobytes())
         digest.update(_payload(series, tags[column]))
     return digest.hexdigest()
+
+
+def hash_tables(tables: Mapping[str, pl.DataFrame]) -> str:
+    """Content hash of named tables, such as an idea's sources: each table's ``hash_frame`` by name."""
+    return hash_obj({name: hash_frame(table) for name, table in tables.items()})
 
 
 def _tag(dtype: pl.DataType) -> str:

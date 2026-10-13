@@ -1,13 +1,15 @@
-"""Treatments: what the engine does about a flagged problem, as a function of the field table or of the candidates.
-They are applied by default and kept in the freeze; their influence on the decisive number decides whether a person
-has to look.
+"""Treatments: what the engine does about a flagged problem, as a function of the sources or of the candidates. They
+are applied by default and kept in the freeze; their influence on the decisive number decides whether a person has to
+look. On the sources a treatment sets cells to null (a mask), drops rows (of insts, or of spans of them), or splits an
+inst in every source; on the candidates it drops rows.
 
-Which label rows a treatment touches, so its influence on a label effect is weighed on labels computed once. A label
-row at ``t`` with horizon ``h`` may read what its legs report up to ``t + h``, and what is current at ``t``; a field
-row is current from when it becomes known until the next row of its inst and field does. A treatment that drops
-field rows touches every label row of their inst whose window ``[t, t + h]`` meets a span in which a dropped row was
-current; leaving those label rows out stands for computing the labels again on the treated data. It errs towards more
-influence: a row inside the window that the label does not read still counts.
+Which outcome rows a treatment touches, so its influence on an effect is weighed on outcomes computed once. An outcome
+row at ``t`` with horizon ``h`` may read what its legs report up to ``t + h``, and what is current at ``t``; a source
+row is current from when it becomes known until the next row of its source and inst does. A treatment that drops or
+masks source rows touches every outcome row of their inst whose window ``[t, t + h]`` meets a span in which such a row
+was current; leaving those outcome rows out stands for computing the outcomes again on the treated sources. It errs
+towards more influence: a row inside the window that the outcome does not read still counts, and so does a masked
+column it does not read.
 
 ``Numbers`` are the decisive numbers the treatments are weighed on.
 """
@@ -16,89 +18,119 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import reduce
-from typing import Literal
 
 import pandas as pd
 import polars as pl
 
 from research_ci.api.contract import span
 from research_ci.api.evals import Case, Source
-from research_ci.api.plugins import CostModel, LabelPlugin, TargetPlugin
-from research_ci.eval.synthetic import HOUR_NS, START_NS, source
+from research_ci.api.plugins import CostModel, OutcomePlugin, TargetPlugin
+from research_ci.eval import synthetic
+from research_ci.eval.data.baseline import rows
+from research_ci.eval.synthetic import HOUR_NS, START_NS
+from research_ci.kernel.tables import values
 from research_ci.kernel.time.clock import TIME, span_ns
 from research_ci.kernel.verdict import power as pw
-from research_ci.stages.common import Treatment, label_values, per_t
+from research_ci.stages.common import Treatment, outcome_values, per_t
 
+Sources = Mapping[str, pl.DataFrame]
 SPAN_SCHEMA = {"inst": pl.String, "event_time": TIME, "start": pl.Int64, "end": pl.Int64}
+ROW = ["source", "inst", "event_time"]
 OPEN = 2**62
 LEGS = ("inst", "long", "short")
 PER_T = {"t": pl.Datetime("ns", "UTC"), "value": pl.Float64}
 
 
-def _dropping(
-    name: str,
-    on: Literal["fields", "candidates"],
-    reason: str,
-    table: pl.DataFrame,
-    apply: Callable[[pl.DataFrame], pl.DataFrame],
-    removed: Callable[[pl.DataFrame], pl.DataFrame],
-) -> Treatment:
-    return Treatment(name, on, reason, removed(table).height, apply, removed)
+def mask_cells(name: str, reason: str, flagged: pl.DataFrame, sources: Sources) -> Treatment:
+    """Set the flagged cells to null. Flags have ``source``, ``inst`` and ``event_time``, and ``column`` when they name
+    one; a flag that names none masks every value column of its rows."""
+    named = flagged.select(
+        *ROW, pl.col("column") if "column" in flagged.columns else pl.lit(None, dtype=pl.String).alias("column")
+    )
+    owned = pl.DataFrame(
+        [(s, c) for s, t in sources.items() for c in values(t)],
+        schema={"source": pl.String, "_c": pl.String},
+        orient="row",
+    )
+    cells = named.join(owned, on="source").filter(pl.col("column").is_null() | (pl.col("column") == pl.col("_c")))
+    cells = cells.select(*ROW, pl.col("_c").alias("column")).with_columns(pl.col("event_time").cast(TIME)).unique()
+    by_source = cells.partition_by("source", as_dict=True, include_key=False)
+
+    def masked(source: str, table: pl.DataFrame) -> pl.DataFrame:
+        hit = by_source.get((source,))
+        if hit is None:
+            return table
+        marks = hit.with_columns(_m=pl.lit(True)).pivot(on="column", index=["inst", "event_time"], values="_m")
+        marks = marks.rename({c: f"_m_{c}" for c in marks.columns if c not in ("inst", "event_time")})
+        joined = table.join(marks, on=["inst", "event_time"], how="left", maintain_order="left")
+        null = [
+            pl.when(pl.col(f"_m_{c}").fill_null(False)).then(None).otherwise(pl.col(c)).alias(c)
+            for c in values(table)
+            if f"_m_{c}" in joined.columns
+        ]
+        return joined.with_columns(null).select(table.columns)
+
+    def apply(tables: Sources) -> dict[str, pl.DataFrame]:
+        return {s: masked(s, t) for s, t in tables.items()}
+
+    def removed(tables: Sources) -> pl.DataFrame:
+        return rows(tables).join(cells.select(ROW).unique(), on=ROW, how="semi")
+
+    return Treatment(name, "sources", reason, removed(sources).height, apply, removed)
 
 
-def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged field's rows within ``around_ns`` of each window. A window has ``inst``, ``field``, ``start``
-    and ``end``."""
+def mask_windows(name: str, reason: str, windows: pl.DataFrame, around_ns: int, sources: Sources) -> Treatment:
+    """Mask the window's column within ``around_ns`` of each window. A window has ``source``, ``column``, ``inst``,
+    ``start`` and ``end``."""
     pad = pl.duration(nanoseconds=around_ns, time_unit="ns")
-    keys = ["inst", "field"]
-    w = windows.select(*keys, (pl.col("start") - pad).alias("lo"), (pl.col("end") + pad).alias("hi"))
-
-    def hit(f: pl.DataFrame) -> pl.Series:
-        g = f.select(*keys, "event_time").with_row_index("_i")
-        inside = g.join(w, on=keys).filter(pl.col("event_time").is_between("lo", "hi"))
-        return g["_i"].is_in(inside["_i"].unique().implode())
-
-    return _dropping(name, "fields", reason, fields, lambda f: f.filter(~hit(f)), lambda f: f.filter(hit(f)))
+    w = windows.select(
+        "source", "column", "inst", (pl.col("start") - pad).alias("lo"), (pl.col("end") + pad).alias("hi")
+    )
+    found = rows(sources).join(w, on=["source", "inst"]).filter(pl.col("event_time").is_between("lo", "hi"))
+    return mask_cells(name, reason, found.select(*ROW, "column"), sources)
 
 
-def mask_rows(name: str, reason: str, flagged: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop the flagged rows. Flags match by ``inst`` and ``event_time``, and by ``field`` too when the flags name
-    one."""
-    keys = ["inst", "event_time"] + (["field"] if "field" in flagged.columns else [])
-    flags = flagged.select(*keys).with_columns(pl.col("event_time").cast(TIME)).unique()
-
-    def apply(f: pl.DataFrame) -> pl.DataFrame:
-        return f.join(flags, on=keys, how="anti", maintain_order="left")
-
-    def removed(f: pl.DataFrame) -> pl.DataFrame:
-        return f.join(flags, on=keys, how="semi", maintain_order="left")
-
-    return _dropping(name, "fields", reason, fields, apply, removed)
-
-
-def drop_insts(name: str, reason: str, insts: Sequence[str], fields: pl.DataFrame) -> Treatment:
-    """Drop every row of the named insts."""
+def drop_insts(name: str, reason: str, insts: Sequence[str], sources: Sources) -> Treatment:
+    """Drop every row of the named insts, in every source."""
     names = pl.Series(sorted(set(insts)), dtype=pl.String).implode()
     gone = pl.col("inst").is_in(names)
-    return _dropping(name, "fields", reason, fields, lambda f: f.filter(~gone), lambda f: f.filter(gone))
+    return _dropping(name, reason, sources, gone)
 
 
-def drop_spans(name: str, reason: str, spans: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Drop the rows each span covers. Every row of the span's ``inst`` whose event falls in ``[start, end]`` goes."""
+def drop_spans(name: str, reason: str, spans: pl.DataFrame, sources: Sources) -> Treatment:
+    """Drop the rows each span covers, in every source: every row of the span's ``inst`` whose event falls in
+    ``[start, end]``."""
     keys = spans.select("inst", pl.col("start").cast(TIME), pl.col("end").cast(TIME))
+    on = ["inst", "event_time"]
 
-    def hit(f: pl.DataFrame) -> pl.Series:
-        g = f.select("inst", "event_time").with_row_index("_i")
-        inside = g.join(keys, on="inst").filter(pl.col("event_time").is_between("start", "end"))
-        return g["_i"].is_in(inside["_i"].unique().implode())
+    def inside(tables: Sources) -> pl.DataFrame:
+        found = rows(tables).join(keys, on="inst").filter(pl.col("event_time").is_between("start", "end"))
+        return found.select(on).unique()
 
-    return _dropping(name, "fields", reason, fields, lambda f: f.filter(~hit(f)), lambda f: f.filter(hit(f)))
+    def apply(tables: Sources) -> dict[str, pl.DataFrame]:
+        gone = inside(tables)
+        return {s: t.join(gone, on=on, how="anti", maintain_order="left") for s, t in tables.items()}
+
+    def removed(tables: Sources) -> pl.DataFrame:
+        return rows({s: t.join(inside(tables), on=on, how="semi") for s, t in tables.items()})
+
+    return Treatment(name, "sources", reason, removed(sources).height, apply, removed)
 
 
-def split_insts(name: str, reason: str, splits: pl.DataFrame, fields: pl.DataFrame) -> Treatment:
-    """Rename each split inst's rows from the split on. The rows of each split's ``inst`` whose event is at or after
-    its ``at`` are renamed to its ``to``, up to the inst's next split. The rows stay; ``rows`` counts those renamed.
-    It applies to any table with ``inst`` and ``event_time``."""
+def _dropping(name: str, reason: str, sources: Sources, gone: pl.Expr) -> Treatment:
+    def apply(tables: Sources) -> dict[str, pl.DataFrame]:
+        return {s: t.filter(~gone) for s, t in tables.items()}
+
+    def removed(tables: Sources) -> pl.DataFrame:
+        return rows({s: t.filter(gone) for s, t in tables.items()})
+
+    return Treatment(name, "sources", reason, removed(sources).height, apply, removed)
+
+
+def split_insts(name: str, reason: str, splits: pl.DataFrame, sources: Sources) -> Treatment:
+    """Rename each split inst's rows from the split on, in every source. The rows of each split's ``inst`` whose event
+    is at or after its ``at`` are renamed to its ``to``, up to the inst's next split. The rows stay; ``rows`` counts
+    those renamed. It applies to any table with ``inst`` and ``event_time``, each one of a dict."""
     s = splits.select("inst", pl.col("at").cast(TIME), "to").sort("at")
     names = s["inst"].unique()
 
@@ -110,34 +142,42 @@ def split_insts(name: str, reason: str, splits: pl.DataFrame, fields: pl.DataFra
         )
         return hit.filter(pl.col("to").is_not_null()).select("_i", "to")
 
-    def apply(f: pl.DataFrame) -> pl.DataFrame:
+    def one(f: pl.DataFrame) -> pl.DataFrame:
         r = renamed(f)
         return f.with_columns(f["inst"].scatter(r["_i"], r["to"])) if r.height else f
 
-    return Treatment(name, "fields", reason, renamed(fields).height, apply)
+    def apply(tables: Sources) -> dict[str, pl.DataFrame]:
+        return {n: one(t) for n, t in tables.items()}
+
+    return Treatment(name, "sources", reason, renamed(rows(sources)).height, apply)
 
 
 def drop_candidates(name: str, reason: str, bad: pl.DataFrame) -> Treatment:
-    """Drop candidate rows (``t``, ``inst``)."""
+    """Drop the candidate rows at ``t`` whose ``inst``, or one of whose legs (``long``, ``short``), is a flagged
+    ``inst`` at ``t``: a flagged candidate, or a flagged row of ``wide`` a candidate reads."""
     flags = bad.select("t", "inst").unique()
 
+    def hit(c: pl.DataFrame) -> pl.Series:
+        indexed = c.with_row_index("_i")
+        legs = [indexed.select("_i", "t", pl.col(x).alias("inst")) for x in LEGS if x in c.columns]
+        found = pl.concat(legs).join(flags, on=["t", "inst"], how="semi")["_i"]
+        return indexed["_i"].is_in(found.implode())
+
     def apply(c: pl.DataFrame) -> pl.DataFrame:
-        return c.join(flags, on=["t", "inst"], how="anti", maintain_order="left")
+        return c.filter(~hit(c))
 
     def removed(c: pl.DataFrame) -> pl.DataFrame:
-        return c.join(flags, on=["t", "inst"], how="semi", maintain_order="left")
+        return c.filter(hit(c))
 
     return Treatment(name, "candidates", reason, flags.height, apply, removed)
 
 
-def apply_all(treatments: Sequence[Treatment], fields: pl.DataFrame) -> pl.DataFrame:
-    """The field table after every field treatment. The drops come at once, then the rest in order."""
-    drops = [t.removed for t in treatments if t.on == "fields" and t.removed is not None]
-    if drops:
-        indexed = fields.with_row_index("_row")
-        gone = pl.concat([removed(indexed).select("_row") for removed in drops])["_row"]
-        fields = fields.filter(~pl.repeat(False, fields.height, eager=True).scatter(gone, True))
-    return reduce(lambda f, t: t.apply(f), [t for t in treatments if t.on == "fields" and t.removed is None], fields)
+def apply_all(treatments: Sequence[Treatment], sources: Sources) -> dict[str, pl.DataFrame]:
+    """The sources after every treatment of the sources: the masks and drops first, each found on the sources as
+    they came, then the splits in order."""
+    on = [t for t in treatments if t.on == "sources"]
+    ordered = [t for t in on if t.removed is not None] + [t for t in on if t.removed is None]
+    return reduce(lambda f, t: t.apply(f), ordered, dict(sources))
 
 
 def apply_candidates(treatments: Sequence[Treatment], cands: pl.DataFrame) -> pl.DataFrame:
@@ -145,13 +185,13 @@ def apply_candidates(treatments: Sequence[Treatment], cands: pl.DataFrame) -> pl
     return reduce(lambda c, t: t.apply(c), [t for t in treatments if t.on == "candidates"], cands)
 
 
-def spans(fields: pl.DataFrame, removed: pl.DataFrame, by: Sequence[str] = ()) -> pl.DataFrame:
-    """When each removed row was current in ``fields``. Columns ``inst``, ``event_time``, ``start`` (when it became
-    known) and ``end`` (when the next row of its inst and field did; far in the future for the last), both in ns.
+def spans(sources: Sources, removed: pl.DataFrame, by: Sequence[str] = ()) -> pl.DataFrame:
+    """When each removed row was current in ``sources``. Columns ``inst``, ``event_time``, ``start`` (when it became
+    known) and ``end`` (when the next row of its source and inst did; far in the future for the last), both in ns.
     ``by`` names columns of ``removed`` that set its rows apart, such as the treatment; they come first."""
-    keys, group = ["inst", "field"], list(by)
+    keys, group = ["source", "inst"], list(by)
     schema = {**{k: removed.schema[k] for k in group}, **SPAN_SCHEMA}
-    known = fields.lazy().join(removed.lazy().select(keys).unique(), on=keys, how="semi")
+    known = rows(sources).lazy().join(removed.lazy().select(keys).unique(), on=keys, how="semi")
     known = known.select(*keys, pl.col("available_at").dt.epoch("ns").alias("start")).unique().sort(*keys, "start")
     known = known.with_columns(end=pl.col("start").shift(-1).over(keys).fill_null(OPEN))
     gone = removed.lazy().select(*group, *keys, "event_time", pl.col("available_at").dt.epoch("ns").alias("start"))
@@ -162,10 +202,10 @@ def spans(fields: pl.DataFrame, removed: pl.DataFrame, by: Sequence[str] = ()) -
 def touched(
     rows: pl.DataFrame, found: pl.DataFrame, legs: Sequence[str], h: str = "h_ns", by: Sequence[str] = ()
 ) -> pl.DataFrame:
-    """Label rows whose window meets a span of a leg. One row per group and label row touched: a label row (``_r``)
-    whose window ``[t, t + h]`` meets a span (``inst``, ``start``, ``end``) of one of its ``legs``, the columns that
-    name insts. ``h`` is the column with each row's horizon in ns, and ``by`` the columns of ``found`` that set spans
-    apart, such as the treatment."""
+    """Outcome rows whose window meets a span of a leg. One row per group and outcome row touched: an outcome row
+    (``_r``) whose window ``[t, t + h]`` meets a span (``inst``, ``start``, ``end``) of one of its ``legs``, the columns
+    that name insts. ``h`` is the column with each row's horizon in ns, and ``by`` the columns of ``found`` that set
+    spans apart, such as the treatment."""
     keys = list(by)
     legs = [c for c in legs if c in rows.columns]
     schema = {**{k: found.schema[k] for k in keys}, "_r": rows.schema["_r"]}
@@ -200,43 +240,45 @@ def touched(
 @dataclass(frozen=True)
 class Plan:
     key: str
-    values: LabelPlugin
     target: TargetPlugin
     horizon: pd.Timedelta
 
 
 @dataclass
 class _Table:
-    """Every key's label rows on one version of the data, the field table ``renames`` leave: the candidates with their
-    row (``_c``), the label columns of all keys stacked with the candidate row and the key (``_k``) and their own row
-    (``_r``), each key's label columns, and the label rows each treatment touches."""
+    """Every key's outcome rows on one version of the sources, the one ``renames`` leave: the candidates with their
+    row (``_c``), the outcome columns of all keys stacked with the candidate row and the key (``_k``) and their own row
+    (``_r``), each key's outcome columns, and the outcome rows each treatment touches."""
 
     renames: tuple[Treatment, ...]
-    fields: pl.DataFrame
+    sources: dict[str, pl.DataFrame]
     cands: pl.DataFrame
-    labels: pl.DataFrame
+    outcomes: pl.DataFrame
     columns: list[list[str]]
     hits: dict[str, pl.Series] = field(default_factory=dict)
 
 
 class Numbers:
-    """The decisive numbers. Their label rows are computed once on the explore data and, when treatments rename rows
-    (a split), once more on the data those leave. A treatment that drops field rows or candidates leaves out the label
-    rows that read what it drops (``spans``, ``touched``), so weighing it runs only the target again. ``recompute``
-    computes everything again, labels and all: for the treated data, and for changes no treatment describes, such as
-    a field left out or a planted pit. ``width`` is the explore data's span in ns."""
+    """The decisive numbers. Their outcome rows are computed once on the explore sources and, when treatments rename
+    rows (a split), once more on the sources those leave. A treatment that drops or masks source rows, or drops
+    candidates, leaves out the outcome rows that read what it touches (``spans``, ``touched``), so weighing it runs
+    only the target again. ``recompute`` computes everything again, ``wide``, candidates, outcomes and all: for the
+    treated sources, and for changes no treatment describes, such as a column left out or a planted pit.
+    ``universe`` gives the candidates on sources, building ``wide`` on them; ``width`` is the explore data's span in
+    ns."""
 
     def __init__(
         self,
-        fields: pl.DataFrame,
+        sources: Sources,
         cands: pl.DataFrame,
-        universe: Callable[[pl.DataFrame], pl.DataFrame],
+        universe: Callable[[Sources], pl.DataFrame],
+        outcome: OutcomePlugin,
         plans: list[Plan],
         costs: CostModel,
         width: int,
     ) -> None:
-        self.fields, self.cands, self.universe, self.plans, self.costs = fields, cands, universe, plans, costs
-        self.width = width
+        self.sources, self.cands, self.universe, self.plans, self.costs = dict(sources), cands, universe, plans, costs
+        self.outcome, self.width = outcome, width
         self.keys = [p.key for p in plans]
         self.key_table = pl.DataFrame(
             {
@@ -252,20 +294,20 @@ class Numbers:
         self._resolution: dict[str, float] | None = None
 
     def rows(self, ts: Sequence[Treatment], columns: Sequence[str]) -> pl.DataFrame:
-        """Every key's label rows after ``ts``, stacked: ``key``, ``h_ns`` (the horizon in ns), ``t`` and ``columns``,
-        from the label or the candidates; text columns of the candidates come as categoricals."""
+        """Every key's outcome rows after ``ts``, stacked: ``key``, ``h_ns`` (the horizon in ns), ``t`` and
+        ``columns``, from the outcome or the candidates; text columns of the candidates come as categoricals."""
         table = self._table(ts)
         dropped = self._dropped(table, ts)
-        own = [c for c in columns if c in table.labels.columns]
+        own = [c for c in columns if c in table.outcomes.columns]
         theirs = [c for c in columns if c not in own and c != "t"]
-        labels = table.labels.select("_r", "_c", "_k", *own)
-        labels = labels.filter(~pl.col("_r").is_in(dropped.implode())) if dropped.len() else labels
+        found = table.outcomes.select("_r", "_c", "_k", *own)
+        found = found.filter(~pl.col("_r").is_in(dropped.implode())) if dropped.len() else found
         text = [c for c in theirs if table.cands.schema[c] == pl.String]
         cand = table.cands.select("t", *theirs).with_columns(pl.col(text).cast(pl.Categorical))
-        cand = cand.select(pl.all().gather(labels["_c"]))
+        cand = cand.select(pl.all().gather(found["_c"]))
         k = self.key_table
         out = (
-            labels.select("_k", *own)
+            found.select("_k", *own)
             .hstack(cand)
             .with_columns(
                 key=pl.col("_k").replace_strict(k["_k"], k["key"], return_dtype=k.schema["key"]),
@@ -278,7 +320,7 @@ class Numbers:
         return _by_key(self.base_frame(), self.keys)
 
     def base_frame(self) -> pl.DataFrame:
-        """Every key's number per decision time on the untreated data, stacked: ``key``, ``t``, ``value``."""
+        """Every key's number per decision time on the untreated sources, stacked: ``key``, ``t``, ``value``."""
         if self._base is None:
             table = self._raw_table()
             out = [pl.DataFrame(schema={"key": pl.String, **PER_T})]
@@ -288,19 +330,19 @@ class Numbers:
             self._base = pl.concat(out)
         return self._base
 
-    def treated(self, panel: pl.DataFrame, applied: Sequence[Treatment]) -> dict[str, pl.DataFrame]:
-        """The numbers on the treated data ``panel``, labels and all, with the candidate treatments of ``applied``;
-        computed once."""
+    def treated(self, treated: Sources, applied: Sequence[Treatment]) -> dict[str, pl.DataFrame]:
+        """The numbers on the treated sources, outcomes and all, with the candidate treatments of ``applied``; computed
+        once."""
         if self._treated is None:
-            self._treated = self.recompute(panel, applied) if applied else self.base()
+            self._treated = self.recompute(treated, applied) if applied else self.base()
         return self._treated
 
-    def resolution(self, panel: pl.DataFrame, applied: Sequence[Treatment]) -> dict[str, float]:
+    def resolution(self, treated: Sources, applied: Sequence[Treatment]) -> dict[str, float]:
         """The MDE of each key a treatment's influence is measured in: the finer of the MDE before and after the
         treatments, since a treatment matters if it moves the number by more than the verdict on the treated data, or
         on the untreated data, could resolve."""
         if self._resolution is None:
-            after = self.treated(panel, applied)
+            after = self.treated(treated, applied)
             before = {k: mde(v, k, self.width) for k, v in self.base().items()}
             now = {k: mde(v, k, self.width) for k, v in after.items()}
             self._resolution = {k: smaller(before[k], now.get(k, math.nan)) for k in before}
@@ -308,7 +350,7 @@ class Numbers:
 
     def per_set(self, sets: Mapping[str, Sequence[Treatment]]) -> pl.DataFrame:
         """The number per decision time of every key after each named set of treatments, stacked: ``set``, ``key``,
-        ``t``, ``value``. The target runs once per set and key; the label rows come from the tables."""
+        ``t``, ``value``. The target runs once per set and key; the outcome rows come from the tables."""
         out = [pl.DataFrame(schema={"set": pl.String, "key": pl.String, **PER_T})]
         by_table: dict[tuple[str, ...], list[str]] = {}
         for name, ts in sets.items():
@@ -320,28 +362,24 @@ class Numbers:
                 joined = self._joined(table, k)
                 for name in names:
                     d = dropped[name]
-                    rows = joined.filter(~pl.col("_r").is_in(d.implode())) if d.len() else joined
-                    out.append(self._reduced(k, rows).select(pl.lit(name).alias("set"), "key", "t", "value"))
+                    found = joined.filter(~pl.col("_r").is_in(d.implode())) if d.len() else joined
+                    out.append(self._reduced(k, found).select(pl.lit(name).alias("set"), "key", "t", "value"))
         return pl.concat(out)
 
-    def _reduced(self, k: int, rows: pl.DataFrame) -> pl.DataFrame:
-        """Key ``k``'s target on its label rows: ``key``, ``t``, ``value``."""
+    def _reduced(self, k: int, found: pl.DataFrame) -> pl.DataFrame:
+        """Key ``k``'s target on its outcome rows: ``key``, ``t``, ``value``."""
         plan = self.plans[k]
-        v = per_t(plan.target.reduce(rows.drop("_r"), plan.horizon, self.costs))
+        v = per_t(plan.target.reduce(found.drop("_r"), plan.horizon, self.costs))
         return v.select(pl.lit(plan.key).alias("key"), "t", "value")
 
-    def recompute(self, f: pl.DataFrame, ts: Sequence[Treatment] = ()) -> dict[str, pl.DataFrame]:
-        """The numbers on the field table ``f``, with the candidate treatments in ``ts`` applied."""
-        c = apply_candidates(ts, self.universe(f))
+    def recompute(self, sources: Sources, ts: Sequence[Treatment] = ()) -> dict[str, pl.DataFrame]:
+        """The numbers on ``sources``, with the candidate treatments in ``ts`` applied."""
+        c = apply_candidates(ts, self.universe(sources))
         return {
             p.key: per_t(
-                p.target.reduce(
-                    v.join(c, on=["t", "inst"], how="inner", suffix="_candidate"),
-                    p.horizon,
-                    self.costs,
-                )
+                p.target.reduce(v.join(c, on=["t", "inst"], how="inner", suffix="_candidate"), p.horizon, self.costs)
             )
-            for p, v in zip(self.plans, self._values(f, c), strict=True)
+            for p, v in zip(self.plans, self._values(sources, c), strict=True)
         }
 
     def _table(self, ts: Sequence[Treatment]) -> _Table:
@@ -350,90 +388,79 @@ class Numbers:
             return self._raw_table()
         name = tuple(t.name for t in renames)
         if name not in self.tables:
-            f = apply_all(renames, self.fields)
+            f = apply_all(renames, self.sources)
             self.tables[name] = self._build(f, self.universe(f), renames)
         return self.tables[name]
 
     def _raw_table(self) -> _Table:
         if () not in self.tables:
-            self.tables[()] = self._build(self.fields, self.cands, ())
+            self.tables[()] = self._build(self.sources, self.cands, ())
         return self.tables[()]
 
-    def _build(self, f: pl.DataFrame, c: pl.DataFrame, renames: tuple[Treatment, ...]) -> _Table:
+    def _build(self, f: dict[str, pl.DataFrame], c: pl.DataFrame, renames: tuple[Treatment, ...]) -> _Table:
         indexed = c.with_row_index("_c")
         index = indexed.select("t", "inst", "_c")
         frames, columns = [], []
         for k, v in enumerate(self._values(f, c)):
             columns.append(v.columns)
             frames.append(v.join(index, on=["t", "inst"]).drop("t", "inst").with_columns(_k=pl.lit(k, pl.UInt32)))
-        labels = pl.concat(frames, how="diagonal_relaxed").with_row_index("_r")
-        return _Table(renames, f, indexed, labels, columns)
+        outcomes = pl.concat(frames, how="diagonal_relaxed").with_row_index("_r")
+        return _Table(renames, f, indexed, outcomes, columns)
 
-    def _values(self, f: pl.DataFrame, c: pl.DataFrame) -> list[pl.DataFrame]:
-        """Every plan's label rows, each label plugin asked once for all of its horizons."""
-        out: dict[int, pl.DataFrame] = {}
-        by_plugin: dict[int, list[int]] = {}
-        for k, plan in enumerate(self.plans):
-            by_plugin.setdefault(id(plan.values), []).append(k)
-        for ks in by_plugin.values():
-            found = label_values(self.plans[ks[0]].values, f, c, [self.plans[k].horizon for k in ks])
-            out |= dict(zip(ks, found, strict=True))
-        return [out[k] for k in range(len(self.plans))]
+    def _values(self, f: Sources, c: pl.DataFrame) -> list[pl.DataFrame]:
+        """Every plan's outcome rows, the outcome asked once for all of the horizons."""
+        horizons = sorted({p.horizon for p in self.plans})
+        found = dict(zip(horizons, outcome_values(self.outcome, f, c, horizons), strict=True))
+        return [found[p.horizon] for p in self.plans]
 
     def _joined(self, table: _Table, k: int) -> pl.DataFrame:
-        """One key's label rows joined with their candidates, as a target reads them, with the label row ``_r``."""
-        labels = table.labels.filter(pl.col("_k") == k)
+        """One key's outcome rows joined with their candidates, as a target reads them, with the outcome row ``_r``."""
+        found = table.outcomes.filter(pl.col("_k") == k)
         columns = table.columns[k]
         own = [c for c in columns if c not in ("t", "inst")]
         theirs = [c for c in table.cands.columns if c not in ("t", "inst", "_c")]
-        cand = table.cands.select(pl.col("t", "inst", *theirs).gather(labels["_c"]))
+        cand = table.cands.select(pl.col("t", "inst", *theirs).gather(found["_c"]))
         cand = cand.rename({c: f"{c}_candidate" for c in theirs if c in own})
-        out = labels.select("_r", *own).hstack(cand)
+        out = found.select("_r", *own).hstack(cand)
         return out.select("_r", *columns, *(c for c in cand.columns if c not in ("t", "inst")))
 
     def _dropped(self, table: _Table, ts: Sequence[Treatment]) -> pl.Series:
-        """The label rows of ``table`` that the treatments in ``ts`` that drop rows touch."""
+        """The outcome rows of ``table`` that the treatments in ``ts`` that drop or mask rows touch."""
         drops = [t for t in ts if t.removed is not None]
         self._touch(table, [t for t in drops if t.name not in table.hits])
-        parts = [table.hits[t.name] for t in drops]
-        return pl.concat(parts).unique() if parts else pl.Series("_r", [], dtype=pl.UInt32)
+        found = [table.hits[t.name] for t in drops]
+        return pl.concat(found).unique() if found else pl.Series("_r", [], dtype=pl.UInt32)
 
     def _touch(self, table: _Table, ts: Sequence[Treatment]) -> None:
         if not ts:
             return
         found = [pl.DataFrame(schema={"treatment": pl.String, "_r": pl.UInt32})]
-        on_fields = [t for t in ts if t.on == "fields"]
-        if on_fields:
-            gone = pl.concat(
-                [
-                    _removed(t, self.fields).select(
-                        "inst", "field", "event_time", "available_at", treatment=pl.lit(t.name)
-                    )
-                    for t in on_fields
-                ]
-            )
-            current = spans(table.fields, reduce(lambda g, r: r.apply(g), table.renames, gone), by=["treatment"])
+        on_sources = [t for t in ts if t.on == "sources"]
+        if on_sources:
+            gone = pl.concat([_removed(t, self.sources).with_columns(treatment=pl.lit(t.name)) for t in on_sources])
+            renamed = reduce(lambda g, r: r.apply({"gone": g})["gone"], table.renames, gone)
+            current = spans(table.sources, renamed, by=["treatment"])
             legs = [c for c in LEGS if c in table.cands.columns]
             near = pl.any_horizontal(pl.col(c).is_in(current["inst"].unique().implode()) for c in legs)
-            rows = table.cands.filter(near).select("_c", "t", *legs)
-            rows = table.labels.select("_r", "_c", "_k").join(rows, on="_c").join(self.key_table, on="_k")
-            found.append(touched(rows, current, legs, by=["treatment"]))
+            asked = table.cands.filter(near).select("_c", "t", *legs)
+            asked = table.outcomes.select("_r", "_c", "_k").join(asked, on="_c").join(self.key_table, on="_k")
+            found.append(touched(asked, current, legs, by=["treatment"]))
         on_cands = [t for t in ts if t.on == "candidates"]
         if on_cands:
             gone = pl.concat([_removed(t, table.cands).select("_c", treatment=pl.lit(t.name)) for t in on_cands])
-            found.append(table.labels.select("_r", "_c").join(gone, on="_c").select("treatment", "_r"))
+            found.append(table.outcomes.select("_r", "_c").join(gone, on="_c").select("treatment", "_r"))
         hits = pl.concat(found).partition_by("treatment", as_dict=True, include_key=False)
         table.hits.update({t.name: hits[(t.name,)]["_r"] if (t.name,) in hits else found[0]["_r"] for t in ts})
 
 
-def _removed(t: Treatment, table: pl.DataFrame) -> pl.DataFrame:
+def _removed(t: Treatment, table: Sources | pl.DataFrame) -> pl.DataFrame:
     assert t.removed is not None
     return t.removed(table)
 
 
 def renames_rows(t: Treatment) -> bool:
-    """A treatment that changes identities instead of dropping rows, such as a split."""
-    return t.on == "fields" and t.removed is None
+    """A treatment that changes identities instead of dropping or masking rows, such as a split."""
+    return t.on == "sources" and t.removed is None
 
 
 def _renames(ts: Sequence[Treatment]) -> tuple[str, ...]:
@@ -441,19 +468,19 @@ def _renames(ts: Sequence[Treatment]) -> tuple[str, ...]:
 
 
 def _by_key(frame: pl.DataFrame, keys: Sequence[str]) -> dict[str, pl.DataFrame]:
-    parts = frame.partition_by("key", as_dict=True, include_key=False)
-    return {k: parts[(k,)].select("t", "value") if (k,) in parts else pl.DataFrame(schema=PER_T) for k in keys}
+    found = frame.partition_by("key", as_dict=True, include_key=False)
+    return {k: found[(k,)].select("t", "value") if (k,) in found else pl.DataFrame(schema=PER_T) for k in keys}
 
 
-def mde(values: pl.DataFrame, key: str, width: int) -> float:
+def mde(numbers: pl.DataFrame, key: str, width: int) -> float:
     """The smallest effect this horizon can detect; it does not depend on the effect asked for."""
     h = span_ns(span(key.rsplit(" ", 1)[1]))
-    return pw.power(se(values, h), width, h).mde
+    return pw.power(se(numbers, h), width, h).mde
 
 
-def se(values: pl.DataFrame, h: int) -> float:
+def se(numbers: pl.DataFrame, h: int) -> float:
     """No noise can be measured on a number that is not finite somewhere."""
-    return pw.block_se(values, h) if values["value"].is_finite().all() else math.nan
+    return pw.block_se(numbers, h) if numbers["value"].is_finite().all() else math.nan
 
 
 def smaller(a: float, b: float) -> float:
@@ -462,8 +489,8 @@ def smaller(a: float, b: float) -> float:
     return min(finite) if finite else math.nan
 
 
-def _fields() -> pl.DataFrame:
-    return source(Source(insts=3, hours=48), 0)
+def _sources() -> dict[str, pl.DataFrame]:
+    return synthetic.sources(Source(insts=3, hours=48), 0)
 
 
 def _at(hour: int) -> pl.Expr:
@@ -471,56 +498,65 @@ def _at(hour: int) -> pl.Expr:
 
 
 def _counts(t: Treatment) -> tuple[int, int]:
-    f = _fields()
-    return t.rows, f.height - t.apply(f).height
+    """The rows a treatment says it touches, and the rows it changes or takes away."""
+    before = _sources()
+    after = t.apply(before)
+    changed = [b.join(after[n], on=b.columns, how="anti", nulls_equal=True).height for n, b in before.items()]
+    return t.rows, sum(changed)
 
 
 def _windows() -> pl.DataFrame:
-    return pl.DataFrame({"inst": ["e0"], "field": ["price"]}).with_columns(start=_at(10), end=_at(11))
-
-
-def _flags() -> pl.DataFrame:
-    return (
-        _fields()
-        .filter((pl.col("inst") == "e1") & (pl.col("field") == "price"))
-        .head(3)
-        .select("inst", "field", "event_time")
+    return pl.DataFrame({"source": ["prices"], "column": ["price"], "inst": ["e0"]}).with_columns(
+        start=_at(10), end=_at(11)
     )
 
 
+def _flags(column: bool = True) -> pl.DataFrame:
+    flags = _sources()["prices"].filter(pl.col("inst") == "e1").head(3)
+    flags = flags.select(pl.lit("prices").alias("source"), "inst", "event_time")
+    return flags.with_columns(column=pl.lit("price")) if column else flags
+
+
+def _masked(t: Treatment) -> tuple[int, int, int]:
+    """What a mask says it touches, the rows it changes, and the price cells it leaves null."""
+    return (*_counts(t), t.apply(_sources())["prices"]["price"].null_count())
+
+
 def _spans() -> pl.DataFrame:
-    rows = [("e0", 5, 7), ("e1", 40, 41)]
-    frame = pl.DataFrame(rows, schema=["inst", "start", "end"], orient="row")
+    found = [("e0", 5, 7), ("e1", 40, 41)]
+    frame = pl.DataFrame(found, schema=["inst", "start", "end"], orient="row")
     return frame.with_columns((pl.col(c) * HOUR_NS + START_NS).cast(TIME) for c in ("start", "end"))
 
 
 def _split() -> tuple[int, dict[str, int], bool, bool]:
-    """e0 split at hours 20 and 40: rows renamed, rows per inst, the rest untouched, and applying it twice changes
-    nothing more."""
-    f = _fields()
+    """e0 split at hours 20 and 40: rows renamed, rows per inst in both sources, the rest untouched, and applying it
+    twice changes nothing more."""
+    f = _sources()
     splits = pl.DataFrame([("e0", 20, "e0#2"), ("e0", 40, "e0#3")], schema=["inst", "at", "to"], orient="row")
     t = split_insts("s", "", splits.with_columns((pl.col("at") * HOUR_NS + START_NS).cast(TIME)), f)
     out = t.apply(f)
-    counts = {str(e): int(n) for e, n in out.group_by("inst").len().iter_rows()}
-    return t.rows, counts, out.drop("inst").equals(f.drop("inst")), t.apply(out).equals(out)
+    counts = {str(e): int(n) for e, n in rows(out).group_by("inst").len().iter_rows()}
+    same = all(out[n].drop("inst").equals(f[n].drop("inst")) for n in f)
+    again = t.apply(out)
+    return t.rows, counts, same, all(again[n].equals(out[n]) for n in out)
 
 
-def _prices() -> pl.DataFrame:
+def _prices() -> dict[str, pl.DataFrame]:
     """Hourly prices of a and b at hours 0 to 10, each known an hour after its event."""
-    rows = pl.DataFrame({"inst": ["a"] * 11 + ["b"] * 11, "hour": list(range(11)) * 2})
-    return rows.select(
+    found = pl.DataFrame({"inst": ["a"] * 11 + ["b"] * 11, "hour": list(range(11)) * 2})
+    hours = [pl.from_epoch((pl.col("hour") + k) * HOUR_NS + START_NS, time_unit="ns") for k in (0, 1)]
+    prices = found.select(
         "inst",
-        field=pl.lit("price"),
-        event_time=pl.from_epoch(pl.col("hour") * HOUR_NS + START_NS, time_unit="ns").dt.replace_time_zone("UTC"),
-        available_at=pl.from_epoch((pl.col("hour") + 1) * HOUR_NS + START_NS, time_unit="ns").dt.replace_time_zone(
-            "UTC"
-        ),
-        value=pl.lit(1.0),
+        event_time=hours[0].dt.replace_time_zone("UTC"),
+        available_at=hours[1].dt.replace_time_zone("UTC"),
+        vintage=pl.lit(0),
+        price=pl.lit(1.0),
     )
+    return {"prices": prices}
 
 
 def _rows(h: int = 2, legs: bool = False) -> pl.DataFrame:
-    """A label row of a and of b at every hour from 0 to 10, horizon ``h`` hours; with ``legs``, of a pair whose
+    """An outcome row of a and of b at every hour from 0 to 10, horizon ``h`` hours; with ``legs``, of a pair whose
     long leg is a."""
     frame = pl.DataFrame({"hour": list(range(11)) * 2, "inst": ["a"] * 11 + ["b"] * 11})
     frame = frame.with_columns(
@@ -533,19 +569,23 @@ def _rows(h: int = 2, legs: bool = False) -> pl.DataFrame:
 
 
 def _hit(hours: Sequence[int], h: int = 2, legs: bool = False) -> list[tuple[str, int]]:
-    """The label rows touched when a's prices of ``hours`` are dropped, as (inst, hour)."""
+    """The outcome rows touched when a's prices of ``hours`` are dropped, as (inst, hour)."""
     f = _prices()
-    gone = f.filter((pl.col("inst") == "a") & pl.col("event_time").dt.hour().is_in(list(hours)))
-    rows = _rows(h, legs)
-    found = touched(rows, spans(f, gone), ["inst", "long", "short"])
-    return rows.join(found, on="_r").select("inst", "hour").sort("hour").rows()
+    gone = rows(f).filter((pl.col("inst") == "a") & pl.col("event_time").dt.hour().is_in(list(hours)))
+    found = touched(_rows(h, legs), spans(f, gone), ["inst", "long", "short"])
+    return _rows(h, legs).join(found, on="_r").select("inst", "hour").sort("hour").rows()
 
 
 def _apart() -> list[tuple[str, int]]:
     """Spans of two treatments found at once, each touching only its own rows."""
     f = _prices()
-    a = f.filter((pl.col("inst") == "a") & (pl.col("event_time").dt.hour() == 3)).with_columns(treatment=pl.lit("x"))
-    b = f.filter((pl.col("inst") == "b") & (pl.col("event_time").dt.hour() == 7)).with_columns(treatment=pl.lit("y"))
+    every = rows(f)
+    a = every.filter((pl.col("inst") == "a") & (pl.col("event_time").dt.hour() == 3)).with_columns(
+        treatment=pl.lit("x")
+    )
+    b = every.filter((pl.col("inst") == "b") & (pl.col("event_time").dt.hour() == 7)).with_columns(
+        treatment=pl.lit("y")
+    )
     found = spans(f, pl.concat([a, b]), by=["treatment"])
     hit = touched(_rows(0), found, ["inst"], by=["treatment"])
     return hit.join(_rows(0), on="_r").select("treatment", "hour").sort("treatment", "hour").rows()
@@ -553,15 +593,20 @@ def _apart() -> list[tuple[str, int]]:
 
 CASES = [
     Case(
-        "masking a window drops its rows and an hour each side",
-        lambda: _counts(mask_windows("m", "", _windows(), HOUR_NS, _fields())),
-        (4, 4),
+        "masking a window nulls its column's cells and an hour each side",
+        lambda: _masked(mask_windows("m", "", _windows(), HOUR_NS, _sources())),
+        (4, 4, 4),
     ),
-    Case("masking rows drops exactly them", lambda: _counts(mask_rows("m", "", _flags(), _fields())), (3, 3)),
-    Case("dropping an inst drops all its rows", lambda: _counts(drop_insts("d", "", ["e2"], _fields())), (54, 54)),
+    Case("masking cells nulls exactly them", lambda: _masked(mask_cells("m", "", _flags(), _sources())), (3, 3, 3)),
     Case(
-        "dropping spans drops their rows of every field",
-        lambda: _counts(drop_spans("d", "", _spans(), _fields())),
+        "a flag that names no column masks every column of its row",
+        lambda: _masked(mask_cells("m", "", _flags(column=False), _sources())),
+        (3, 3, 3),
+    ),
+    Case("dropping an inst drops all its rows", lambda: _counts(drop_insts("d", "", ["e2"], _sources())), (54, 54)),
+    Case(
+        "dropping spans drops their rows in every source",
+        lambda: _counts(drop_spans("d", "", _spans(), _sources())),
         (6, 6),
     ),
     Case(

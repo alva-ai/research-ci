@@ -151,7 +151,7 @@ def _decisive_line(d: dict[str, Any], need: float) -> str:
     passing = d.get("passing", [])
     where = f" at {', '.join(passing)}" if passing and d["outcome"] == "passed" else ""
     return (
-        f"{d['on']}: gain over random {amount(d['effect'], d)} ± {figure(d['se'], d)}{at}{year} · "
+        f"{d['name']}: gain over random {amount(d['effect'], d)} ± {figure(d['se'], d)}{at}{year} · "
         f"{z}{_shuffles(d)} · {d['outcome'].upper()}{where}"
     )
 

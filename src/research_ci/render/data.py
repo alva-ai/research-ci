@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from research_ci.render.common import MARK, adder, bp, check_line, eval_line, failed_tests
+from research_ci.render.contract import data_line
 from research_ci.render.feat import calibration_lines
 
 SLOT_HEADS = {
@@ -20,12 +21,7 @@ SLOT_HEADS = {
 def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     out = [f"DataCard · {idea} · v{version}"]
     add = adder(out)
-    data = spec["data"]
-    add(
-        "data",
-        f"{data['source']} {data['hash'][:12]} · {data['rows']:,} rows · {data['insts']} insts · "
-        f"{data['first']} → {data['explore_end']} · {data['age_days']} days old",
-    )
+    add("data", data_line(spec["data"]))
     out.append(SLOT_HEADS[1])
     add("source", *_source(spec["source"]))
     add("checks", *[check_line(c) for c in spec["checks"] if c.get("by") in ("floor", "")])
@@ -39,7 +35,7 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     else:
         add("treatments", "none needed")
     if spec["power"]:
-        add("power", f"{'H':<12}{'MDE before':>11}{'after':>8}", *[_power_row(p) for p in spec["power"]])
+        add("power", f"{'H':<16}{'MDE before':>11}{'after':>8}", *[_power_row(p) for p in spec["power"]])
     cal = spec.get("calibration")
     if cal is not None:
         add("calibrate", *(calibration_lines(cal) or [f"FAIL {n}" for n in cal["notes"]]))
@@ -107,7 +103,8 @@ def _source(src: dict[str, Any]) -> list[str]:
         return [f"{head} · admitted"]
     status = "not yet admitted: approving this card admits it for every idea [!]"
     status = status if src["status"] == "waiting" else "NOT ADMITTED: it failed its admission checks [!]"
-    lines = [f"{head} · {status}", f"code {src['code'][:12]} · {src['insts']} insts · {src['rows']:,} rows"]
+    shown = " · ".join(f"{name} ({', '.join(columns)})" for name, columns in src["sources"].items())
+    lines = [f"{head} · {status}", f"code {src['code'][:12]} · {src['insts']} insts · {src['rows']:,} rows · {shown}"]
     for c in src["checks"]:
         lines.append(check_line(c))
         if c["name"] == "independent source agrees" and src["reference"]:
@@ -116,9 +113,10 @@ def _source(src: dict[str, Any]) -> list[str]:
 
 
 def _grades(grades: dict[str, str]) -> str:
+    """Each column of the sources, ``<source>.<column>``, under its grade."""
     by: dict[str, list[str]] = {}
-    for f, g in sorted(grades.items()):
-        by.setdefault(g, []).append(f)
+    for c, g in sorted(grades.items()):
+        by.setdefault(g, []).append(c)
     order = ("verified", "unverified", "not sampled", "failed")
     return " · ".join(f"{g}: {' '.join(by[g])}" for g in order if g in by)
 
@@ -150,8 +148,8 @@ def _size(x: float | None) -> str:
 
 
 def _shares(key: str, shares: list[list[Any]]) -> str:
-    return f"{key:<12}" + " · ".join(f"{c} {x:.0%}" for c, x in shares)
+    return f"{key:<16}" + " · ".join(f"{c} {x:.0%}" for c, x in shares)
 
 
 def _power_row(p: dict[str, Any]) -> str:
-    return f"{p['on'] + ' ' + p['horizon']:<12}{bp(p['mde_before']):>11}{bp(p['mde']):>8}"
+    return f"{p['name'] + ' ' + p['horizon']:<16}{bp(p['mde_before']):>11}{bp(p['mde']):>8}"

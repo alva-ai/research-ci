@@ -72,7 +72,7 @@ def test_the_eval_functions_and_declarations_of_each_step_are_read_from_its_code
     }
     assert "data.sanity.spikes" in data["level sanity"]["methods"]
     assert {"data.reconcile.requests", "data.reconcile.compare"} <= set(data["independent source agrees"]["methods"])
-    assert data["field grades"]["methods"] == []
+    assert data["column grades"]["methods"] == []
     assert data["decisive test calibration"]["methods"] == ["protocol.target_reads_score"]
     assert data["independent source agrees"]["needs"] == "reference"
     feat = stages["feat"]
@@ -129,7 +129,7 @@ def test_every_eval_function_says_what_it_does_and_where_it_is_used() -> None:
     assert functions["statistics.ic.rank_ic"] == {
         "key": "statistics.ic.rank_ic",
         "name": "rank_ic",
-        "doc": "Spearman correlation of score and label at each decision time.",
+        "doc": "Spearman correlation of score and outcome at each decision time.",
         "used": ["feat", "research code"],
         "examples": 3,
         "properties": 3,

@@ -16,8 +16,8 @@ A universe says which question its scores answer, `Universe(use, clusters, shape
 
 | Target | Role |
 | --- | --- |
-| `ref.mean` | Which candidates do better (cross), or what follows an event (events): the mean label per decision time over the candidates with a score, each cluster weighted equally; with `net`, after each candidate's round trip. |
-| `ref.timing` | When to be long or short (series): the mean over the candidates at each decision time of sign(score) × label, long where the score is positive, short where it is negative, flat at zero. |
+| `ref.mean` | Which candidates do better (cross), or what follows an event (events): the mean outcome `y` per decision time over the candidates with a score, each cluster weighted equally; with `net`, after each candidate's round trip. |
+| `ref.timing` | When to be long or short (series): the mean over the candidates at each decision time of sign(score) × `y`, long where the score is positive, short where it is negative, flat at zero. |
 
 ## Stages
 
@@ -31,9 +31,9 @@ Lists: `stages/contract/floor.py`, `stages/contract/defaults.py`.
 | universe point-in-time | Same candidates when the data is cut | blocks | floor | `protocol.universe_pit` |
 | universe causal | Later values leave earlier candidates unchanged | blocks | floor | `protocol.universe_causal` |
 | universe membership | A static candidate list makes history explore-grade | warns | floor | — |
-| label: worked examples | Worked examples hold, and move when inputs move | blocks | floor | `protocol.label_cases` |
-| label: fields | Label options name fields; fails when no rows result | blocks | floor | — |
-| label: no data after t + h | Labels unchanged when the data stops early | blocks | floor | `protocol.label_truncation` |
+| outcome: worked examples | Worked examples hold, and move when inputs move | blocks | floor | `protocol.outcome_cases` |
+| outcome: columns | Outcome options name columns; fails when no rows result | blocks | floor | — |
+| outcome: no data after t + h | Outcomes unchanged when the data stops early | blocks | floor | `protocol.outcome_truncation` |
 | power | MDE per horizon; blocks when no noise is measurable | blocks | floor | `data.concentration.shares` |
 | target reads the score | The decisive target moves with the scores | blocks | floor | `protocol.target_reads_score` |
 | **2 engine lists** | | | | |
@@ -46,29 +46,29 @@ Lists: `stages/data/floor.py`, `stages/data/defaults.py`, `stages/data/source.py
 | Step | Checks or computes | Role | List | Eval method |
 | --- | --- | --- | --- | --- |
 | **1 floor: admission, once per source** | | | | |
-| baseline | Gaps, near-duplicates, and level shifts in the rows | warns | floor | `data.baseline.baseline` |
+| baseline | Gaps, near-duplicates, and level shifts in every source | warns | floor | `data.baseline.baseline` |
 | replay as of past times | Fetches as of past times match the full fetch | blocks | floor | `data.replay.{cut_points, replay}` |
-| canary: replay | The replay catches a deletion made with hindsight | blocks | floor | `data.baseline.events` · `data.replay.replay` |
-| independent source agrees *(reference)* | Another source agrees; grades every field | blocks | floor | `data.reconcile.{summarize, requests, compare}` · `data.baseline.baseline` |
+| canary: replay | The replay catches a deletion made with hindsight | blocks | floor | `data.baseline.{events, rows}` · `data.replay.replay` |
+| independent source agrees *(reference)* | Another source agrees; grades every column | blocks | floor | `data.reconcile.{summarize, requests, compare}` · `data.baseline.baseline` |
 | canary: reconciliation *(reference)* | The comparison catches altered values | blocks | floor | `data.reconcile.{compare, requests}` · `data.baseline.baseline` |
 | **1 floor** | | | | |
 | row-by-row code *(data.py)* | Row-by-row code in the idea's data files | warns | floor | — |
-| field grades | The decisive number reads only verified fields | warns | floor | — |
+| column grades | The decisive number reads only verified columns | warns | floor | — |
 | treatment influence | Each treatment's move of the decisive number, in MDE | warns | floor | — |
 | power | MDE per horizon, before and after the treatments | shown | floor | — |
 | decisive test calibration | Stand-ins die and planted signals live | blocks | floor | `protocol.target_reads_score` |
 | **2 engine lists** | | | | |
 | data is current | Warns when the newest row is too old | warns | default | — |
-| level shifts *(levels)* | Masks level jumps the source did not confirm | treats | default | `data.baseline.level_shift_anomalies` |
-| level sanity *(levels)* | Masks levels at zero, stuck, or spiking | treats | default | `data.sanity.{nonpositive, stale, spikes}` |
-| identity breaks *(levels)* | Splits an inst that returns at another level | treats | default | `data.identity.{breaks, renames}` |
-| coverage | Drops insts shorter than the longest horizon | treats | default | `data.coverage.{short_lived, thin}` |
+| level shifts *(levels)* | Masks level jumps the source did not confirm | treats | default | `data.baseline.{level_shift_anomalies, rows}` |
+| level sanity *(levels)* | Masks levels at zero, stuck, or spiking | treats | default | `data.sanity.{nonpositive, stale, spikes}` · `data.baseline.{cells, rows}` |
+| identity breaks *(levels)* | Splits an inst that returns at another level | treats | default | `data.identity.{breaks, renames}` · `data.baseline.rows` |
+| coverage | Drops insts shorter than the longest horizon | treats | default | `data.coverage.{short_lived, thin}` · `data.baseline.rows` |
 | hedge guard *(hedge)* | Drops candidates whose legs are not one asset | treats | default | `data.invariants.{hedged_legs, hedge_check}` |
 | influence concentration | Shows the clusters most of the noise rests on | warns | default | `data.concentration.shares` |
-| library evals *(data.py)* | Masks, drops, or asks about what one flags | treats | floor | — |
+| library evals *(data.py)* | Masks, drops, or asks about what one flags | treats | floor | `data.baseline.rows` |
 | **3 lab evals** | | | | |
 | lab evals listed *(data.py, feat.py)* | The layer file lists at least one lab eval | blocks | floor | — |
-| lab evals *(data.py)* | Treats what one flags; on_fail=block vetoes | vetoes | floor | — |
+| lab evals *(data.py)* | Treats what one flags; on_fail=block vetoes | vetoes | floor | `data.baseline.rows` |
 | **4 tests of lab evals** | | | | |
 | lab eval tests *(data.py, feat.py)* | Each lab eval passes its CASES and PROPERTIES | blocks | floor | — |
 | pits caught *(data.py)* | Each eval flags the pits it covers | blocks | floor | `data.pits.{unit, level_break, gap, duplicate, shift, leak, spike, swap}` |
@@ -86,11 +86,11 @@ Lists: `stages/feat/floor.py`, `stages/feat/defaults.py`, `stages/lab.py`.
 | decisive test | The decisive effect beats the floor world: z ≥ z_need | decides | floor | — |
 | cost | Wall time and peak memory of the features call | shown | floor | — |
 | **2 engine lists** | | | | |
-| rank ic *(cross)* | Rank correlation of score and label per time | shown | default | `statistics.ic.rank_ic` |
+| rank ic *(cross)* | Rank correlation of score and outcome per time | shown | default | `statistics.ic.rank_ic` |
 | rank ic without top {clusters} *(cross)* | Rank IC without the top fifth of clusters | shown | default | `statistics.ic.rank_ic` · `structure.filters.{without_top, kept_without_top}` |
 | top minus bottom fifth *(cross)* | Top fifth by score less the bottom fifth | shown | default | `statistics.spread.quantile_spread` |
-| ts ic *(series)* | Rank correlation of score and label over time | shown | default | `statistics.ic.ts_ic` |
-| mean at events *(events)* | Mean label at the event rows | shown | default | — |
+| ts ic *(series)* | Rank correlation of score and outcome over time | shown | default | `statistics.ic.ts_ic` |
+| mean at events *(events)* | Mean outcome at the event rows | shown | default | — |
 | library evals *(feat.py)* | Each library eval feat.py lists, vs the floor | shown | floor | — |
 | **3 lab evals** | | | | |
 | lab evals listed *(data.py, feat.py)* | The layer file lists at least one lab eval | blocks | floor | — |
@@ -111,14 +111,14 @@ A lab eval is a function of the idea's own, in a module such as `evals/<name>.py
 
 | Declaration | Means |
 | --- | --- |
-| `Eval(of, name='', h0='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')` | an entry of EVALS with what its layer reads: h0, the H0 a lab eval rejects (required for one, refused on a library eval); on_fail, covers (data.py); label, horizons, combine (feat.py) |
+| `Eval(of, name='', h0='', on_fail=None, covers=(), label=None, horizons=None, combine=None, note='')` | an entry of EVALS with what its layer reads: h0, the H0 a lab eval rejects (required for one, refused on a library eval); on_fail, covers (data.py); label (the column read as y), horizons, combine (feat.py) |
 | `Case(name, run, expect, tol=1e-09, given=None)` | `run()` must give `expect`; with `given`, `run(given)` must, so a case can name the eval and the frame it reads: `Case("the top two of six", thirds, 0.4, given=SIX)`. |
 | `Size(of, market=Market(), markets=100)` | On markets with no information, the statistic must beat the floor world (z ≥ 2) no more often than chance allows, over `markets` seeds. |
 | `Power(of, market=Market(), markets=40, rate=0.8)` | On markets with `market.ic` of information, the statistic must beat the floor world at least `rate` of the time. |
 | `Recovers(of, market, expect, tol, markets=20)` | Averaged over `markets` seeds and decision times, the statistic must come within `tol` of `expect`. |
 | `Market(times=120, insts=100, clusters=20, groups=4, cluster_share=0.3, group_share=0.0, tail=4.0, ic=0.0, shape='cross')` | A synthetic evaluation table: `insts` candidates in `clusters` (and the clusters in `groups`) at `times` hourly decision times. |
-| `Source(insts=12, hours=336, settle=8, lag=0, revised=0.0)` | A synthetic field table: `insts` insts with an hourly `price` (a random walk) and a `flow` settled every `settle` hours and known `lag` hours after it; a share `revised` of the flows gets a second vintage one settlement later. |
-| `Pit(category, plant, note='')` | A planted problem of `category` in `field`: `plant(fields, field, rng)` returns a copy with it planted in one inst where the field varies. |
+| `Source(insts=12, hours=336, settle=8, lag=0, revised=0.0)` | Synthetic sources: `insts` insts with an hourly `price` (a random walk, source `prices`) and a `flow` settled every `settle` hours and known `lag` hours after it (source `flows`); a share `revised` of the flows gets a second vintage one settlement later. |
+| `Pit(category, plant, note='')` | A planted problem of `category` in a value column: `plant(sources, column, rng)` returns copies of the sources with it planted in the source that holds the column, in one inst where the column varies. |
 
 For example: `CASES = [Case("the top two of six less the bottom two", thirds, 0.4, given=SIX)], where SIX is a polars DataFrame of the evaluation table (t, inst, score, y) and thirds(SIX) returns t, value`.
 
@@ -127,15 +127,15 @@ A null world, in `nulls/feat.py`, one for every alternative of the contract:
 | Field | Means |
 | --- | --- |
 | `Null.explains` | the id of the contract's alternative this world answers |
-| `Null.world` | a PermuteWithin or a ShiftInTime: how the scores are shuffled while the labels stay |
+| `Null.world` | a PermuteWithin or a ShiftInTime: how the scores are shuffled while the outcomes stay |
 | `Null.keeps` | the column the alternative lives in; None means the world's bucket_by, or inst for a ShiftInTime |
 | `Null.evals` | the names of the evals this world judges, any eval of the layer; () means the decisive effect |
 | `Null.reps` | the most shuffles it draws, a batch at a time until its votes settle; at least 20, 200 by default |
 | `Null.note` | free text kept with the world in the submission's record |
 | `PermuteWithin.bucket_by` | shuffle the scores across insts inside each bucket of this column; "time" is one bucket per decision time |
 | `PermuteWithin.clusters` | a column whose members move together and are shuffled as one |
-| `PermuteWithin.block` | repeat the same shuffle for every decision time inside a block this long; "horizon" uses each label horizon |
-| `ShiftInTime.min_shift` | shift each inst's scores along its decision times, by one offset for all insts, at least this far either way round; "horizon" uses each label horizon |
+| `PermuteWithin.block` | repeat the same shuffle for every decision time inside a block this long; "horizon" uses each horizon |
+| `ShiftInTime.min_shift` | shift each inst's scores along its decision times, by one offset for all insts, at least this far either way round; "horizon" uses each horizon |
 
 ## Slot 4: tests of lab evals
 
@@ -167,20 +167,20 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `obligations` | One check per case and property the module declares. | — |
 | | `run_tests` | One check per case and property, each named after `name`. | — |
 | `validation/calibration.py` | `calibrate` | Stand-ins die as often as chance allows; planted signals live. | 4 ex |
-| `stages/data/treatments.py` | `apply_all` | The field table after every field treatment. | — |
+| `stages/data/treatments.py` | `apply_all` | The sources after every treatment of the sources: the masks and drops first, each found on the sources as they came, then the splits in order. | — |
 | | `apply_candidates` | The candidates after every candidate treatment. | — |
-| | `drop_candidates` | Drop candidate rows (`t`, `inst`). | — |
-| | `drop_insts` | Drop every row of the named insts. | 1 ex |
-| | `drop_spans` | Drop the rows each span covers. | 1 ex |
-| | `mask_rows` | Drop the flagged rows. | 1 ex |
-| | `mask_windows` | Drop the flagged field's rows within `around_ns` of each window. | 1 ex |
+| | `drop_candidates` | Drop the candidate rows at `t` whose `inst`, or one of whose legs (`long`, `short`), is a flagged `inst` at `t`: a flagged candidate, or a flagged row of `wide` a candidate reads. | — |
+| | `drop_insts` | Drop every row of the named insts, in every source. | 1 ex |
+| | `drop_spans` | Drop the rows each span covers, in every source: every row of the span's `inst` whose event falls in `[start, end]`. | 1 ex |
+| | `mask_cells` | Set the flagged cells to null. | 3 ex |
+| | `mask_windows` | Mask the window's column within `around_ns` of each window. | 1 ex |
 | | `mde` | The smallest effect this horizon can detect; it does not depend on the effect asked for. | — |
-| | `renames_rows` | A treatment that changes identities instead of dropping rows, such as a split. | — |
+| | `renames_rows` | A treatment that changes identities instead of dropping or masking rows, such as a split. | — |
 | | `se` | No noise can be measured on a number that is not finite somewhere. | — |
 | | `smaller` | The finer of two resolutions. | — |
-| | `spans` | When each removed row was current in `fields`. | 6 ex |
-| | `split_insts` | Rename each split inst's rows from the split on. | 1 ex |
-| | `touched` | Label rows whose window meets a span of a leg. | 6 ex |
+| | `spans` | When each removed row was current in `sources`. | 6 ex |
+| | `split_insts` | Rename each split inst's rows from the split on, in every source. | 1 ex |
+| | `touched` | Outcome rows whose window meets a span of a leg. | 6 ex |
 
 ## Eval library
 
@@ -190,20 +190,20 @@ What the engine runs on its own, with worked examples like the library's, that n
 | --- | --- | --- | --- | --- |
 | `protocol` | `adds_up` | Components add up to net; the consumer's own checks pass. | algo, planned | — |
 | | `branch_diff` | The branch's extra net over `(start, end]`, and its overlap. | algo, planned | — |
-| | `busiest` | A decision time whose next period brings the most fields. | algo, planned | — |
+| | `busiest` | A decision time whose next period brings the most sources. | algo, planned | — |
 | | `causal` | Changes known after `at` must move only what comes after. | algo, planned | — |
+| | `changed` | The sources with the values of some rows changed. | inside eval | — |
 | | `consumer_pit` | Cut data gives the full run's periods before the cut. | algo, planned | — |
 | | `deterministic` | Two identical consumer runs must give the same net. | algo, planned | — |
 | | `fees_match` | The consumer charges what the cost model says. | algo, planned | — |
-| | `label_cases` | Worked examples hold as written and move with their inputs. | contract | — |
-| | `label_truncation` | Data stopping at `cut` leaves labels ending by it unchanged. | contract | — |
-| | `matches_labels` | The consumer books what the label says, period by period. | algo, planned | — |
+| | `matches_outcome` | The consumer books what the outcome says, period by period. | algo, planned | — |
 | | `max_drawdown` | The consumer's deepest fall in equity from its running peak. | algo, planned | — |
+| | `outcome_cases` | Worked examples hold as written and move with their inputs. | contract | — |
+| | `outcome_truncation` | Data stopping at `cut` leaves outcomes ending by it unchanged. | contract | — |
 | | `passthrough` | The consumer's own baseline scores must change nothing. | algo, planned | — |
 | | `perturb` | An uninformative change to scores: a share dropped or permuted. | algo, planned | — |
 | | `target_reads_score` | A target must move with the scores. | contract, data | — |
 | | `total` | The consumer's net summed over the run. | algo, planned | — |
-| | `truncated` | The field table cut to the rows known by `t`. | inside eval | — |
 | | `universe_causal` | Candidates at `t` ignore every value known after `t`. | contract | — |
 | | `universe_pit` | Candidates before the cut equal those from all data. | contract | — |
 
@@ -211,10 +211,12 @@ What the engine runs on its own, with worked examples like the library's, that n
 
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
-| `baseline` | `baseline` | Generic checks and their anomalies: gaps, near-duplicates, level shifts. | data | 7 ex |
-| | `events` | First vintages with each event's spacing and its typical size. | data | 7 ex |
-| | `first_vintages` | One row per event: its first vintage. | inside eval | 7 ex |
+| `baseline` | `baseline` | Generic checks and their anomalies: gaps, near-duplicates, level shifts. | data | 8 ex |
+| | `cells` | The cells that hold a value, one per row and column. | data | 8 ex |
+| | `events` | First vintages with each event's spacing, its group's usual spacing and size. | data | 8 ex |
+| | `first_vintages` | One row per event of each group `by`: its first vintage. | inside eval | 8 ex |
 | | `level_shift_anomalies` | The baseline's level shifts alone, from the declared levels only. | data | — |
+| | `rows` | Every row of the sources by its keys. | data | 8 ex |
 | `concentration` | `shares` | Each cluster's share of the noise, between 0 and 1. | contract, data | 7 ex |
 | `coverage` | `short_lived` | Insts whose events span less than `horizon_ns`. | data, research code | 2 ex |
 | | `thin` | Decision times with some candidates but fewer than `floor`. | data, research code | 1 ex |
@@ -222,21 +224,22 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `renames` | What the split calls each new series: `inst`, `at`, `to`. | data, research code | 1 ex |
 | `invariants` | `hedge_check` | The card's hedged-legs line, naming the pairs most often apart. | data | — |
 | | `hedged_legs` | Per candidate row: the legs' price ratio, correlation, and `ok`. | data | 1 ex |
-| `pits` | `duplicate` | A duplicate: one event repeated a millisecond later. | data, research code | 1 ex |
-| | `gap` | A gap: ten usual spacings missing from a random time. | data, research code | 1 ex |
-| | `leak` | A leak: each event carries the value of the next. | data, research code | 1 ex |
-| | `level_break` | A level break: one inst's field half again as large. | data, research code | 1 ex |
-| | `shift` | A shift: one inst's events stamped one usual spacing late. | data, research code | 1 ex |
-| | `spike` | A spike: one event of one inst's field, ten times larger. | data, research code | 1 ex |
-| | `swap` | A swap: one inst's series replaced by another inst's. | data, research code | 1 ex |
-| | `target` | An inst whose `field` has enough rows for a pit. | research code | 1 ex |
-| | `unit` | A unit error: one inst's field a thousand times larger. | data, research code | 1 ex |
+| `pits` | `duplicate` | A duplicate: one row of an inst repeated a millisecond later. | data, research code | 1 ex |
+| | `gap` | A gap: ten usual spacings of one inst's rows missing. | data, research code | 1 ex |
+| | `holder` | The source that holds `column`. | research code | 1 ex |
+| | `leak` | A leak: each event of one inst carries the next one's value. | data, research code | 1 ex |
+| | `level_break` | A level break: one inst's column half again as large. | data, research code | 1 ex |
+| | `shift` | A shift: one inst's rows stamped one usual spacing late. | data, research code | 1 ex |
+| | `spike` | A spike: one event of one inst ten times larger. | data, research code | 1 ex |
+| | `swap` | A swap: one inst's column replaced by another inst's. | data, research code | 1 ex |
+| | `target` | An inst whose `column` has enough values for a pit. | research code | 1 ex |
+| | `unit` | A unit error: one inst's column a thousand times larger. | data, research code | 1 ex |
 | `reconcile` | `compare` | One result per request: `match`, `mismatch` or `unanswered`. | data | 5 ex |
-| | `requests` | Point requests for random rows, and window requests for anomalies. | data | 5 ex |
-| | `summarize` | The check, each field's grade, and counts. | data | — |
-| `replay` | `cut_points` | Cut points: holes, before new insts, and random times. | data | 3 ex |
-| | `replay` | Each cut's fetch must equal the full fetch cut there. | data | 3 ex |
-| `sanity` | `nonpositive` | Events of a declared level at zero or below. | data, research code | 3 ex |
+| | `requests` | Point requests for random cells, and window requests for anomalies. | data | 5 ex |
+| | `summarize` | The check, each column's grade, and counts. | data | — |
+| `replay` | `cut_points` | Cut points: holes, before new insts, and random times. | data | 4 ex |
+| | `replay` | Each cut's fetch must equal the full fetch cut there. | data | 4 ex |
+| `sanity` | `nonpositive` | Events of a declared level at zero or below. | data, research code | 4 ex |
 | | `spikes` | Events of a declared level that jump and come back. | data, research code | 5 ex |
 | | `stale` | Events repeating the value before them in a long run. | data, research code | 3 ex |
 
@@ -244,9 +247,9 @@ What the engine runs on its own, with worked examples like the library's, that n
 
 | Module | Function | Does | Used by | Backing |
 | --- | --- | --- | --- | --- |
-| `ic` | `rank_ic` | Spearman correlation of score and label at each decision time. | feat, research code | 3 ex · 3 prop |
-| | `ts_ic` | Rank correlation of score and label over time, per inst. | feat, research code | 3 ex · 3 prop |
-| `spread` | `quantile_spread` | Mean label of the top `share` less the bottom `share`. | feat, research code | 3 ex · 2 prop |
+| `ic` | `rank_ic` | Spearman correlation of score and outcome at each decision time. | feat, research code | 3 ex · 3 prop |
+| | `ts_ic` | Rank correlation of score and outcome over time, per inst. | feat, research code | 3 ex · 3 prop |
+| `spread` | `quantile_spread` | Mean outcome of the top `share` less the bottom `share`. | feat, research code | 3 ex · 2 prop |
 
 ### structure
 
@@ -261,7 +264,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | --- | --- | --- | --- | --- |
 | `synthetic` | `hand` | A small evaluation table worked by hand, at one time. | worked examples | — |
 | | `market` | A synthetic evaluation table, one row per inst and time. | worked examples | — |
-| | `source` | A synthetic field table of hourly prices and settled flows. | worked examples | — |
+| | `sources` | Synthetic sources of hourly prices and settled flows. | worked examples | — |
 
 ## Legend
 
