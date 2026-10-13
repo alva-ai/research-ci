@@ -10,6 +10,8 @@ import polars as pl
 from research_ci.kernel.tables import values
 from research_ci.kernel.time.clock import TIME, lit_time, time_series, to_ns
 
+Grid = Sequence[int] | pl.DataFrame
+
 
 def known(sources: Mapping[str, pl.DataFrame], t: int) -> dict[str, pl.DataFrame]:
     """Each source cut to the rows known by ``t`` (``available_at <= t``)."""
@@ -25,16 +27,20 @@ def asof(source: pl.DataFrame, t: datetime | pd.Timestamp | int) -> pl.DataFrame
     return latest.select("inst", "event_time", *values(source)).sort("inst", "event_time")
 
 
-def wide(sources: Mapping[str, pl.DataFrame], times: Sequence[int]) -> pl.DataFrame:
-    """The sources as of each decision time ``t`` (ns): ``t``, ``inst``, every source's value columns, and
-    ``age_<source>``. One row per time and inst that any source has a row of by then. For each source, the row is that
-    of the latest event known by ``t``, at the latest vintage of it known by ``t``, and ``age_<source>`` is ``t`` less
-    when that vintage became known; all null when the source has nothing of the inst yet. A late revision of an older
-    event changes nothing: it is not the latest event."""
-    grid = time_series(sorted(set(times)), "t").to_frame()
+def wide(sources: Mapping[str, pl.DataFrame], times: Grid) -> pl.DataFrame:
+    """The sources as of each decision time ``t``: ``t``, ``inst``, every source's value columns, and
+    ``age_<source>``. The decision times are a clock, the same times (ns) for every inst, or a grid ``t | inst`` of
+    each inst's own. One row per decision time and inst that any source has a row of by then. For each source, the row
+    is that of the latest event known by ``t``, at the latest vintage of it known by ``t``, and ``age_<source>`` is
+    ``t`` less when that vintage became known; all null when the source has nothing of the inst yet. A late revision of
+    an older event changes nothing: it is not the latest event."""
     since = pl.concat([table.select("inst", "available_at") for table in sources.values()])
     since = since.group_by("inst").agg(pl.col("available_at").min().alias("_since"))
-    rows = grid.join(since, how="cross").filter(pl.col("t") >= pl.col("_since")).select("t", "inst").sort("t")
+    if isinstance(times, pl.DataFrame):
+        rows = times.select("t", "inst").unique().join(since, on="inst")
+    else:
+        rows = time_series(sorted(set(times)), "t").to_frame().join(since, how="cross")
+    rows = rows.filter(pl.col("t") >= pl.col("_since")).select("t", "inst").sort("t")
     columns, ages = [], []
     for name, table in sources.items():
         state = _current(table).rename({"available_at": "_at"})

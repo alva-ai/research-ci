@@ -32,7 +32,7 @@ def result_card(spec: dict[str, Any], idea: str, version: int) -> str:
     f = spec["features"]
     add("features", f"{f['path']} · {f['hash'][:12]}")
     sc = spec["scores"]
-    add("scores", f"{sc['rows']:,} rows · {sc['share']:.0%} of candidate rows · {sc['hash'][:12]}")
+    add("scores", f"{sc['rows']:,} rows · {sc['share']:.0%} of candidate rows · {sc['hash'][:12]}", _stored(sc))
     add("cost", cost_line(spec.get("cost")))
     cal = spec["calibration"]
     if cal["ran"]:
@@ -60,6 +60,11 @@ def result_card(spec: dict[str, Any], idea: str, version: int) -> str:
     add("warnings", *[f"[!] {w}" for w in spec.get("warnings", [])])
     out.append("-" * 100)
     return "\n".join(out)
+
+
+def _stored(scores: dict[str, Any]) -> str | None:
+    """Where a PASSED submission's scores sit in the vault, which accepting it pins."""
+    return f"stored {scores['stored'][:12]} · {scores['path']}" if "stored" in scores else None
 
 
 SLOT_HEADS = {

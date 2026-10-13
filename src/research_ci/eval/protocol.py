@@ -58,6 +58,25 @@ def universe_pit(
     return Check("universe point-in-time", "pass", f"{len(cuts)} cut points give the same candidates")
 
 
+def grid_pit(
+    grid: Callable[[Sources], pl.DataFrame], sources: Sources, full: pl.DataFrame, cuts: Sequence[int]
+) -> Check:
+    """Decision times up to the cut equal those from all data. With the sources cut at ``cut``, the grid ``t | inst``
+    the idea's sampler gives up to ``cut`` must equal the one it gives on all data: a decision time may depend only on
+    rows known by then."""
+    bad = []
+    for cut in cuts:
+        until = pl.col("t") <= lit_time(cut)
+        mismatch = _frame_mismatch(grid(known(sources, cut)).filter(until), full.filter(until), ["t", "inst"], [])
+        if mismatch:
+            bad.append(f"up to {_iso(cut)}, {mismatch} (cut data vs all data)")
+    if bad:
+        why = "; ".join(bad)
+        fix = "a decision time may depend only on rows known by then (available_at <= t)"
+        return Check("grid point-in-time", "fail", f"the sources cut at a time change the decision times: {why}; {fix}")
+    return Check("grid point-in-time", "pass", f"{len(cuts)} cut points give the same decision times")
+
+
 def universe_causal(
     candidates: Candidates, sources: Sources, full: pl.DataFrame, times: Sequence[int], t: int
 ) -> Check:
