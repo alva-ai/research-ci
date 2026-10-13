@@ -22,6 +22,7 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     out = [f"DataCard · {idea} · v{version}"]
     add = adder(out)
     add("data", data_line(spec["data"]))
+    add("grid", _grid(spec["grid"]))
     out.append(SLOT_HEADS[1])
     add("source", *_source(spec["source"]))
     add("checks", *[check_line(c) for c in spec["checks"] if c.get("by") in ("floor", "")])
@@ -50,6 +51,7 @@ def data_card(spec: dict[str, Any], idea: str, version: int) -> str:
     add("lab evals", *[line for r in lab for line in _lab(r, spec)] or ["none"])
     out.append(SLOT_HEADS[4])
     add("tests", *[_tested(r) for r in lab] or ["none"])
+    add("products", *_products(spec["products"]))
     add("decide", *(spec["decide"] or ["nothing"]))
     v = spec["verdict"]
     add("verdict", v["status"].upper(), *v["notes"])
@@ -110,6 +112,21 @@ def _source(src: dict[str, Any]) -> list[str]:
         if c["name"] == "independent source agrees" and src["reference"]:
             lines.append(f"     reference: {src['reference']}")
     return lines
+
+
+def _grid(g: dict[str, Any]) -> str:
+    """The decision grid's shape: decision times, how many per inst, the longest gap, and whether it is even."""
+    low, mid, high = g["per_inst"]
+    spacing = "even" if g["even"] else "uneven [!]"
+    return (
+        f"{g['by']} · {g['times']:,} decision times · per inst {low:,}/{mid:g}/{high:,} (min/median/max) · longest "
+        f"gap {g['longest_gap']} · {spacing}"
+    )
+
+
+def _products(products: dict[str, dict[str, Any]]) -> list[str]:
+    """What approving pins, each stored in the vault as parquet: its rows, hash and folder."""
+    return [f"{kind:<11}{p['rows']:>11,} rows · {p['hash'][:12]} · {p['path']}" for kind, p in products.items()]
 
 
 def _grades(grades: dict[str, str]) -> str:

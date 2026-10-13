@@ -3,16 +3,16 @@ by slot.
 
 Before the data is fetched, the checks of the lab's evals (``stages/lab.py``) refuse a ``data.py`` without a lab eval
 (slot 3) or with one that fails its ``CASES`` or ``PROPERTIES`` (slot 4). ``FIND`` finds what to treat: the warning
-the idea's research files gave, the default list (slot 2), the pits each eval that claims to cover a kind of problem
-must catch (slot 4; an eval that misses one does not run and blocks the check), then the library evals ``data.py``
-lists (slot 2) and its lab evals (slot 3). What slot 2 and the lab evals find becomes a treatment that is applied by
-default, or an item a person decides; a lab eval with ``on_fail="block"`` that flags any row is a veto, and the check
-is BLOCKED. ``WEIGH`` works on the data with every treatment found (slot 1): the column grades, each treatment's
-influence on the contract's decisive number in units of the smallest effect the data can detect (MDE), and the power
-before and after. Below the threshold a treatment is applied and logged. A treatment that changes identities (a split)
-is weighed against the untreated data, and every other one on top of the splits that are applied. Only differences are
-reported, never the level of the number. ``LAST`` runs once nothing blocks: the decisive test, calibrated on the
-treated data.
+the idea's research files gave, whether the decision times of the idea's sampler read nothing ahead (one that does
+blocks the check), the default list (slot 2), the pits each eval that claims to cover a kind of problem must catch
+(slot 4; an eval that misses one does not run and blocks the check), then the library evals ``data.py`` lists (slot 2)
+and its lab evals (slot 3). What slot 2 and the lab evals find becomes a treatment that is applied by default, or an
+item a person decides; a lab eval with ``on_fail="block"`` that flags any row is a veto, and the check is BLOCKED.
+``WEIGH`` works on the data with every treatment found (slot 1): the column grades, each treatment's influence on the
+contract's decisive number in units of the smallest effect the data can detect (MDE), and the power before and after.
+Below the threshold a treatment is applied and logged. A treatment that changes identities (a split) is weighed
+against the untreated data, and every other one on top of the splits that are applied. Only differences are reported,
+never the level of the number. ``LAST`` runs once nothing blocks: the decisive test, calibrated on the treated data.
 """
 
 import math
@@ -26,14 +26,16 @@ import polars as pl
 
 from research_ci.api.contract import Contract, ContractError, span
 from research_ci.api.evals import FORMAT, Eval, data_inputs, source_of
+from research_ci.eval import protocol as pr
 from research_ci.eval.data.pits import BUILTIN
 from research_ci.kernel.tables import source_tables, values
-from research_ci.kernel.time.asof import wide
+from research_ci.kernel.time.asof import Grid, wide
 from research_ci.kernel.time.clock import span_ns
 from research_ci.kernel.verdict import power as pw
 from research_ci.kernel.verdict.check import Check
 from research_ci.runner.plugins import Registry
 from research_ci.stages import lab
+from research_ci.stages.common import quantile_times
 from research_ci.stages.data import treatments as tr
 from research_ci.stages.data.source import SourceSettings
 from research_ci.stages.feat.floor import FeatSettings, Frozen, calibration
@@ -59,6 +61,7 @@ class DataSettings:
     source: SourceSettings = field(default_factory=SourceSettings)
     materiality: float = 0.5
     seeds: int = 2
+    grid_cuts: int = 3
 
 
 @dataclass(frozen=True)
@@ -72,10 +75,11 @@ class Decisive:
 
 @dataclass(frozen=True)
 class Seen:
-    """What a check reads: the contract and its horizons, the explore sources, the decision times (ns) and ``wide`` on
-    them, the candidates (``None`` without a universe), the data and universe plugins, the source's admission, when the
-    newest row became known, and now (both in ns); the decisive numbers (``None`` without a universe), and the
-    treatments the checks before it found that will be applied.
+    """What a check reads: the contract and its horizons, the explore sources, the decision grid (the contract's clock
+    in ns, or the ``t | inst`` the idea's sampler gives) and ``wide`` on it, the candidates (``None`` without a
+    universe), the data and universe plugins, the source's admission, when the newest row became known, and now (both
+    in ns); the decisive numbers (``None`` without a universe), and the treatments the checks before it found that will
+    be applied. ``sampler`` gives the grid on any sources, ``None`` on the clock.
 
     The floor's steps read more: the settings; the warning the idea's research files gave when they were read; the
     idea's directory, its evals and their validations by their tests, and the categories of the built-in pits; what
@@ -86,7 +90,7 @@ class Seen:
     contract: Contract
     horizons: tuple[str, ...]
     sources: Sources
-    times: list[int]
+    times: Grid
     wide: pl.DataFrame
     candidates: pl.DataFrame | None
     source: Any
@@ -110,6 +114,17 @@ class Seen:
     frozen: Callable[[], Frozen] | None = None
     key: Callable[[Frozen], dict[str, str]] | None = None
     feat: FeatSettings | None = None
+    sampler: Callable[[Sources], pl.DataFrame] | None = None
+
+
+def grid_pit(seen: Seen) -> Found:
+    """The decision times the idea's sampler (``grid`` in ``data.py``) gives must read nothing ahead: with the sources
+    cut at a few decision times, the grid up to each must be the one it gives on all the data, or the check is
+    blocked. The contract's clock has nothing to check."""
+    if seen.sampler is None or not isinstance(seen.times, pl.DataFrame):
+        return Found()
+    cuts = quantile_times(seen.times["t"], seen.settings.grid_cuts)
+    return Found([pr.grid_pit(seen.sampler, seen.sources, seen.times, cuts)])
 
 
 def row_loops(seen: Seen) -> Found:
@@ -219,7 +234,7 @@ def _examples(flagged: pl.DataFrame) -> list[str]:
     return shown["row"].to_list()
 
 
-def _flagged(e: Eval, sources: Sources, times: Sequence[int], built: pl.DataFrame | None = None) -> pl.DataFrame:
+def _flagged(e: Eval, sources: Sources, times: Grid, built: pl.DataFrame | None = None) -> pl.DataFrame:
     """What an eval flags on ``sources``, handed ``wide`` (``built``, or built on ``times``) and the sources as its
     parameters ask: rows of ``wide`` or cells of a source; or a refusal that says what it must return."""
     asks = data_inputs(e.of, e.name)
@@ -349,6 +364,7 @@ def decisive_calibration(seen: Seen) -> Found:
 
 FIND = (
     Step("row-by-row code", "warns", row_loops, "Row-by-row code in the idea's data files", "data.py"),
+    Step("grid point-in-time", "blocks", grid_pit, "The sampler's decision times read nothing ahead", "data.py"),
     DEFAULTS,
     Step("pits caught", "blocks", pits_caught, "Each eval flags the pits it covers", "data.py", slot=4),
     Step("library evals", "treats", library_evals, "Masks, drops, or asks about what one flags", "data.py", slot=2),

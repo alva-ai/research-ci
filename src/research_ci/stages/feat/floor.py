@@ -114,15 +114,16 @@ class FeatSettings:
 @dataclass
 class Frozen:
     """What feat reads: the treated sources, ``wide`` built on them and the candidates the data layer froze, the
-    decision times of ``wide`` (ns), and one evaluation table per horizon (``t``, ``inst``, ``y``, its parts and
-    ``y_end``, the candidate columns) on every ``stride``-th decision time whose outcome is complete before the
-    explore data ends; ``parts`` names the outcome's parts."""
+    decision grid of ``wide`` (``t | inst``), and one evaluation table per horizon (``t``, ``inst``, ``y``, its parts
+    and ``y_end``, the candidate columns) on every ``stride``-th decision time whose outcome is complete before the
+    explore data ends; ``parts`` names the outcome's parts, and ``products`` the hashes of the data freeze's products it
+    was read from."""
 
     contract: Contract
     sources: Sources
     wide: pl.DataFrame
     candidates: pl.DataFrame
-    times: list[int]
+    grid: pl.DataFrame
     tables: Tables
     parts: list[str]
     start: int
@@ -130,19 +131,16 @@ class Frozen:
     stride: int
     deps: dict[str, str]
     registry: Registry | None
-    treated: str = ""
-    wide_hash: str = ""
-    exclusions: str = ""
+    products: Mapping[str, str] = field(default_factory=dict)
 
     def inputs(self, cut: int | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
         """What a features file gets: ``wide`` and the candidates, as polars DataFrames, copies that share their
-        memory; with ``cut``, ``wide`` built again on the sources cut there, up to it, and the candidates up to it."""
+        memory; with ``cut``, ``wide`` built again on the sources cut there, on the frozen grid up to it, and the
+        candidates up to it."""
         if cut is None:
             return self.wide.clone(), self.candidates.clone()
-        return (
-            wide(known(self.sources, cut), [t for t in self.times if t <= cut]),
-            self.candidates.filter(pl.col("t") <= lit_time(cut)),
-        )
+        until = pl.col("t") <= lit_time(cut)
+        return wide(known(self.sources, cut), self.grid.filter(until)), self.candidates.filter(until)
 
 
 @dataclass(frozen=True)

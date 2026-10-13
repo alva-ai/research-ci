@@ -13,6 +13,7 @@ import pytest
 
 from research_ci.kernel.verdict.power import Z_BETA
 from research_ci.kernel.verdict.rule import VETO_Z
+from research_ci.reference_plugins.outcomes import PairCarry
 from research_ci.render.common import card_id, num
 from research_ci.runner import plugins
 from research_ci.runner.meter import HIGH_WATER, SAMPLED, Cost, measured
@@ -21,11 +22,22 @@ from research_ci.stages.contract.run import Settings
 from research_ci.stages.feat import floor as feat_floor
 from research_ci.stages.feat import run as fs
 from research_ci.stages.feat.run import FeatError, FeatSettings
+from research_ci.store import vault
 from research_ci.validation import load as ev
 from research_ci.workflow.base import Approval
 from research_ci.workflow.idea import Idea
 from research_ci.workflow.machine import State, WorkflowError
-from toy import FEAT_EVALS, REGISTRY, TOY_NULLS, Backwards, NeverRun, carry_contract, lab, strategy_contract
+from toy import (
+    FEAT_EVALS,
+    REGISTRY,
+    TOY_NULLS,
+    Backwards,
+    NeverRun,
+    ToyPairs,
+    carry_contract,
+    lab,
+    strategy_contract,
+)
 
 FAST = Settings(workers=2, universe_cuts=2, outcome_cuts=1)
 QUICK = FeatSettings(workers=2, calibration_reps=40, calibration_nulls=20, floor_reps=60, cuts=2)
@@ -366,6 +378,33 @@ def test_what_a_submission_used_is_recorded_and_checked_again_when_a_person_acce
     idea.approve("feat", approval=Approval(by="agent", channel="auto"))
     approval = list(idea.ledger.records())[-1]["payload"]
     assert approval["deps"]["features"] == deps["features"] and "feat_submission" in approval["deps"]
+
+
+def test_feat_reads_the_frozen_products_and_accepting_pins_the_scores(tmp_path: Path, monkeypatch) -> None:
+    """feat builds its evaluation tables from the candidates and outcomes the data freeze stored and computes neither
+    again; a PASSED submission's scores go to the vault, the next one's replace them, and accepting pins them."""
+    idea = _idea(tmp_path)
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("feat computed the candidates or the outcomes again")
+
+    monkeypatch.setattr(ToyPairs, "candidates", never)
+    monkeypatch.setattr(PairCarry, "values", never)
+    monkeypatch.setattr(PairCarry, "values_each", never)
+    noise, _, _ = idea.submit_feat(_file(idea, "noise", NOISE))
+    assert noise["verdict"]["status"] == "FAILED" and "stored" not in noise["scores"]
+    first, _, _ = idea.submit_feat(_file(idea, "spread", SPREAD))
+    assert first["verdict"]["status"] == "PASSED" and vault.has("toy.data.scores", first["scores"]["stored"])
+    result, text, _ = idea.submit_feat(
+        _file(idea, "spread twice", SPREAD.replace('pl.col("spread_h")', '(2 * pl.col("spread_h"))'))
+    )
+    stored = result["scores"]["stored"]
+    assert result["verdict"]["status"] == "PASSED" and f"stored {stored[:12]} · {result['scores']['path']}" in text
+    assert not vault.has("toy.data.scores", first["scores"]["stored"])
+    idea.approve("feat", approval=_relayed(idea, "feat"))
+    assert list(idea.ledger.records())[-1]["payload"]["deps"]["scores"] == stored
+    scores = vault.get("toy.data.scores", stored)["scores"]
+    assert scores.columns == ["t", "inst", "score"] and scores.height >= result["scores"]["rows"] > 0
 
 
 def test_a_strategy_contract_judges_its_effect_and_never_runs_the_backtest(tmp_path: Path, monkeypatch) -> None:

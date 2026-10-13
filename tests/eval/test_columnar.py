@@ -28,6 +28,7 @@ ALLOWED: dict[Key, str] = {
     ("eval/data/replay.py", "replay", "for"): "the data plugin fetches as of each cut point",
     ("eval/data/replay.py", "cut_points", "iter_rows"): "the few cut points become records, one plugin fetch each",
     ("eval/protocol.py", "universe_pit", "for"): "the universe plugin runs on the data cut at each cut point",
+    ("eval/protocol.py", "grid_pit", "for"): "the idea's sampler runs on the data cut at each cut point",
     ("eval/protocol.py", "outcome_cases", "for"): "the outcome plugin runs on each worked example and on each of its "
     "mutations",
     ("eval/protocol.py", "outcome_truncation", "for"): "the outcome plugin runs on the sources cut at each cut point",

@@ -7,7 +7,7 @@ from typing import Any
 from research_ci.api.contract import as_use
 from research_ci.render.data import data_card
 from research_ci.stages.common import jsonable
-from research_ci.stages.data.run import check_data, current_data_deps
+from research_ci.stages.data.run import PRODUCTS, check_data, current_data_deps
 from research_ci.store import vault
 from research_ci.store.freeze import drift
 from research_ci.store.sources import Sources
@@ -51,7 +51,7 @@ class DataCommands(IdeaBase):
         note = "" if ready else f"blocked: {verdict['notes'][0]}"
         self._apply(DATA, Command.CHECK, ready, {"note": note}, effect=card)
         if previous is not None:
-            self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["treated"], spec["treated"])
+            self._drop_unfrozen(as_use(contract.data).name, previous["payload"]["spec"]["products"], spec["products"])
         return spec, text
 
     def _stage_freeze(self, stage: str, current: StageStatus) -> StageFreeze | None:
@@ -71,10 +71,10 @@ class DataCommands(IdeaBase):
 
     def _drop_unfrozen(self, source: str, old: dict[str, Any], new: dict[str, Any]) -> None:
         deps = [r["payload"]["deps"] for r in self.ledger.records() if r["kind"] == "approve"]
-        for key, kind in (("sources", "treated"), ("wide", "wide"), ("exclusions", "exclusions")):
+        for kind in PRODUCTS:
             frozen = {d.get(kind) for d in deps}
-            if old[key] != new[key] and old[key] not in frozen:
-                vault.drop(f"{source}.{kind}", old[key])
+            if old[kind]["hash"] != new[kind]["hash"] and old[kind]["hash"] not in frozen:
+                vault.drop(f"{source}.{kind}", old[kind]["hash"])
 
     def _checked_data(self) -> dict[str, Any]:
         """The data check as recorded in the ledger. Refuses if a plugin's code, the data, the source's admission or
@@ -105,12 +105,7 @@ def _admit(source: dict[str, Any], who: Approval) -> dict[str, Any]:
 
 
 def _data_deps(record: dict[str, Any]) -> dict[str, str]:
-    """What a data freeze pins beyond the usual: the check's ledger record, the treated sources it produced, ``wide``
-    built on them, and the candidate rows the treatments exclude."""
-    treated = record["payload"]["spec"]["treated"]
-    return {
-        "data_check": record["hash"],
-        "treated": treated["sources"],
-        "wide": treated["wide"],
-        "exclusions": treated["exclusions"],
-    }
+    """What a data freeze pins beyond the usual: the check's ledger record and the products it stored in the vault
+    (``PRODUCTS``)."""
+    products = record["payload"]["spec"]["products"]
+    return {"data_check": record["hash"]} | {kind: products[kind]["hash"] for kind in PRODUCTS}

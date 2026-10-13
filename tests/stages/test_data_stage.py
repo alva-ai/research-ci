@@ -166,6 +166,127 @@ def test_the_data_layer_runs_from_admission_to_a_passed_verdict(tmp_path: Path) 
     assert idea.status().stage("data").version == 2
 
 
+def test_the_data_freeze_stores_its_products_as_parquet_and_pins_them(tmp_path: Path) -> None:
+    idea = _idea(tmp_path)
+    spec, card = idea.check_data()
+    idea.approve("data", approval=_relayed(idea, "data"))
+    pinned = list(idea.ledger.records())[-1]["payload"]["deps"]
+    assert tuple(sorted(spec["products"])) == tuple(sorted(data_stage.PRODUCTS))
+    for kind, p in spec["products"].items():
+        assert pinned[kind] == p["hash"] and vault.has(f"toy.data.{kind}", p["hash"])
+        assert list(Path(p["path"]).glob("*.parquet")) and p["path"] in card
+    cands = vault.get("toy.data.candidates", pinned["candidates"])["candidates"]
+    outcomes = vault.get("toy.data.outcomes", pinned["outcomes"])["outcomes"]
+    assert cands.height == spec["products"]["candidates"]["rows"] > 0
+    assert set(outcomes["h"]) == {"8h", "24h"} and {"t", "inst", "y", "y_end"} <= set(outcomes.columns)
+    assert outcomes.join(cands, on=["t", "inst"], how="anti").is_empty()
+
+
+EVERY_THIRD = (
+    DATA_EVALS
+    + """
+import polars as pl
+
+
+def grid(sources):
+    hours = sources["candles"].select("inst", pl.col("available_at").alias("t"))
+    return hours.filter(pl.col("t").dt.hour() % 3 == 0)
+"""
+)
+UNEVEN = (
+    DATA_EVALS
+    + """
+import polars as pl
+
+
+def grid(sources, wide):
+    return wide.filter(pl.col("t").dt.hour().is_in([0, 1, 9, 12])).select("t", "inst")
+"""
+)
+PEEK = (
+    DATA_EVALS
+    + """
+import polars as pl
+
+
+def grid(sources):
+    closes = sources["candles"].sort("inst", "event_time")
+    rises = pl.col("close").shift(-1).over("inst") > pl.col("close")
+    return closes.filter(rises).select("inst", pl.col("available_at").alias("t"))
+"""
+)
+SPREAD = """
+import polars as pl
+
+
+def features(wide, candidates):
+    return candidates.select("t", "inst", pl.col("spread_h").alias("score"))
+"""
+
+
+def _grid_checked(tmp_path: Path, data: str) -> tuple[Idea, dict, str]:
+    idea = _idea(tmp_path)
+    (idea.root / "data.py").write_text(data)
+    spec, card = idea.check_data()
+    return idea, spec, card
+
+
+def test_without_a_sampler_the_decisions_follow_the_contracts_clock(tmp_path: Path) -> None:
+    _, spec, card = _grid_checked(tmp_path, DATA_EVALS)
+    assert spec["grid"]["by"] == "the contract's clock, every 1h" and spec["grid"]["even"]
+    assert spec["grid"]["longest_gap"] == "1h" and spec["grid"]["rows"] == spec["products"]["wide"]["rows"]
+    assert "grid point-in-time" not in {c["name"] for c in spec["checks"]}
+    assert "grid       the contract's clock, every 1h · " in card and "longest gap 1h · even" in card
+
+
+def test_a_sampler_sets_the_decision_grid_that_wide_candidates_and_outcomes_follow(tmp_path: Path) -> None:
+    idea, spec, card = _grid_checked(tmp_path, EVERY_THIRD)
+    grid = vault.get("toy.data.grid", spec["products"]["grid"]["hash"])["grid"]
+    table = vault.get("toy.data.wide", spec["products"]["wide"]["hash"])["wide"]
+    cands = vault.get("toy.data.candidates", spec["products"]["candidates"]["hash"])["candidates"]
+    outcomes = vault.get("toy.data.outcomes", spec["products"]["outcomes"]["hash"])["outcomes"]
+    assert set((grid["t"].dt.hour() % 3).unique()) == {0} and grid.height > 0
+    assert table.select("t", "inst").equals(grid.sort("t", "inst"))
+    assert cands.height > 0 and set(cands["t"]) <= set(grid["t"]) and set(outcomes["t"]) <= set(grid["t"])
+    assert spec["grid"] | {"per_inst": None} == {
+        "by": "grid in data.py",
+        "times": grid["t"].n_unique(),
+        "rows": grid.height,
+        "insts": 9,
+        "per_inst": None,
+        "longest_gap": "3h",
+        "even": True,
+    }
+    check = {c["name"]: c for c in spec["checks"]}["grid point-in-time"]
+    assert check["status"] == "pass" and spec["verdict"]["status"] != "blocked"
+    assert "grid       grid in data.py · " in card and "longest gap 3h · even" in card
+    assert "uneven" not in card
+    idea.approve("data", approval=_relayed(idea, "data"))
+    research = idea.root / "research"
+    research.mkdir(exist_ok=True)
+    (research / "spread.py").write_text(SPREAD)
+    explored, _ = idea.explore_feat(research / "spread.py")
+    assert [f["status"] for f in explored["floors"]] == ["pass", "pass"], "the cut check builds wide on the grid"
+
+
+def test_an_uneven_grid_is_shown_with_a_warning(tmp_path: Path) -> None:
+    _, spec, card = _grid_checked(tmp_path, UNEVEN)
+    assert not spec["grid"]["even"] and spec["grid"]["longest_gap"] == "12h"
+    assert "longest gap 12h · uneven [!]" in card
+    assert "[!] the decision grid is uneven: the shuffles, blocks and the MDE assume an even one" in card
+
+
+def test_a_sampler_that_reads_ahead_blocks_the_data(tmp_path: Path) -> None:
+    _, spec, card = _grid_checked(tmp_path, PEEK)
+    check = {c["name"]: c for c in spec["checks"]}["grid point-in-time"]
+    assert check["status"] == "fail" and spec["verdict"]["status"] == "blocked"
+    assert spec["verdict"]["notes"][0].startswith(
+        "grid point-in-time (floor) failed: the sources cut at a time change the decision times: up to "
+    )
+    assert "(cut data vs all data); a decision time may depend only on rows known by then" in card
+    assert "FAIL grid point-in-time" in card
+
+
 def test_a_source_that_fails_admission_blocks_the_data_and_cannot_be_admitted(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(plugins, "EXTRA", {**REGISTRY, "toy.data": ToyHindsight})
     idea = _idea(tmp_path)
@@ -220,7 +341,7 @@ def test_a_person_can_keep_a_treatment_from_being_applied(tmp_path: Path, monkey
     kept, card = idea.check_data(keep=("hedge guard at each decision time",))
     assert kept["kept"] == ["hedge guard at each decision time"]
     assert next(t for t in kept["treatments"] if t["name"].startswith("hedge"))["kept"] is True
-    assert kept["treated"]["exclusions"] != applied["treated"]["exclusions"]
+    assert kept["products"]["exclusions"]["hash"] != applied["products"]["exclusions"]["hash"]
     assert all(p["mde"] == p["mde_before"] for p in kept["power"])
     assert "kept, not applied" in card
     with pytest.raises(data_stage.DataError, match="no treatment named"):
@@ -234,9 +355,9 @@ def test_treated_data_of_a_superseded_check_leaves_the_vault_unless_frozen(tmp_p
     idea.approve("data", approval=_relayed(idea, "data"))
     second, _ = idea.check_data(keep=("hedge guard at each decision time",))
     third, _ = idea.check_data()
-    assert vault.has("toy.data.exclusions", first["treated"]["exclusions"])
-    assert not vault.has("toy.data.exclusions", second["treated"]["exclusions"])
-    assert third["treated"]["exclusions"] == first["treated"]["exclusions"]
+    assert vault.has("toy.data.exclusions", first["products"]["exclusions"]["hash"])
+    assert not vault.has("toy.data.exclusions", second["products"]["exclusions"]["hash"])
+    assert third["products"]["exclusions"]["hash"] == first["products"]["exclusions"]["hash"]
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -294,7 +415,7 @@ def test_a_ticker_relaunched_for_another_asset_is_split_and_a_person_decides(tmp
     split = _treatment(spec, SPLIT)
     assert split["rows"] > 0 and split["largest"] >= spec["materiality"]
     assert spec["verdict"]["status"] == "decide" and any(d.startswith(SPLIT) for d in spec["decide"])
-    candles = vault.get("toy.data.treated", spec["treated"]["sources"])["candles"]
+    candles = vault.get("toy.data.treated", spec["products"]["treated"]["hash"])["candles"]
     z = candles.filter(pl.col("inst").str.starts_with("c:Z")).group_by("inst").agg(pl.col("event_time").min())
     assert dict(z.iter_rows())["c:Z#2"] == pd.Timestamp("2026-01-07T18:00Z")
     assert set(z["inst"]) == {"c:Z", "c:Z#2"}
@@ -315,7 +436,7 @@ def test_one_cluster_carrying_the_noise_is_shown_and_only_warned(tmp_path: Path,
     check = {c["name"]: c for c in kept["checks"]}["influence concentration"]
     assert check["status"] == "warn" and "one symbol: Z " in check["detail"]
     assert not [d for d in kept["decide"] if "symbol Z" in d], "concentration asks no person"
-    assert kept["treated"]["rows"] == kept["data"]["rows"], "concentration never drops anything"
+    assert kept["products"]["treated"]["rows"] == kept["data"]["rows"], "concentration never drops anything"
 
 
 MASK = "mask b:Z before the relaunch"
@@ -344,9 +465,9 @@ def test_other_treatments_are_weighed_on_top_of_the_split(tmp_path: Path, monkey
 
 def _from_scratch(spec: dict) -> dict[str, float]:
     """The MDE per horizon from the frozen sources, wide and exclusions alone, computed the way feat reads them."""
-    treated = vault.get("toy.data.treated", spec["treated"]["sources"])
-    table = vault.get("toy.data.wide", spec["treated"]["wide"])["wide"]
-    excluded = vault.get("toy.data.exclusions", spec["treated"]["exclusions"])["exclusions"]
+    treated = vault.get("toy.data.treated", spec["products"]["treated"]["hash"])
+    table = vault.get("toy.data.wide", spec["products"]["wide"]["hash"])["wide"]
+    excluded = vault.get("toy.data.exclusions", spec["products"]["exclusions"]["hash"])["exclusions"]
     start = min(int(t.select(pl.col("available_at").min().dt.epoch("ns")).item()) for t in treated.values())
     end = to_ns(pd.Timestamp("2026-01-15T00:00:00Z"))
     cands = ToyPairs().candidates(table, treated).join(excluded, on=["t", "inst"], how="anti")
@@ -373,7 +494,7 @@ def test_prices_at_zero_are_masked(tmp_path: Path, monkeypatch) -> None:
     zero = _treatment(spec, "mask levels at zero or below")
     assert zero["rows"] == 3
     assert spec["verdict"]["status"] == "decide", "a number that is not finite before the treatment is for a person"
-    candles = vault.get("toy.data.treated", spec["treated"]["sources"])["candles"]
+    candles = vault.get("toy.data.treated", spec["products"]["treated"]["hash"])["candles"]
     assert candles.filter(pl.col("close") <= 0).is_empty() and candles["close"].null_count() == 3
     assert "mask levels at zero or below" in card and "inf" in card
 
@@ -383,7 +504,7 @@ def test_an_inst_shorter_than_the_longest_horizon_is_dropped(tmp_path: Path, mon
     short = _treatment(spec, "drop insts too short for the horizon")
     assert short["rows"] == 22, "twenty candles and two funding rows"
     assert "c:Y" in {c["name"]: c for c in spec["checks"]}["coverage"]["detail"]
-    treated = vault.get("toy.data.treated", spec["treated"]["sources"])
+    treated = vault.get("toy.data.treated", spec["products"]["treated"]["hash"])
     assert all("c:Y" not in set(t["inst"]) for t in treated.values())
 
 
@@ -599,7 +720,7 @@ def test_a_data_eval_on_wide_masks_the_candidate_rows_that_read_what_it_flags(tm
     spec, card = idea.check_data()
     mask = _treatment(spec, "eval stale_closes: mask")
     assert mask["on"] == "candidates" and mask["rows"] > 0
-    excluded = vault.get("toy.data.exclusions", spec["treated"]["exclusions"])["exclusions"]
+    excluded = vault.get("toy.data.exclusions", spec["products"]["exclusions"]["hash"])["exclusions"]
     legs = {tuple(pair.split(":")[1].split(">")) for pair in excluded["inst"]}
     assert excluded.height > 0 and all(pair.startswith("Y:") for pair in excluded["inst"])
     assert all("c" in pair for pair in legs), "only the pairs with a leg on venue c"

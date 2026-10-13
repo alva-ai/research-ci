@@ -53,6 +53,7 @@ Lists: `stages/data/floor.py`, `stages/data/defaults.py`, `stages/data/source.py
 | canary: reconciliation *(reference)* | The comparison catches altered values | blocks | floor | `data.reconcile.{compare, requests}` · `data.baseline.baseline` |
 | **1 floor** | | | | |
 | row-by-row code *(data.py)* | Row-by-row code in the idea's data files | warns | floor | — |
+| grid point-in-time *(data.py)* | The sampler's decision times read nothing ahead | blocks | floor | `protocol.grid_pit` |
 | column grades | The decisive number reads only verified columns | warns | floor | — |
 | treatment influence | Each treatment's move of the decisive number, in MDE | warns | floor | — |
 | power | MDE per horizon, before and after the treatments | shown | floor | — |
@@ -196,6 +197,7 @@ What the engine runs on its own, with worked examples like the library's, that n
 | | `consumer_pit` | Cut data gives the full run's periods before the cut. | algo, planned | — |
 | | `deterministic` | Two identical consumer runs must give the same net. | algo, planned | — |
 | | `fees_match` | The consumer charges what the cost model says. | algo, planned | — |
+| | `grid_pit` | Decision times up to the cut equal those from all data. | data | — |
 | | `matches_outcome` | The consumer books what the outcome says, period by period. | algo, planned | — |
 | | `max_drawdown` | The consumer's deepest fall in equity from its running peak. | algo, planned | — |
 | | `outcome_cases` | Worked examples hold as written and move with their inputs. | contract | — |

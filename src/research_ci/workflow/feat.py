@@ -7,7 +7,9 @@ from research_ci.api.contract import Contract
 from research_ci.render.common import adder
 from research_ci.render.feat import calibration_lines, explore_card, result_card
 from research_ci.stages.common import jsonable
+from research_ci.stages.data.run import PRODUCTS
 from research_ci.stages.feat import run as fs
+from research_ci.store import vault
 from research_ci.store.freeze import drift
 from research_ci.store.workspace import hash_file
 from research_ci.workflow.base import DATA, FEAT, IdeaBase, StageFreeze
@@ -44,6 +46,7 @@ class FeatCommands(IdeaBase):
             for r, e in zip(submissions, earlier, strict=True)
             if r["payload"]["version"] != version
         }
+        previous = submissions[-1]["payload"]["result"]["scores"].get("stored") if submissions else None
         result = fs.submit(self.root, frozen, Path(path), n, this, self.feat_settings, again=before)
         n = result["n"]
         first = (
@@ -56,6 +59,8 @@ class FeatCommands(IdeaBase):
         result = jsonable(result)
         deps = self.deps(FEAT, frozen.deps | fs.files(self.root) | fs.eval_files(self.root, result))
         deps |= {"features": result["features"]["hash"], "calibration": calibration["hash"]}
+        if "stored" in result["scores"]:
+            deps["scores"] = result["scores"]["stored"]
         text = result_card(result, self.root.name, version)
         name = f"feat-result-{n}-v{version}" if result["again"] else f"feat-result-{n}"
         self.workspace.write_json(f"{name}.json", result)
@@ -63,7 +68,14 @@ class FeatCommands(IdeaBase):
         verdict = Verdict(result["verdict"]["status"])
         payload = {"result": result, "deps": deps, "again": result["again"]}
         state = self.submit(FEAT, verdict, payload, "; ".join(result["verdict"]["notes"]))
+        self._drop_unaccepted(contract, previous, result["scores"].get("stored"))
         return result, text, state
+
+    def _drop_unaccepted(self, contract: Contract, old: str | None, new: str | None) -> None:
+        """The scores of the submission before, which can no longer be accepted, leave the vault unless accepted."""
+        pinned = {r["payload"]["deps"].get("scores") for r in self.ledger.records() if r["kind"] == Command.APPROVE}
+        if old is not None and old != new and old not in pinned:
+            vault.drop(fs.scores_kind(contract), old)
 
     def explore_feat(self, path: Path) -> tuple[dict[str, Any], str]:
         """The checks a submission must pass, run on a file of features without judging it or recording anything."""
@@ -144,6 +156,9 @@ class FeatCommands(IdeaBase):
         path = Path(result["features"]["path"])
         now = fs.current_deps(self._approved_contract(), self.root, recorded, self.registry)
         now |= {"features": hash_file(path) if path.is_file() else "missing", "calibration": recorded["calibration"]}
+        if "scores" in recorded:
+            kind = fs.scores_kind(self._approved_contract())
+            now["scores"] = recorded["scores"] if vault.has(kind, recorded["scores"]) else "missing"
         return self.deps(FEAT, now)
 
     def _frozen_feat(self, contract: Contract) -> fs.Frozen:
@@ -151,4 +166,5 @@ class FeatCommands(IdeaBase):
         if approval is None:
             raise WorkflowError("the data is not frozen yet")
         deps = approval["payload"]["deps"]
-        return fs.frozen(contract, deps["treated"], deps["wide"], deps["exclusions"], self.registry, self.feat_settings)
+        products = {k: deps[k] for k in PRODUCTS}
+        return fs.frozen(contract, products, self.registry, self.feat_settings)

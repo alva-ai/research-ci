@@ -15,7 +15,7 @@ the peak memory of the full one, is shown, never judged.
 
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,6 @@ import polars as pl
 from research_ci.api.contract import FLOOR_ALTERNATIVES, Contract, Use, as_use, horizons_of, span
 from research_ci.api.evals import TABLE_KEYS, Eval, evals_of
 from research_ci.api.nulls import Null, PermuteWithin, nulls_of
-from research_ci.api.plugins import OutcomePlugin
 from research_ci.eval.data.baseline import rows
 from research_ci.kernel.hashing import hash_frame, hash_obj
 from research_ci.kernel.time.clock import lit_time, span_ns, to_ns
@@ -36,7 +35,7 @@ from research_ci.kernel.verdict.judge import judge_all
 from research_ci.kernel.verdict.worlds import World, floor_world
 from research_ci.runner.plugins import Registry, code_hash, load
 from research_ci.stages import lab, skeleton
-from research_ci.stages.common import cadence, norm_candidates, outcome_values, parts, target_use
+from research_ci.stages.common import cadence, parts, target_use
 from research_ci.stages.contract.run import use_named
 from research_ci.stages.feat import defaults, floor
 from research_ci.stages.feat.floor import (
@@ -67,21 +66,22 @@ EVAL_FILES = "eval:"
 
 def frozen(
     contract: Contract,
-    treated: str,
-    wide: str,
-    exclusions: str,
+    products: Mapping[str, str],
     registry: Registry | None = None,
     settings: FeatSettings | None = None,
 ) -> Frozen:
-    """What feat reads, from what the data freeze pinned: the treated sources, ``wide`` built on them, and the
-    candidate rows the treatments exclude; with the evaluation tables, one per horizon."""
+    """What feat reads, the products the data freeze pinned, by hash: the treated sources, the decision grid, ``wide``
+    built on it, the candidates the treatments leave, and their outcomes; with the evaluation tables built from them,
+    one per horizon. Nothing of these is computed again."""
     s = settings or FeatSettings()
     if contract.universe is None or contract.outcome is None:
         raise FeatError("feat judges scores per candidate; the contract names no universe or no outcome")
     name = as_use(contract.data).name
-    sources = vault.get(f"{name}.treated", treated)
-    table = vault.get(f"{name}.wide", wide)["wide"]
-    excluded = vault.get(f"{name}.exclusions", exclusions)["exclusions"]
+    sources = vault.get(f"{name}.treated", products["treated"])
+    grid = vault.get(f"{name}.grid", products["grid"])["grid"]
+    table = vault.get(f"{name}.wide", products["wide"])["wide"]
+    cands = vault.get(f"{name}.candidates", products["candidates"])["candidates"]
+    outcomes = vault.get(f"{name}.outcomes", products["outcomes"])["outcomes"]
     deps: dict[str, str] = {}
 
     def plugin(use: Use) -> Any:
@@ -93,13 +93,9 @@ def frozen(
     start, latest = int(known.min()), int(known.max())  # type: ignore[arg-type]
     end = latest if contract.explore_end == "latest" else to_ns(pd.Timestamp(contract.explore_end))
     timing, _ = cadence(contract, plugin)
-    times = sorted(int(t) for t in table.select(pl.col("t").dt.epoch("ns").unique())["t"])
-    universe = plugin(as_use(contract.universe.use))
     for effect in contract.decisive:
         plugin(target_use(effect, contract))
     plugin(as_use(contract.costs))
-    cands = norm_candidates(universe.candidates(table, sources))
-    cands = cands.join(excluded.select("t", "inst"), on=["t", "inst"], how="anti").sort("t", "inst")
     present = sorted(int(t) for t in cands.select(pl.col("t").dt.epoch("ns").unique())["t"])
     stride = max(1, math.ceil(len(present) / s.max_times))
     kept = pl.Series("t", present[::stride], dtype=pl.Int64)
@@ -107,32 +103,13 @@ def frozen(
     extra = [c for c in cands.columns if c not in ("t", "inst")]
     renamed = {c: f"{c}_candidate" for c in extra if c in TABLE_KEYS or c.startswith("y_")}
     columns = sampled.rename(renamed)
-    outcome: OutcomePlugin = plugin(as_use(contract.outcome))
-    horizons = horizons_of(contract, timing.every)
     tables: floor.Tables = {}
-    found: list[str] = []
-    for h, out in zip(horizons, outcome_values(outcome, sources, sampled, [span(h) for h in horizons]), strict=True):
+    for h in horizons_of(contract, timing.every):
         h_ns = span_ns(span(h))
-        found = parts(out.columns)
-        out = out.filter(pl.col("t") <= lit_time(end - h_ns))
+        out = outcomes.filter((pl.col("h") == h) & (pl.col("t") <= lit_time(end - h_ns))).drop("h")
         tables[h] = (out.join(columns, on=["t", "inst"], how="inner").sort("t", "inst"), h_ns)
-    return Frozen(
-        contract,
-        sources,
-        table,
-        cands,
-        times,
-        tables,
-        found,
-        start,
-        end,
-        stride,
-        deps,
-        registry,
-        treated,
-        wide,
-        exclusions,
-    )
+    found = parts(outcomes.columns)
+    return Frozen(contract, sources, table, cands, grid, tables, found, start, end, stride, deps, registry, products)
 
 
 def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, Any]:
@@ -142,11 +119,10 @@ def calibration(frozen: Frozen, settings: FeatSettings | None = None) -> dict[st
 
 
 def calibration_key(frozen: Frozen, settings: FeatSettings | None = None) -> dict[str, str]:
-    """What a calibration rests on beyond the contract and the engine: the treated data, the code of every plugin feat
-    runs, and the calibration settings. A calibration is reused while these are unchanged."""
+    """What a calibration rests on beyond the contract and the engine: the data freeze's products, the code of every
+    plugin feat runs, and the calibration settings. A calibration is reused while these are unchanged."""
     s = settings or FeatSettings()
-    data = {"treated": frozen.treated, "wide": frozen.wide_hash, "exclusions": frozen.exclusions}
-    return frozen.deps | data | {"settings": hash_obj(asdict(s) | {"workers": None})}
+    return frozen.deps | dict(frozen.products) | {"settings": hash_obj(asdict(s) | {"workers": None})}
 
 
 def files(root: Path) -> dict[str, str]:
@@ -237,8 +213,21 @@ def submit(
     judged = _judge(seen, named, evals)
     out |= {key: judged.shown.get(key, []) for key in JUDGED}
     out["verdict"] = rule.combine(out["decisive"], out["vetoes"], need)
+    if out["verdict"]["status"] == "PASSED":
+        out["scores"] |= stored(frozen, scores)
     out["seconds"] = round(time.monotonic() - started, 1)
     return out
+
+
+def stored(frozen: Frozen, scores: pl.DataFrame) -> dict[str, str]:
+    """A PASSED submission's scores, ``t | inst | score``, kept in the vault as parquet by content, so accepting it
+    pins them for the next layer: their vault hash and folder."""
+    digest, folder = vault.put(scores_kind(frozen.contract), {"scores": scores})
+    return {"stored": digest, "path": str(folder)}
+
+
+def scores_kind(contract: Contract) -> str:
+    return f"{as_use(contract.data).name}.scores"
 
 
 def ready(root: Path, contract: Contract, registry: Registry | None = None) -> None:
