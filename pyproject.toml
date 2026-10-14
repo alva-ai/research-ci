@@ -1,95 +1,47 @@
 [project]
 name = "research-ci"
 version = "0.1.0"
-description = "CI for alpha research: time, holdout, verdict."
+description = "Execution protocol for agent-owned quantitative research stages"
 readme = "README.md"
-authors = [
-    { name = "Lqz13Th", email = "lqz13th@outlook.com" }
-]
 requires-python = ">=3.11"
 dependencies = [
-    "numpy>=2.4.6",
-    "pandas>=3.0.6",
+    "numpy>=2.0",
     "polars>=2.0.0",
-    "pyarrow>=25.0.1",
-    "scipy>=1.17.1",
-    "typer>=0.27.2",
+    "scikit-learn>=1.7,<2",
+]
+
+[project.optional-dependencies]
+visualization = [
+    "matplotlib>=3.10,<4",
+    "seaborn>=0.13,<1",
 ]
 
 [project.scripts]
-rci = "research_ci.cli.main:app"
-
-[project.entry-points."research_ci.plugins"]
-"ref.return" = "research_ci.reference_plugins.outcomes:HoldingReturn"
-"ref.carry" = "research_ci.reference_plugins.outcomes:PairCarry"
-"ref.markout" = "research_ci.reference_plugins.outcomes:Markout"
-"ref.mean" = "research_ci.reference_plugins.targets:ClusterMean"
-"ref.timing" = "research_ci.reference_plugins.targets:SignedMean"
-"ref.flat_costs" = "research_ci.reference_plugins.costs:FlatCosts"
+rci = "research_ci.cli:main"
 
 [build-system]
-requires = ["uv_build>=0.12.10,<0.13.0"]
-build-backend = "uv_build"
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [dependency-groups]
 dev = [
-    "basedpyright>=1.40.1",
-    "hypothesis>=6.168.3",
-    "import-linter>=2.15",
-    "pandas-stubs>=3.0.5.260914",
-    "pytest>=9.1.1",
-    "ruff>=0.16.9",
+    "pytest>=9,<10",
+    "ruff>=0.8,<1",
 ]
-
-[tool.ruff]
-line-length = 120
-target-version = "py311"
-src = ["src", "tests"]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tests"]
 
-[tool.basedpyright]
-typeCheckingMode = "standard"
-pythonVersion = "3.11"
-include = ["src", "tests"]
+[tool.ruff]
+line-length = 88
+target-version = "py311"
 
-[tool.importlinter]
-root_package = "research_ci"
+[tool.ruff.lint]
+select = ["E", "F", "I"]
 
-[[tool.importlinter.contracts]]
-name = "layers"
-type = "layers"
-layers = [
-    "research_ci.cli",
-    "research_ci.workflow | research_ci.catalog",
-    "research_ci.stages",
-    "research_ci.validation",
-    "research_ci.runner",
-    "research_ci.store | research_ci.render",
-    "research_ci.eval",
-    "research_ci.kernel",
-    "research_ci.api",
-]
-
-[[tool.importlinter.contracts]]
-name = "reference plugins use only api and eval"
-type = "forbidden"
-allow_indirect_imports = true
-source_modules = ["research_ci.reference_plugins"]
-forbidden_modules = [
-    "research_ci.kernel",
-    "research_ci.stages",
-    "research_ci.workflow",
-    "research_ci.store",
-    "research_ci.runner",
-    "research_ci.render",
-    "research_ci.cli",
-    "research_ci.validation",
-    "research_ci.catalog",
-]
-
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
