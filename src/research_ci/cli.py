@@ -14,7 +14,7 @@ import polars as pl
 
 from .cards import contract_card, data_card
 from .contract import ContractError, validate_contract
-from .engine import run_eval_plan
+from .eval.runner import run_eval_plan
 from .workflow import (
     STAGE_ORDER,
     WorkflowError,

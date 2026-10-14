@@ -21,17 +21,29 @@ The project uses `uv` for environments and dependency locking.
 ```text
 research-ci/
   src/research_ci/
-    contract.py   contract boundary
-    evals.py      external four-slot plan model
-    engine.py     Polars eval execution and engine baseline
+    contract.py   Engine Contract protocol and validation
+    eval/         four-slot protocol, runner, baseline, and library
+      protocol.py four-slot plan model
+      runner.py   Polars eval execution and sidecar records
+      baseline.py Engine-owned floor checks
+      library/    reusable methods grouped by methodology
+      defaults/   stage-specific method proposals
     cards.py      Markdown cards and stable card IDs
     workflow.py   stage states and human/agent approvals
     cli.py        command line orchestration
 research-ci-lab/
-  lab/<case>/     external contract, data builder, eval plans, and raw files
+  lab/<case>/     external contract, stage builders, eval plans, and raw files
   .rci/runs/<run>/workflow.json
                   contract/ and data/ cards and evidence
 ```
+
+The Engine library is organized by methodology rather than by stage. For
+example, correlation and IC methods belong to `eval/library/association.py`,
+while the stage proposal list belongs to `eval/defaults/` when that
+stage's input contract is explicit. This keeps one implementation reusable by
+Feat and Sig while retaining stage-specific selection. A method declares its
+supported stage and input shape; an inapplicable method reports
+`not_applicable` with a reason.
 
 The run directory is the handoff boundary. A stage writes its Card and
 evidence, moves to `review`, and waits for an explicit human or agent approval.

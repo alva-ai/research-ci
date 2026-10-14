@@ -36,6 +36,10 @@
 ### 0.1 文件夹边界
 
 - **决定**：`research-ci/src/research_ci/` 只保留协议模型、Engine 执行、Card 渲染、workflow 和 CLI；不把具体研究 case 放进 Engine。
+- **决定**：Engine 的 `contract.py` 只负责 Contract 协议和结构校验；外部任务内容仍由 `lab/<case>/contract.py` 提供。
+- **决定**：`eval/protocol.py`、`eval/runner.py` 和 `eval/baseline.py` 分别负责四槽协议、执行器和 Engine 底线。
+- **决定**：`eval/library/` 按方法论组织通用方法；`eval/defaults/` 按 stage 提供方法提议；两者不混为同一层。
+- **完成**：当前已建立 `quality`、`structure`、`association` 三个最小方法族，并为方法声明适用 stage 和输入形状。
 - **决定**：`research-ci-lab/lab/<case>/` 由外部 Agent 自由维护 Contract、raw、Data builder、阶段 eval 和探索文件。
 - **决定**：`research-ci-lab/.rci/runs/<run>/` 是运行交接边界，按 `contract/`、`data/`、后续阶段目录保存 Card、主表和 sidecar 证据，并保存 `workflow.json`。
 - **决定**：Card 是给人和 Agent review 的可读入口，Parquet、JSONL 和 manifest 是可追溯证据；主表和 eval sidecar 分开保存。

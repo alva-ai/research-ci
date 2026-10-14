@@ -1,16 +1,18 @@
 """The first protocol layer of the Research CI research engine."""
 
 from .contract import Contract, ContractError, validate_contract
-from .engine import EvalRecord, EvalRunResult, run_eval_plan
-from .evals import (
+from .eval import (
     CaseEvalTest,
     EvalObservation,
     EvalPlan,
+    EvalRecord,
+    EvalRunResult,
     EvalSpec,
     EvalStatus,
     FailurePolicy,
     OutputKind,
     Slot,
+    run_eval_plan,
 )
 
 __all__ = [

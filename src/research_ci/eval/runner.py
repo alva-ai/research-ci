@@ -9,7 +9,8 @@ from typing import Any
 
 import polars as pl
 
-from .evals import (
+from .baseline import general_missing_values
+from .protocol import (
     CaseEvalTest,
     EvalObservation,
     EvalPlan,
@@ -84,7 +85,15 @@ def run_eval_plan(table: pl.DataFrame, plan: EvalPlan) -> EvalRunResult:
     # This is an engine-owned floor check. It is deliberately a sidecar
     # observation: the engine reports malformed/missing values without
     # inventing an eval column in the caller's main table.
-    records.append(_run_general_baseline(table, plan.stage))
+    records.append(
+        _record(
+            plan.stage,
+            Slot.BASELINE.value,
+            "engine.baseline.general_missing_values",
+            "record",
+            general_missing_values(table),
+        )
+    )
 
     for slot in (Slot.BASELINE, Slot.LIBRARY, Slot.CASE):
         specs = getattr(plan, slot.value)
@@ -95,84 +104,6 @@ def run_eval_plan(table: pl.DataFrame, plan: EvalPlan) -> EvalRunResult:
         records.append(_run_case_test(table, plan.stage, by_name, test))
 
     return EvalRunResult(table=table, records=tuple(records))
-
-
-def _run_general_baseline(table: pl.DataFrame, stage: str) -> EvalRecord:
-    """Report null, NaN, non-finite, and string missing sentinels.
-
-    A null can be valid for a particular research source, so this common
-    floor records findings and leaves the stage decision to the review card.
-    Stage-specific plans can still choose a stop policy when a field is
-    required.
-    """
-
-    try:
-        observation = _general_missing_value_observation(table)
-    except Exception as exc:  # noqa: BLE001 - preserve a baseline audit record
-        observation = EvalObservation(
-            status="error",
-            output_kind="none",
-            details={"error_type": type(exc).__name__, "error": str(exc)},
-        )
-    return _record(
-        stage,
-        Slot.BASELINE.value,
-        "engine.baseline.general_missing_values",
-        "record",
-        observation,
-    )
-
-
-def _general_missing_value_observation(table: pl.DataFrame) -> EvalObservation:
-    findings: dict[str, dict[str, int]] = {}
-    totals = {
-        "null": 0,
-        "nan": 0,
-        "non_finite": 0,
-        "string_sentinel": 0,
-    }
-    sentinel_values = {"nan", "none", "null"}
-
-    for name, dtype in table.schema.items():
-        series = table.get_column(name)
-        counts = {
-            "null": series.null_count(),
-            "nan": 0,
-            "non_finite": 0,
-            "string_sentinel": 0,
-        }
-        if dtype.is_float():
-            counts["nan"] = int(series.is_nan().sum())
-            counts["non_finite"] = int((~series.is_finite()).sum())
-        if dtype == pl.String:
-            counts["string_sentinel"] = int(
-                series.str.strip_chars().str.to_lowercase().is_in(sentinel_values).sum()
-            )
-        for key, value in counts.items():
-            totals[key] += value
-        if any(counts.values()):
-            findings[name] = counts
-
-    details = {
-        "rows": table.height,
-        "columns": table.width,
-        "totals": totals,
-        "columns_with_findings": findings,
-        "string_sentinels": sorted(sentinel_values),
-    }
-    if findings:
-        return EvalObservation(
-            status="failed",
-            value=totals,
-            output_kind="findings",
-            details=details,
-        )
-    return EvalObservation(
-        status="passed",
-        value=totals,
-        output_kind="summary",
-        details=details,
-    )
 
 
 def _run_spec(
