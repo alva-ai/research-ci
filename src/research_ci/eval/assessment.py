@@ -191,6 +191,126 @@ def assess_features(
     return result
 
 
+def assess_signal_evidence(
+    records: Iterable[EvalRecord],
+    signals: Iterable[str],
+    candidates: Iterable[str] = (),
+    *,
+    ranking_size: int = 5,
+) -> dict[str, Any]:
+    """Collect target evidence without turning it into an alpha verdict."""
+
+    signal_names = tuple(dict.fromkeys(signals))
+    candidate_names = set(candidates)
+    evidence: dict[str, dict[str, Any]] = {
+        signal: {
+            "targets": {},
+            "block_stability": {},
+            "rank_autocorrelation": None,
+            "distribution_shift": None,
+            "reason_codes": [],
+        }
+        for signal in signal_names
+    }
+    candidate_rank_ic: dict[str, list[dict[str, Any]]] = {}
+    candidate_mi: dict[str, list[dict[str, Any]]] = {}
+
+    for record in records:
+        details = record.details or {}
+        method = record.library_method
+        score = details.get("score")
+        target = details.get("target")
+        if score in evidence and isinstance(target, str):
+            target_evidence = evidence[score]["targets"].setdefault(target, {})
+            if method == "library.association.pearson_ic":
+                target_evidence["pearson_ic"] = record.value
+            elif method == "library.association.spearman_ic":
+                target_evidence["rank_ic"] = record.value
+            elif method == "library.association.bucket_spread":
+                target_evidence["bucket_spread"] = record.value
+            elif method == "library.stability.split_association":
+                target_evidence["split"] = {
+                    "first_half": details.get("first_half"),
+                    "second_half": details.get("second_half"),
+                    "same_sign": details.get("same_sign"),
+                }
+                if details.get("same_sign") is False:
+                    evidence[score]["reason_codes"].append(
+                        f"SPLIT_SIGN_CHANGE:{target}"
+                    )
+            elif method == "library.association.icir":
+                evidence[score]["block_stability"].setdefault(target, {}).update(
+                    {
+                        "icir": record.value,
+                        "ic_mean": details.get("ic_mean"),
+                        "ic_std": details.get("ic_std"),
+                        "positive_ic_ratio": details.get("positive_ic_ratio"),
+                        "groups": details.get("groups"),
+                    }
+                )
+            elif method == "library.association.cumulative_ic":
+                evidence[score]["block_stability"].setdefault(target, {}).update(
+                    {
+                        "cumulative_ic": record.value,
+                        "max_drawdown": details.get("max_drawdown"),
+                    }
+                )
+        column = details.get("column")
+        if column in evidence:
+            if method == "library.stability.rank_autocorrelation":
+                evidence[column]["rank_autocorrelation"] = record.value
+            elif method == "library.stability.distribution_shift":
+                evidence[column]["distribution_shift"] = record.value
+
+        if (
+            method == "library.association.spearman_ic"
+            and score in candidate_names
+            and isinstance(target, str)
+            and isinstance(record.value, (int, float))
+            and math.isfinite(float(record.value))
+        ):
+            candidate_rank_ic.setdefault(target, []).append(
+                {"feature": score, "value": float(record.value)}
+            )
+        left = details.get("left")
+        right = details.get("right")
+        if (
+            method == "library.information.feature_target_mutual_information"
+            and left in candidate_names
+            and isinstance(right, str)
+            and isinstance(record.value, (int, float))
+            and math.isfinite(float(record.value))
+        ):
+            candidate_mi.setdefault(right, []).append(
+                {"feature": left, "value": float(record.value)}
+            )
+
+    rankings: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for target, values in candidate_rank_ic.items():
+        ordered = sorted(values, key=lambda item: item["value"])
+        rankings[target] = {
+            "most_negative": ordered[:ranking_size],
+            "most_positive": list(reversed(ordered[-ranking_size:])),
+        }
+    mi_rankings = {
+        target: sorted(values, key=lambda item: item["value"], reverse=True)[
+            :ranking_size
+        ]
+        for target, values in candidate_mi.items()
+    }
+    for item in evidence.values():
+        item["reason_codes"] = sorted(set(item["reason_codes"]))
+    return {
+        "signals": evidence,
+        "candidate_rank_ic": rankings,
+        "candidate_mutual_information": mi_rankings,
+        "interpretation": (
+            "These are association and stability observations. They do not include "
+            "fees, execution, position sizing, or an automatic keep/drop decision."
+        ),
+    }
+
+
 def _reason_codes(record: EvalRecord, details: dict[str, Any]) -> set[str]:
     codes: set[str] = set()
     explicit = details.get("reason_codes")
@@ -223,7 +343,7 @@ def _reason_codes(record: EvalRecord, details: dict[str, Any]) -> set[str]:
             "missing_columns"
         ):
             codes.add("MISSING_CONTEXT")
-        else:
+        elif not codes:
             codes.add("NOT_APPLICABLE")
 
     if "cumulative_ic" in details and details.get("max_drawdown", 0) > 0:
@@ -253,4 +373,4 @@ def _contains_any(values: Iterable[str], choices: set[str]) -> bool:
     return any(value in choices for value in values)
 
 
-__all__ = ["assess_records"]
+__all__ = ["assess_features", "assess_records", "assess_signal_evidence"]

@@ -13,8 +13,8 @@ from .association import (
 from .information import METHODS as INFORMATION_METHODS
 from .information import (
     context_feature_target_mutual_information,
+    feature_pair_mutual_information,
     feature_target_mutual_information,
-    mutual_information,
 )
 from .quality import METHODS as QUALITY_METHODS
 from .quality import coverage, dispersion, finite_columns, required_columns
@@ -51,11 +51,11 @@ __all__ = [
     "cumulative_ic",
     "dispersion",
     "distribution_shift",
+    "feature_pair_mutual_information",
     "feature_target_mutual_information",
     "finite_columns",
     "icir",
     "key_grid",
-    "mutual_information",
     "pairwise_correlation",
     "pca_diagnostics",
     "pearson_ic",

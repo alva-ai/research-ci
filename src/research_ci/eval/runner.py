@@ -36,6 +36,7 @@ class EvalRecord:
     details: dict[str, Any] | None = None
     execution_mode: str = "custom_runner"
     selection_reason: str = ""
+    library_method: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +50,7 @@ class EvalRecord:
             "details": _json_value(self.details or {}),
             "execution_mode": self.execution_mode,
             "selection_reason": self.selection_reason,
+            "library_method": self.library_method,
         }
 
 
@@ -142,6 +144,7 @@ def _run_spec(
         observation,
         execution_mode=_execution_mode(spec),
         selection_reason=spec.selection_reason,
+        library_method=spec.library_method,
     )
 
 
@@ -256,6 +259,7 @@ def _record(
     *,
     execution_mode: str = "custom_runner",
     selection_reason: str = "",
+    library_method: str = "",
 ) -> EvalRecord:
     return EvalRecord(
         stage=stage,
@@ -268,6 +272,7 @@ def _record(
         details=observation.details,
         execution_mode=execution_mode,
         selection_reason=selection_reason,
+        library_method=library_method,
     )
 
 

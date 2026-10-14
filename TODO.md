@@ -1,10 +1,10 @@
 # Research Engine TODO
 
-状态：Contract、DataLoop 和 FeatLoop 已实现；Feat Card 正在本地 review。Sig 的阶段边界已经确定，`SignalSet`、SigLoop、Sig Card 和 Sig 四槽仍待实现；Algo 尚未实现。
+状态：Contract、DataLoop、FeatLoop 和 SigLoop 已实现；当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个暂定最终 signal 运行到 Sig Card review。全量 feature 筛选、逐列处置、候选/最终分离、signal 血缘和 Sig 四槽已实现；Algo 仍待实现。
 
 这份文件只记录当前有效的设计任务。历史讨论、失败方案和旧实现保存在仓库外部的 agent log，不在这里重复维护。
 
-当前用 `research-ci-lab` 的 SK Hynix proxy case 验证 Contract → DataLoop → FeatLoop 的最小闭环。
+当前用 `research-ci-lab` 的 SK Hynix proxy case 验证 Contract → DataLoop → FeatLoop → SigLoop 的可审核闭环。
 
 不继承旧 `research-ci` 的代码、API、数据模型或兼容约束，也不设版本迁移计划。
 
@@ -43,6 +43,7 @@
 - **决定**：Engine 的 `contract.py` 只负责 Contract 协议和结构校验；外部任务内容仍由 `lab/<case>/contract.py` 提供。
 - **决定**：`eval/protocol.py`、`eval/runner.py` 和 `eval/baseline.py` 分别负责四槽协议、执行器和 Engine 底线。
 - **决定**：`eval/library/` 按方法论组织通用方法；`eval/defaults/` 按 stage 提供方法提议；两者不混为同一层。
+- **完成**：`eval/policies/` 定义 Data、Feat、Sig、Algo 的硬语义边界；`eval/menu.py` 将共享 registry、stage policy 和当前声明编译成 Agent 可选择的动态菜单。
 - **完成**：当前已建立 `quality`、`structure`、`association` 三个最小方法族，并为方法声明适用 stage 和输入形状。
 - **完成**：方法库已按方法论扩展为 quality、structure、association、information 和 stability；包含 coverage、dispersion、PCA、VIF、互信息、IC、ICIR、累计 IC、分桶、序列稳定性和分布漂移等可复用诊断。
 - **决定**：`research-ci-lab/lab/<case>/` 由外部 Agent 自由维护 Contract、raw、Data builder、阶段 eval 和探索文件。
@@ -111,6 +112,18 @@
 - **待讨论**：失败行、聚合指标、fixture 结果和 scratch 中间数据的独立产物格式。
 - **待讨论**：定义处理记录、重跑记录和版本之间的关联。
 
+### 2.5 Stage Kit 与构建 recipe
+
+- **决定**：Kit 是给外部 Lab 使用的可选构建工具，不是新 stage、第五个 slot 或硬 allowlist；Engine 只约束 builder 的输入输出协议。
+- **决定**：Data、Feat、Sig 不强行共用一个万能抽象。Data 工具采用 table-in/table-out；Feat 工具优先采用无列名、无 alias 的纯 `pl.Expr`；Sig 工具覆盖显式 label sidecar、简单 signal 组合、时间切分和 bundle。
+- **完成**：`kit/data.py` 第一版提供显式 epoch 转换、去重、列名前缀和已排序表的 as-of join；不负责下载、缓存和文件读写。
+- **完成**：`kit/feat.py` 第一版提供 lag、difference、ratio、log/log1p return、row-clock/time-clock rolling、rolling std/quantile、z-score 和 median/IQR robust scale，并用 `apply_layers` 顺序执行依赖层。
+- **完成**：Feat operator 不隐藏 `fill_null`、`fill_nan`、epsilon、排序、列名和 forward shift；窗口时钟和 warm-up 参数保持显式。
+- **完成**：`kit/sig.py` 第一版提供 forward target Expr、固定权重/等权组合、方向与裁剪、显式时间切分和 `SignalBundle`；模型仍由 case Lab 自己实现。
+- **完成**：外部 builder 可声明 `BUILD_INFO`/`BuildStep`；DataLoop、FeatLoop 和 SigLoop 将它单独保存为 `recipe.json`。recipe 记录构建语义，manifest 记录产物索引，exploration/selection 记录研究过程，eval report 记录判断证据。
+- **决定**：Kit catalog 只用于发现工具；Eval menu 才按 stage policy 和声明限制 Slot 2 可选择的方法。
+- **后置**：等多个真实 case 出现重复需求后，再决定是否增加 Kit CLI、walk-forward window generator 或模型 adapter。
+
 ## 3. Eval 协议
 
 ### 3.1 四个插槽
@@ -123,12 +136,13 @@
 - **决定**：四个 slot 固定按 `baseline -> library -> case -> case_eval` 执行。
 - **完成**：第一版提供 `EvalPlan`、四个 slot 的顺序校验、`Expr`、column、runner 和 case fixture 的最小执行协议。
 - **完成**：第一版结果写入 eval report sidecar，主表保持不变。
-- **完成**：`EvalContext` 支持显式加载标签、target、horizon 等外部 Parquet sidecar；context runner 可以按声明的 key 连接评估，不把这些列写回主表。
-- **完成**：CLI 提供 `rci eval methods` 方法目录，Agent 可以按 stage 和方法族选择通用方法，不需要把库代码复制到 lab。
+- **完成**：`EvalContext` 支持显式加载 label、target/horizon 声明等外部 Parquet sidecar；context runner 可以按声明的 key 连接评估，不把这些列写回主表。
+- **完成**：CLI 提供 `rci eval methods` 动态菜单，Agent 可以按 stage、方法族和外部声明查看 `selectable`、`unavailable`、推荐状态与原因，不需要把库代码复制到 lab。
 - **完成**：Engine 自动填充一个 `engine.baseline.general_missing_values` 底线记录；外部 baseline 规则可以追加，但不再要求 Agent 重复声明底线。
-- **完成**：`DataSet` / `FeatureSet` 声明当前 Data、Feat 表的 key、列和列组；外部 Agent 通过 `LibrarySelection` 选择方法、范围、参数和理由，Engine 负责校验、展开和执行。
-- **决定**：当前 `FeatureSet.targets` 和 `EvalContext` 已能连接 target sidecar，但这是低层过渡能力。最终由待实现的 `SignalSet` 声明 target、horizon、feature 输入和 signal 配方，Feat 默认方法不再承担 target 相关评价。
-- **完成**：每条执行记录保存 `execution_mode` 和 `selection_reason`，Card 可以区分 Polars 表达式、列式聚合、连接分组、矩阵后端和自定义 runner。
+- **完成**：`DataSet`、target-free `FeatureSet` 和 `SignalSet` 分别声明 Data、Feat、Sig 输入；`SignalSet` 独占完整 feature universe、candidate/final signal columns、target、horizon、targetless hypothesis 和 fit policy。
+- **完成**：外部 Agent 通过 `LibrarySelection` 选择方法、范围、参数和理由；Engine 在读取数据前按 stage policy 和声明拒绝跨阶段或缺少能力的方法。
+- **完成**：Slot 2 只接受带注册方法身份的 Engine library spec；直接把任意 `EvalSpec` 塞入 library slot 会在计划校验时失败。
+- **完成**：每条执行记录保存 `library_method`、`execution_mode` 和 `selection_reason`，Card 可以追溯方法身份并区分 Polars 表达式、列式聚合、连接分组、矩阵后端和自定义 runner。
 - **待讨论**：四个插槽的统一输入、输出类型、空适用集语义和失败状态。
 - **待讨论**：哪些检查可以产生 treatment，哪些只能阻断或记录。
 
@@ -154,9 +168,11 @@
 ## 4. Data 阶段
 
 - **完成**：Agent builder 提供 `build_main_table()`（兼容 `build()`），可在 DataLoop 中执行。
-- **完成**：DataLoop 输出 `main.parquet`、`exploration.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`。
+- **完成**：DataLoop 输出 `main.parquet`、`exploration.json`、`recipe.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`。
 - **决定**：Engine 在 Data 主表上运行外部 `EvalPlan`，不向 Data 主表加入 eval 列。
 - **完成**：当前 case 已经实际运行 baseline、library、case、case_eval 四个插槽。
+- **完成**：当前 case 将 candle close time 作为 OHLCV 的 `event_time`，保留 bar start；funding 只做 backward as-of join 并记录 age，避免把整根 K 线或未来 funding 提前可用。
+- **完成**：当前 Data case rules 验证 OHLC 包络、正价格、非负成交量/笔数、symbol、派生价差公式和 funding 可用时间；每条规则都有独立反例。
 - **完成**：Contract 和 Data 都会生成带稳定 `card_id` 的 Markdown Card；当前阶段必须由 human 或 agent 显式 approve，下一阶段才会解锁。
 - **完成**：每个 run 保存 `workflow.json`，记录阶段状态、Card、审批来源、时间和消息；重新生成上游 Card 会锁住下游阶段。
 - **待讨论**：审批是否需要身份凭证、签名或外部 review 系统链接。
@@ -173,9 +189,11 @@
 - **决定**：Feat 的职责是生成可复用的 point-in-time feature，并完成与研究目标无关的结构筛选；它不负责决定某个 feature 对某个 target 是否有预测力。
 - **决定**：Feat 的 Engine baseline 只判断特征产物是否正确、可复现、可因果计算和可被下游读取；不因为某个特征的 IC 高低改变 correctness verdict。
 - **完成**：最小 Feat builder 接口为 `build_features(data_table)`（兼容 `build(data_table)`）返回一张 Polars 宽表，并通过 `FEATURE_KEYS` 声明 key；后续再扩展显式 evaluation context。
-- **完成**：FeatLoop 只读取当前 run 已批准的 `data/main.parquet`，输出 `feat/main.parquet`、`exploration.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json`。
+- **完成**：FeatLoop 只读取当前 run 已批准的 `data/main.parquet`，输出 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json`。
 - **完成**：Feat 产物进入 `review` 后停止，必须明确 approve 才解锁 Sig；Agent 可以在 review 状态修改 builder/eval 并重跑。
-- **完成**：当前 SK Hynix case 生成原始价差、资金费率差、24 小时滚动 z-score 和 6 小时价差变化；已删除没有假设依据的 `funding_diff_lag8h` 示例。
+- **完成**：当前 SK Hynix case 生成 88 个候选特征：五组基础状态、1h/6h/24h 变化、24h/72h/168h rolling mean/std/z-score、24h/168h median/IQR robust scale、tanh 有界变换，以及价差波动率和波动率缩放变化。
+- **决定**：Feat normalization 只使用截至当前行的因果滚动窗口，并要求完整 warm-up；不在全样本上 fit、不填充 warm-up null、不加隐藏 epsilon。需要 fitted scaler/PCA 时由 Sig 在时间隔离的 train/validation/test 或 walk-forward 内拟合。
+- **完成**：当前 case 用历史截断重算验证 Feat prefix 不受未来行影响；Data 行数 2321，Feat 保持同一 key grid 和 2321 行，不再因 `shift` 或 `drop_nulls` 缩成样例行数。
 - **完成**：当前 Feat 四槽已实际执行；case Agent 选择 coverage、dispersion、feature-feature correlation、VIF、PCA、autocorrelation、feature-feature MI 和 drift，没有选择 target 相关方法。
 - **完成**：第一版 PCA 使用声明的列、完整行和可选标准化，输出 explained variance、累计解释率和 effective rank；当前仍只作为结构诊断，不能直接当作 alpha 结论。
 - **完成**：VIF、PCA 和 dispersion 接收显式多列输入，结果留在 sidecar metric/findings 中。
@@ -185,7 +203,7 @@
 - **完成**：第一版通用库已加入 coverage、missing value floor、dispersion、pairwise correlation、VIF、PCA、autocorrelation、mutual information、split association、rank autocorrelation 和 distribution shift；Feat 只选择其中与结构、稳定性和正确性相关的方法。
 - **完成**：baseline 和大部分 quality/structure/stability 方法先走 Polars 列式路径；PCA、VIF、MI 在 Polars 完成矩阵筛选后使用 scikit-learn/NumPy。
 - **决定**：硬错误、不可计算列和完全重复列可以从候选池排除，但必须在 selection/manifest 中记录原因；高相关、VIF 高或信息重叠等软冗余先分簇或标记，不由 Engine 自动删除。
-- **待实现**：`eval/defaults/feat.py` 收敛为 target-free 提议；IC、ICIR、累计 IC、bucket spread 和 feature-target MI 的默认选择迁移到 Sig。通用 library 实现继续按方法论共享。
+- **完成**：`eval/defaults/feat.py` 已收敛为 target-free 提议；IC、ICIR、累计 IC、bucket spread 和 feature-target MI 只进入 Sig 菜单。通用 library 实现继续按方法论共享。
 - **待讨论**：通过后的特征表、结构筛选记录、特征池和方法论证据如何冻结。
 
 ### 5.1 Feat Engine baseline 候选
@@ -197,7 +215,7 @@
 - **待讨论**：数值列的 null、NaN、正负无穷、字符串 sentinel、全常数和近常数检查。
 - **待讨论**：feature coverage、按时间和 instrument 的缺失分布、最小有效样本量。
 - **待讨论**：重复运行一致性和输入顺序不变性。
-- **待讨论**：point-in-time replay：在历史 cut 上重算 feature，验证结果不能读取 cut 之后的数据。
+- **部分完成**：当前 SK Hynix case 已做历史 cut 的 prefix replay；仍待把通用 point-in-time replay 固化为 Engine baseline。
 - **待讨论**：feature provenance：输入列、lookback、available time、单位、变换和 builder hash。
 
 ### 5.2 Feat Engine eval library 候选
@@ -234,39 +252,49 @@
 以下是 Agent 在一个 Sig 阶段内的研究循环，不拆成额外顶层 stage：
 
 1. 声明 target/horizon，或声明 targetless hypothesis。
-2. 依据 Feat 的结构证据和 Sig 的 target-aware 证据选择候选 feature。
-3. 用规则、加权、矩阵方法、模型或 ensemble 构造 signal。
-4. 对 signal 做方向统一、归一化和必要的校准。
-5. 任何 fitted transform、PCA、权重或模型都使用时间隔离的 train/validation/test 或 walk-forward；预测时只使用当时已经 fit 的状态。
-6. 运行 Sig 四槽，生成 Sig Card，冻结 recipe、selection、artifact 和 signal table，等待明确批准。
+2. 完整声明已批准 Feat 表中的全部 feature；不能只申报准备使用的少数列。
+3. 对每个 feature × horizon 运行已选择的 target-aware library 方法，并保存可复用 screening 表。
+4. 依据质量、冗余、稳定性和 target evidence，为每个 feature 写唯一处置：直接保留、进入组件、保留为 context 或带理由拒绝。
+5. 用规则、quantile、分组组合、PCA、模型或 ensemble 构造独立 candidate，并记录输入、参数、fit policy、artifact 和血缘。
+6. 在统一 target 和评价口径下比较 candidate，再显式物化少量 final signal；Engine 不按单一分数自动晋升。
+7. 对 signal 做方向统一、归一化和必要的校准。
+8. 任何 fitted transform、PCA、权重或模型都使用时间隔离的 train/validation/test 或 walk-forward；选择与拟合只读取训练段，验证和测试只生成样本外证据。
+9. 运行 Sig 四槽，生成 Sig Card，冻结 recipe、selection、artifact 和 signal table，等待明确批准。
 
 ### 6.2 Sig 产物
 
-- **待实现**：`SignalSet`，显式声明 keys、features、targets/horizons 或 targetless hypothesis、signal columns、recipe 和 fit policy。
-- **待实现**：SigLoop 和 CLI，只读取已批准的 Feat freeze，执行外部 signal builder 与四槽计划，生成 review 状态并锁住 Algo。
-- **待实现**：`sig/main.parquet`，只包含 key 和下游需要的 signal columns。
-- **待实现**：`sig/selection.json`，记录每个候选 feature 的保留、排除、分簇、方向和理由。
-- **待实现**：`sig/recipe.json`，记录规则、组合权重、归一化、estimator、超参数和训练窗口。
-- **待实现**：`sig/artifacts/`，保存可选的系数、PCA、模型或校准器，并记录 hash 和训练范围。
-- **待实现**：`sig/eval/report.jsonl`、`sig/eval/assessment.json`、`sig/card.md` 和 `sig/manifest.json`。
-- **决定**：当前 `FeatureSet.targets`/`EvalContext` 可以作为实现 Sig 的底层连接能力，但公开阶段协议最终由 `SignalSet` 承担。
+- **完成**：`SignalSet` 显式声明 keys、完整 features、candidate columns、final signal columns、targets/horizons 或 targetless hypothesis 和 fit policy；targetless Sig 若没有 hypothesis 会被拒绝。
+- **完成**：最小 Sig Kit 已提供显式 forward target、简单 signal 组合、时间切分、`FeatureDisposition`、`SignalLineage` 和 `SignalBundle`；它不等同于 SigLoop，也不替 Agent 选择 target、feature 或模型。
+- **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划，生成 review 状态并锁住 Algo。
+- **完成**：`sig/main.parquet` 只包含 key 和下游需要的 signal columns；已实现的未来值叫 label，保存在 `sig/context/label.parquet`；target/horizon 只表达研究要预测哪个 label。
+- **完成**：`sig/research/candidates.parquet` 保存全部 candidate；`screening.parquet` 保存分 sample 的 feature-target 证据；`disposition.parquet` 覆盖每个 feature；`lineage.json` 覆盖每个 candidate 和 final signal；其他 research 表保存相关簇和冗余证据。
+- **完成**：`sig/selection.json` 保存本轮候选、物化 signal、horizon、决策原则和是否自动筛选。
+- **完成**：`sig/recipe.json` 保存 builder 声明的规则、组合和 target 生成语义。
+- **完成**：`sig/artifacts/` 支持保存 JSON 或 bytes artifact；当前 case 已保存 split、PCA scaler/component、Ridge 参数和 KMeans scaler/centers/cluster target means。
+- **完成**：`sig/eval/report.jsonl`、`sig/eval/assessment.json`、`sig/card.md` 和 `sig/manifest.json` 已实际生成。
+- **完成**：`FeatureSet` 已移除 target 能力；`SignalSet` 配合 `EvalContext` 显式连接 label sidecar，目标相关方法不会修改 `feat/main.parquet`。
+- **完成**：当前 case 完整声明 88 个 feature，覆盖 352 个 feature-horizon 组合，构造 10 个 candidate（直接规则、multiscale、train quantile、family mean、PCA、Ridge、KMeans regime），物化 2 个暂定 final signal；所有表保持 2321 行并停在 review。
 
 ### 6.3 Sig 四个插槽
 
-- **决定**：`baseline` 检查 key 对齐、signal schema、coverage、null/NaN/非有限值、PIT、fit/predict 时间隔离、确定性和 artifact 可复现性。
+- **完成**：`baseline` 除 key、schema 和 sidecar 形状外，强制完整 Feat universe、全 feature-horizon screening plan、screening artifact、逐 feature disposition、candidate/final shape 和无环 lineage；任一缺失都会失败。
+- **决定**：PIT、fit/predict 时间隔离、确定性和 artifact 可复现性继续逐步固化为 Engine 通用检查；当前 case 由显式 split、purge、artifact 和测试覆盖。
 - **决定**：`library` 由外部 Agent 按本 case 选择 IC、rank IC、ICIR、累计 IC、target MI、bucket/monotonicity、horizon decay、分时段/分 regime 稳定性、OOS、null/permutation、turnover 和 concentration 等方法；Engine 不自动全选。
 - **决定**：`case` 声明并执行本任务的 signal recipe，包括输入 feature、target/horizon 或 hypothesis、方向、权重、归一化和可选 fit 配置。
 - **决定**：`case_eval` 验证 Slot 3：有效 fixture 应通过，错误权重或维度应失败，打乱 label 应破坏 target evidence，修改未来数据不能改变历史 signal，反例不能被规则误判。
+- **完成**：当前 case 的 signal 公式和 target 公式均由 case rule 独立重算；Slot 4 分别篡改 signal 和原始 spread，两个反例均被识别。
 
 ### 6.4 Sig 方法论与判定
 
-- **待讨论**：IC 的横截面/时间序列语义、分组列、最小样本数、年化频率和序列相关处理。
+- **部分完成**：`SignalSet.evaluation_by` 显式声明时间序列分组列；当前 case 使用 168 小时 block、最小 72 个完整样本，并在 Card 中明确组数和年化参数。横截面 IC 和序列相关修正仍待讨论。
 - **待讨论**：横截面 Pearson IC、rank IC、分组 IC、IC 均值、标准差、ICIR 和正 IC 比例。
 - **待讨论**：累计 IC 的终值、斜率、最大回撤和 block/bootstrap 区间；累计 IC 不单独作为通过条件。
 - **待讨论**：quantile/bucket spread、单调性、top-bottom spread、horizon decay 和分 regime 稳定性。
 - **待讨论**：permutation/null world、block bootstrap、有效独立样本数、multiple-testing/FDR、selection bias 和 nested walk-forward。
 - **决定**：Card 根据四槽 evidence 说明候选是 invalid、incomplete、redundant、unstable、target-weak、overfit-risk 或 candidate_for_review；Engine 不用单一分数自动选“最佳 signal”。
 - **决定**：Sig 的批准表示 signal 定义和证据足以交给 Algo 研究，不表示策略已经盈利或可交易。
+- **完成**：Sig Card 分开展示 final 与 10 个 candidate 的 Pearson IC、Rank IC、bucket spread、前后样本稳定性、block ICIR、累计 IC、正 IC block 比例和回撤；同时展示 feature 排名、88 列处置计数和 research 路径，完整明细保留在 JSONL/Parquet。
+- **待讨论**：当前 test evidence 会在 review Card 中显示；若 Agent 需要多轮调参，需增加 validation-only 选型和一次性 test reveal/freeze 协议，避免反复查看 test 后继续修改 recipe。
 
 ## 7. Algo、Seal 和 Forward
 

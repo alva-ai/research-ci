@@ -3,7 +3,11 @@ import math
 import polars as pl
 
 from research_ci import CaseEvalTest, EvalContext, EvalPlan, EvalSpec, run_eval_plan
-from research_ci.eval.assessment import assess_features, assess_records
+from research_ci.eval.assessment import (
+    assess_features,
+    assess_records,
+    assess_signal_evidence,
+)
 from research_ci.eval.library.association import (
     context_pearson_ic,
     context_spearman_ic,
@@ -12,15 +16,16 @@ from research_ci.eval.library.association import (
 )
 from research_ci.eval.library.information import (
     context_feature_target_mutual_information,
-    mutual_information,
+    feature_pair_mutual_information,
 )
 from research_ci.eval.library.quality import coverage
 from research_ci.eval.library.structure import pca_diagnostics, vif
+from research_ci.eval.runner import EvalRecord
 
 
-def _plan(*library: EvalSpec) -> EvalPlan:
+def _plan(*library: EvalSpec, stage: str = "feat") -> EvalPlan:
     return EvalPlan(
-        stage="feat",
+        stage=stage,
         baseline=(),
         library=library or (EvalSpec.noop("library.placeholder"),),
         case=(EvalSpec("case.ok", expr=pl.col("x") > 0),),
@@ -47,15 +52,16 @@ def test_mutual_information_pca_and_vif_produce_explicit_metrics() -> None:
     result = run_eval_plan(
         table,
         _plan(
-            mutual_information("x", "y", min_rows=10),
+            feature_pair_mutual_information("x", "y", min_rows=10),
             vif(("x", "y", "z")),
             pca_diagnostics(("x", "y", "z")),
         ),
     )
     records = {record.name: record for record in result.records}
 
-    assert records["library.information.mutual_information"].status == "passed"
-    assert records["library.information.mutual_information"].value > 0.9
+    method = records["library.information.feature_pair_mutual_information"]
+    assert method.status == "passed"
+    assert method.value > 0.9
     assert records["library.structure.vif"].details["max_vif"] > 10
     pca = records["library.structure.pca_diagnostics"]
     assert pca.status == "passed"
@@ -96,6 +102,7 @@ def test_grouped_ic_methods_require_explicit_groups() -> None:
         _plan(
             icir("score", "target", by="period", min_group_size=3),
             cumulative_ic("score", "target", by="period", min_group_size=3),
+            stage="sig",
         ),
     )
     records = {record.name: record for record in result.records}
@@ -137,6 +144,7 @@ def test_context_target_stays_out_of_main_table() -> None:
                 context_table="labels",
                 min_rows=2,
             ),
+            stage="sig",
         ),
         EvalContext(tables={"labels": targets}),
     )
@@ -179,3 +187,69 @@ def test_feature_triage_explains_structural_candidates() -> None:
     assert "LOW_COVERAGE" in triage["sparse"]["reason_codes"]
     assert triage["constant"]["status"] == "weak_data"
     assert "NO_VARIATION" in triage["constant"]["reason_codes"]
+
+
+def test_signal_evidence_keeps_metrics_and_split_instability_explicit() -> None:
+    records = (
+        EvalRecord(
+            stage="sig",
+            slot="library",
+            name="signal.rank",
+            status="passed",
+            value=0.12,
+            library_method="library.association.spearman_ic",
+            details={"score": "signal", "target": "return_6h"},
+        ),
+        EvalRecord(
+            stage="sig",
+            slot="library",
+            name="signal.split",
+            status="passed",
+            value=0.3,
+            library_method="library.stability.split_association",
+            details={
+                "score": "signal",
+                "target": "return_6h",
+                "first_half": -0.1,
+                "second_half": 0.2,
+                "same_sign": False,
+            },
+        ),
+        EvalRecord(
+            stage="sig",
+            slot="library",
+            name="candidate.rank",
+            status="passed",
+            value=-0.2,
+            library_method="library.association.spearman_ic",
+            details={"score": "feature", "target": "return_6h"},
+        ),
+    )
+
+    evidence = assess_signal_evidence(records, ("signal",), ("feature",))
+
+    signal = evidence["signals"]["signal"]
+    assert signal["targets"]["return_6h"]["rank_ic"] == 0.12
+    assert signal["reason_codes"] == ["SPLIT_SIGN_CHANGE:return_6h"]
+    assert evidence["candidate_rank_ic"]["return_6h"]["most_negative"] == [
+        {"feature": "feature", "value": -0.2}
+    ]
+
+
+def test_known_no_variation_is_weak_evidence_not_missing_context() -> None:
+    record = EvalRecord(
+        stage="sig",
+        slot="library",
+        name="candidate.mi",
+        status="not_applicable",
+        library_method="library.information.feature_target_mutual_information",
+        details={
+            "reason": "mutual information input has no variation",
+            "reason_code": "NO_VARIATION",
+        },
+    )
+
+    assessment = assess_records((record,))
+
+    assert assessment["research_disposition"] == "weak_data"
+    assert assessment["reason_codes"] == ["NO_VARIATION"]

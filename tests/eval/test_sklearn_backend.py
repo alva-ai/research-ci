@@ -2,7 +2,7 @@ import math
 
 import polars as pl
 
-from research_ci.eval.library.information import mutual_information
+from research_ci.eval.library.information import feature_pair_mutual_information
 from research_ci.eval.library.structure import pca_diagnostics, vif
 
 
@@ -21,7 +21,7 @@ def test_mutual_information_uses_sklearn_after_polars_row_filtering() -> None:
     )
 
     observation = _run(
-        mutual_information(
+        feature_pair_mutual_information(
             "x",
             "y",
             bins=12,
@@ -35,7 +35,7 @@ def test_mutual_information_uses_sklearn_after_polars_row_filtering() -> None:
 
     assert observation.status == "passed"
     assert (
-        mutual_information("x", "y", normalized=False).execution_mode
+        feature_pair_mutual_information("x", "y", normalized=False).execution_mode
         == "matrix_backend"
     )
     assert observation.value > 1.0

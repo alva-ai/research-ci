@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections import Counter
+from collections.abc import Iterable, Mapping
 
 import polars as pl
 
+from research_ci.kit.sig import FeatureDisposition, SignalLineage
+
+from .declarations import LibrarySelection, SignalSet
 from .protocol import EvalObservation
+
+_TARGET_SCREENING_METHODS = frozenset(
+    {
+        "library.association.pearson_ic",
+        "library.association.spearman_ic",
+        "library.information.feature_target_mutual_information",
+    }
+)
 
 
 def general_missing_values(table: pl.DataFrame) -> EvalObservation:
@@ -187,4 +199,362 @@ def feature_output_shape(
     )
 
 
-__all__ = ["feature_output_shape", "general_missing_values"]
+def sidecar_output_shape(
+    input_table: pl.DataFrame,
+    sidecar: pl.DataFrame,
+    keys: Iterable[str],
+    required: Iterable[str],
+) -> EvalObservation:
+    """Check that a named stage sidecar preserves the input key grid."""
+
+    selected = tuple(dict.fromkeys(keys))
+    required_columns = tuple(dict.fromkeys((*selected, *required)))
+    missing_input = sorted(set(selected) - set(input_table.columns))
+    missing_sidecar = sorted(set(required_columns) - set(sidecar.columns))
+    details: dict[str, object] = {
+        "input_rows": input_table.height,
+        "sidecar_rows": sidecar.height,
+        "keys": selected,
+        "required_columns": required_columns,
+        "missing_input_key_columns": missing_input,
+        "missing_sidecar_columns": missing_sidecar,
+    }
+    if not selected or missing_input or missing_sidecar:
+        details["reason_code"] = "MISSING_CONTEXT"
+        return EvalObservation("failed", output_kind="findings", details=details)
+
+    input_keys = input_table.select(selected)
+    sidecar_keys = sidecar.select(selected)
+    missing_keys = input_keys.join(sidecar_keys, on=list(selected), how="anti")
+    extra_keys = sidecar_keys.join(input_keys, on=list(selected), how="anti")
+    duplicate_key_rows = sidecar_keys.height - sidecar_keys.unique().height
+    details.update(
+        {
+            "missing_key_rows": missing_keys.height,
+            "extra_key_rows": extra_keys.height,
+            "duplicate_key_rows": duplicate_key_rows,
+        }
+    )
+    valid = (
+        input_table.height == sidecar.height
+        and missing_keys.is_empty()
+        and extra_keys.is_empty()
+        and duplicate_key_rows == 0
+    )
+    if not valid:
+        details["reason_code"] = (
+            "CONTEXT_DUPLICATE_KEYS"
+            if duplicate_key_rows
+            else "CONTEXT_KEY_GRID_MISMATCH"
+        )
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def signal_feature_universe(
+    feature_table: pl.DataFrame,
+    keys: Iterable[str],
+    declared_features: Iterable[str],
+) -> EvalObservation:
+    """Require Sig to declare every feature in the approved Feat table."""
+
+    key_names = tuple(dict.fromkeys(keys))
+    actual = tuple(
+        column for column in feature_table.columns if column not in key_names
+    )
+    raw_declared = tuple(declared_features)
+    declared = tuple(dict.fromkeys(raw_declared))
+    missing = sorted(set(actual) - set(declared))
+    unknown = sorted(set(declared) - set(actual))
+    duplicates = len(raw_declared) - len(declared)
+    valid = not missing and not unknown and duplicates == 0
+    details: dict[str, object] = {
+        "feature_count": len(actual),
+        "declared_count": len(declared),
+        "missing_from_declaration": missing,
+        "unknown_in_declaration": unknown,
+        "duplicate_declarations": duplicates,
+        "coverage": len(set(actual) & set(declared)) / len(actual) if actual else 0.0,
+    }
+    if not valid:
+        details["reason_code"] = "INCOMPLETE_FEATURE_UNIVERSE"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def signal_screening_plan_coverage(
+    declaration: SignalSet,
+    selection: LibrarySelection,
+) -> EvalObservation:
+    """Require target-aware Sig plans to screen every feature and horizon."""
+
+    expected = {
+        (feature, horizon)
+        for feature in declaration.features
+        for horizon in declaration.targets
+    }
+    covered: set[tuple[str, str]] = set()
+    selected_methods: list[str] = []
+    for selected in selection.methods:
+        if selected.name not in _TARGET_SCREENING_METHODS:
+            continue
+        columns = set(declaration.columns(selected.on)) & set(declaration.features)
+        horizons = set(selected.targets or tuple(declaration.targets))
+        covered.update((column, horizon) for column in columns for horizon in horizons)
+        selected_methods.append(selected.name)
+    missing = sorted(expected - covered)
+    valid = not expected or not missing
+    details: dict[str, object] = {
+        "expected_feature_target_pairs": len(expected),
+        "covered_feature_target_pairs": len(expected & covered),
+        "coverage": len(expected & covered) / len(expected) if expected else 1.0,
+        "screening_methods": sorted(set(selected_methods)),
+        "missing_pairs": [
+            {"feature": feature, "horizon": horizon}
+            for feature, horizon in missing
+        ],
+    }
+    if not valid:
+        details["reason_code"] = "INCOMPLETE_TARGET_SCREENING"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def signal_screening_artifact_coverage(
+    screening: pl.DataFrame | None,
+    features: Iterable[str],
+    targets: Mapping[str, str],
+) -> EvalObservation:
+    """Check that the reusable screening table covers the complete universe."""
+
+    feature_names = tuple(dict.fromkeys(features))
+    expected = {(feature, horizon) for feature in feature_names for horizon in targets}
+    details: dict[str, object] = {
+        "expected_feature_target_pairs": len(expected),
+        "required_columns": ["feature", "horizon"],
+    }
+    if not targets:
+        details.update(
+            {
+                "required": False,
+                "covered_feature_target_pairs": 0,
+                "coverage": 1.0,
+                "missing_pairs": [],
+                "unknown_pairs": [],
+            }
+        )
+        return EvalObservation(
+            "passed",
+            value=True,
+            output_kind="summary",
+            details=details,
+        )
+    if screening is None:
+        details.update(
+            {
+                "reason_code": "MISSING_SCREENING_ARTIFACT",
+                "missing_pairs": len(expected),
+            }
+        )
+        return EvalObservation("failed", output_kind="findings", details=details)
+    missing_columns = sorted({"feature", "horizon"} - set(screening.columns))
+    if missing_columns:
+        details.update(
+            {
+                "reason_code": "INVALID_SCREENING_ARTIFACT",
+                "missing_columns": missing_columns,
+            }
+        )
+        return EvalObservation("failed", output_kind="findings", details=details)
+    actual_rows = screening.select("feature", "horizon").unique()
+    actual = {
+        (str(feature), str(horizon)) for feature, horizon in actual_rows.iter_rows()
+    }
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    valid = not missing and not unknown
+    details.update(
+        {
+            "rows": screening.height,
+            "covered_feature_target_pairs": len(expected & actual),
+            "coverage": len(expected & actual) / len(expected) if expected else 1.0,
+            "missing_pairs": [
+                {"feature": feature, "horizon": horizon}
+                for feature, horizon in missing
+            ],
+            "unknown_pairs": [
+                {"feature": feature, "horizon": horizon}
+                for feature, horizon in unknown
+            ],
+        }
+    )
+    if not valid:
+        details["reason_code"] = "INCOMPLETE_SCREENING_ARTIFACT"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def signal_disposition_coverage(
+    feature_table: pl.DataFrame,
+    keys: Iterable[str],
+    dispositions: Iterable[FeatureDisposition],
+    outputs: Iterable[str],
+) -> EvalObservation:
+    """Require one explained decision for every approved feature."""
+
+    key_names = set(keys)
+    expected = {column for column in feature_table.columns if column not in key_names}
+    items = tuple(dispositions)
+    actual = [item.feature for item in items]
+    missing = sorted(expected - set(actual))
+    unknown = sorted(set(actual) - expected)
+    duplicates = sorted(
+        feature for feature, count in Counter(actual).items() if count > 1
+    )
+    allowed_outputs = set(outputs)
+    unknown_selected_for = sorted(
+        {
+            output
+            for item in items
+            for output in item.selected_for
+            if output not in allowed_outputs
+        }
+    )
+    rejected_with_outputs = sorted(
+        item.feature
+        for item in items
+        if item.action.startswith("reject_") and item.selected_for
+    )
+    selected_without_outputs = sorted(
+        item.feature
+        for item in items
+        if item.action
+        in {"keep_direct", "representative_of_cluster", "input_to_component"}
+        and not item.selected_for
+    )
+    valid = not (
+        missing
+        or unknown
+        or duplicates
+        or unknown_selected_for
+        or rejected_with_outputs
+        or selected_without_outputs
+    )
+    action_counts: dict[str, int] = {}
+    for item in items:
+        action_counts[item.action] = action_counts.get(item.action, 0) + 1
+    details: dict[str, object] = {
+        "feature_count": len(expected),
+        "disposition_count": len(items),
+        "coverage": len(expected & set(actual)) / len(expected) if expected else 0.0,
+        "action_counts": dict(sorted(action_counts.items())),
+        "missing_features": missing,
+        "unknown_features": unknown,
+        "duplicate_features": duplicates,
+        "unknown_selected_for": unknown_selected_for,
+        "rejected_with_outputs": rejected_with_outputs,
+        "selected_without_outputs": selected_without_outputs,
+    }
+    if not valid:
+        details["reason_code"] = "INCOMPLETE_FEATURE_DISPOSITION"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def signal_lineage_coverage(
+    features: Iterable[str],
+    candidates: Iterable[str],
+    signals: Iterable[str],
+    lineage: Iterable[SignalLineage],
+) -> EvalObservation:
+    """Require every candidate and final signal to have acyclic lineage."""
+
+    feature_names = set(features)
+    candidate_names = tuple(dict.fromkeys(candidates))
+    signal_names = tuple(dict.fromkeys(signals))
+    expected_roles = {
+        **{name: "candidate" for name in candidate_names},
+        **{name: "final" for name in signal_names},
+    }
+    items = tuple(lineage)
+    actual = [item.signal for item in items]
+    missing = sorted(set(expected_roles) - set(actual))
+    unknown = sorted(set(actual) - set(expected_roles))
+    duplicates = sorted(
+        name for name, count in Counter(actual).items() if count > 1
+    )
+    wrong_roles = sorted(
+        item.signal
+        for item in items
+        if expected_roles.get(item.signal) not in {None, item.role}
+    )
+    candidate_depends_on_final = sorted(
+        item.signal
+        for item in items
+        if item.role == "candidate" and set(item.inputs) & set(signal_names)
+    )
+    available = set(feature_names)
+    unresolved: dict[str, list[str]] = {}
+    for item in items:
+        missing_inputs = sorted(set(item.inputs) - available)
+        if missing_inputs:
+            unresolved[item.signal] = missing_inputs
+        available.add(item.signal)
+    valid = not (
+        missing
+        or unknown
+        or duplicates
+        or wrong_roles
+        or candidate_depends_on_final
+        or unresolved
+    )
+    details: dict[str, object] = {
+        "expected_outputs": len(expected_roles),
+        "lineage_records": len(items),
+        "missing_outputs": missing,
+        "unknown_outputs": unknown,
+        "duplicate_outputs": duplicates,
+        "wrong_roles": wrong_roles,
+        "candidate_depends_on_final": candidate_depends_on_final,
+        "unresolved_inputs": unresolved,
+    }
+    if not valid:
+        details["reason_code"] = "INCOMPLETE_SIGNAL_LINEAGE"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+__all__ = [
+    "feature_output_shape",
+    "general_missing_values",
+    "sidecar_output_shape",
+    "signal_disposition_coverage",
+    "signal_feature_universe",
+    "signal_lineage_coverage",
+    "signal_screening_artifact_coverage",
+    "signal_screening_plan_coverage",
+]

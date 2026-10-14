@@ -27,31 +27,23 @@ METHODS = (
     MethodInfo(
         name="library.association.pearson_ic",
         family="association",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="evaluation_table",
+        purpose="predictive",
+        input_roles=("features", "signals", "target"),
+        requires=("target", "horizon"),
         description=(
             "Measure Pearson score/target association when a target is available."
         ),
     ),
     MethodInfo(
-        name="library.association.context_pearson_ic",
-        family="association",
-        stages=("feat", "sig"),
-        input_kind="feature_panel",
-        description="Measure Pearson IC against an explicitly named target sidecar.",
-    ),
-    MethodInfo(
-        name="library.association.context_spearman_ic",
-        family="association",
-        stages=("feat", "sig"),
-        input_kind="feature_panel",
-        description="Measure rank IC against an explicitly named target sidecar.",
-    ),
-    MethodInfo(
         name="library.association.spearman_ic",
         family="association",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="evaluation_table",
+        purpose="predictive",
+        input_roles=("features", "signals", "target"),
+        requires=("target", "horizon"),
         description=(
             "Measure rank based score/target association when a target is available."
         ),
@@ -59,8 +51,11 @@ METHODS = (
     MethodInfo(
         name="library.association.icir",
         family="association",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="feature_panel",
+        purpose="predictive",
+        input_roles=("features", "signals", "target", "keys"),
+        requires=("target", "horizon"),
         description=(
             "Summarise grouped cross-sectional IC as mean divided by its dispersion."
         ),
@@ -68,15 +63,21 @@ METHODS = (
     MethodInfo(
         name="library.association.cumulative_ic",
         family="association",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="feature_panel",
+        purpose="predictive",
+        input_roles=("features", "signals", "target", "keys"),
+        requires=("target", "horizon"),
         description="Return grouped IC observations and their cumulative path.",
     ),
     MethodInfo(
         name="library.association.bucket_spread",
         family="association",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="feature_panel",
+        purpose="predictive",
+        input_roles=("features", "signals", "target"),
+        requires=("target", "horizon"),
         description="Compare the average target of high and low feature buckets.",
     ),
 )
@@ -96,6 +97,7 @@ def pearson_ic(
         score,
         target,
         method="pearson",
+        library_method="library.association.pearson_ic",
         name=name,
         minimum_abs=minimum_abs,
         failure_policy=failure_policy,
@@ -116,6 +118,7 @@ def spearman_ic(
         score,
         target,
         method="spearman",
+        library_method="library.association.spearman_ic",
         name=name,
         minimum_abs=minimum_abs,
         failure_policy=failure_policy,
@@ -126,14 +129,14 @@ def context_pearson_ic(
     score: str,
     target: str,
     *,
-    context_table: str = "target",
+    context_table: str = "label",
     join_on: Iterable[str] = ("event_time",),
     name: str = "library.association.context_pearson_ic",
     failure_policy: FailurePolicy = "record",
 ) -> EvalSpec:
     """Build Pearson IC from a named sidecar table joined on explicit keys.
 
-    The target sidecar is never appended to the feature main table.  This is
+    The label sidecar is never appended to the feature main table.  This is
     the normal path once a lab starts exploring labels and horizons.
     """
 
@@ -141,6 +144,7 @@ def context_pearson_ic(
         score,
         target,
         method="pearson",
+        library_method="library.association.pearson_ic",
         context_table=context_table,
         join_on=join_on,
         name=name,
@@ -152,7 +156,7 @@ def context_spearman_ic(
     score: str,
     target: str,
     *,
-    context_table: str = "target",
+    context_table: str = "label",
     join_on: Iterable[str] = ("event_time",),
     name: str = "library.association.context_spearman_ic",
     failure_policy: FailurePolicy = "record",
@@ -163,6 +167,7 @@ def context_spearman_ic(
         score,
         target,
         method="spearman",
+        library_method="library.association.spearman_ic",
         context_table=context_table,
         join_on=join_on,
         name=name,
@@ -175,6 +180,7 @@ def _context_correlation_spec(
     target: str,
     *,
     method: str,
+    library_method: str,
     context_table: str,
     join_on: Iterable[str],
     name: str,
@@ -231,6 +237,7 @@ def _context_correlation_spec(
         failure_policy=failure_policy,
         output_kind="metric",
         execution_mode="polars_join_group",
+        library_method=library_method,
     )
 
 
@@ -274,6 +281,7 @@ def icir(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_join_group",
+        library_method="library.association.icir",
     )
 
 
@@ -330,6 +338,7 @@ def cumulative_ic(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_join_group",
+        library_method="library.association.cumulative_ic",
     )
 
 
@@ -390,6 +399,7 @@ def bucket_spread(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_join_group",
+        library_method="library.association.bucket_spread",
     )
 
 
@@ -398,6 +408,7 @@ def _correlation_spec(
     target: str,
     *,
     method: str,
+    library_method: str,
     name: str,
     minimum_abs: float | None,
     failure_policy: FailurePolicy,
@@ -438,6 +449,7 @@ def _correlation_spec(
         failure_policy=failure_policy,
         output_kind="metric",
         execution_mode="polars_select",
+        library_method=library_method,
     )
 
 

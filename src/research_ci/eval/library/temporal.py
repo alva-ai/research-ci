@@ -17,6 +17,9 @@ METHODS = (
         family="temporal",
         stages=("data",),
         input_kind="main_table",
+        purpose="temporal",
+        input_roles=("keys",),
+        requires=("time_key",),
         description=(
             "Check key uniqueness, ordering, and an optional regular time grid."
         ),
@@ -104,6 +107,7 @@ def key_grid(
         failure_policy=failure_policy,
         output_kind="summary",
         execution_mode="polars_select",
+        library_method="library.temporal.key_grid",
     )
 
 

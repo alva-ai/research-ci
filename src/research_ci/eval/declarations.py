@@ -84,14 +84,11 @@ class DataSet:
 
 @dataclass(frozen=True, slots=True)
 class FeatureSet:
-    """Describe feature inputs and target sidecars without choosing methods."""
+    """Describe a target-free Feat table without choosing methods."""
 
     features: tuple[str, ...]
     keys: tuple[str, ...]
-    targets: Mapping[str, str] = field(default_factory=dict)
     groups: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
-    target_table: str = "target"
-    cross_section_by: str | None = None
     stage: str = field(default="feat", init=False)
 
     def __post_init__(self) -> None:
@@ -99,15 +96,7 @@ class FeatureSet:
             self, "features", _names(self.features, "FeatureSet.features")
         )
         object.__setattr__(self, "keys", _names(self.keys, "FeatureSet.keys"))
-        object.__setattr__(self, "targets", dict(self.targets))
         object.__setattr__(self, "groups", _groups(self.groups))
-        if not self.target_table.strip():
-            raise ValueError("FeatureSet.target_table must not be empty")
-        if any(
-            not horizon.strip() or not column.strip()
-            for horizon, column in self.targets.items()
-        ):
-            raise ValueError("FeatureSet.targets needs non-empty horizons and columns")
         unknown = sorted(
             {
                 column
@@ -119,10 +108,6 @@ class FeatureSet:
         if unknown:
             raise ValueError(
                 f"FeatureSet groups contain undeclared features: {unknown}"
-            )
-        if self.cross_section_by is not None and self.cross_section_by not in self.keys:
-            raise ValueError(
-                "FeatureSet.cross_section_by must be one of FeatureSet.keys"
             )
 
     @property
@@ -146,6 +131,123 @@ class FeatureSet:
         unknown = sorted(set(selected) - set(self.features))
         if unknown:
             raise ValueError(f"selected features are not declared: {unknown}")
+        return selected
+
+
+@dataclass(frozen=True, slots=True)
+class SignalSet:
+    """Describe the Sig feature universe, candidates, finals, and prediction targets.
+
+    ``targets`` maps each research horizon to an observed label column.  The
+    realized values live in the explicitly named label sidecar and never in
+    the Feat or Sig main table.
+    """
+
+    features: tuple[str, ...]
+    keys: tuple[str, ...]
+    targets: Mapping[str, str] = field(default_factory=dict)
+    candidates: tuple[str, ...] = ()
+    signals: tuple[str, ...] = ()
+    groups: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    label_table: str = "label"
+    cross_section_by: str | None = None
+    evaluation_by: str | None = None
+    hypothesis: str = ""
+    fit_policy: str = "none"
+    stage: str = field(default="sig", init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "features", _names(self.features, "SignalSet.features")
+        )
+        object.__setattr__(self, "keys", _names(self.keys, "SignalSet.keys"))
+        object.__setattr__(self, "targets", dict(self.targets))
+        object.__setattr__(self, "candidates", tuple(dict.fromkeys(self.candidates)))
+        object.__setattr__(self, "signals", tuple(dict.fromkeys(self.signals)))
+        object.__setattr__(self, "groups", _groups(self.groups))
+        if any(not value.strip() for value in (*self.candidates, *self.signals)):
+            raise ValueError("SignalSet candidate/signal names must not be empty")
+        if not self.label_table.strip():
+            raise ValueError("SignalSet.label_table must not be empty")
+        if any(
+            not horizon.strip() or not column.strip()
+            for horizon, column in self.targets.items()
+        ):
+            raise ValueError("SignalSet.targets needs non-empty horizons and columns")
+        if not self.targets and not self.hypothesis.strip():
+            raise ValueError("targetless SignalSet requires an explicit hypothesis")
+        if self.fit_policy not in {"none", "train_validation_test", "walk_forward"}:
+            raise ValueError(
+                "SignalSet.fit_policy must be none, train_validation_test, "
+                "or walk_forward"
+            )
+        if self.cross_section_by is not None and self.cross_section_by not in self.keys:
+            raise ValueError("SignalSet.cross_section_by must be one of SignalSet.keys")
+        if self.evaluation_by is not None and not self.evaluation_by.strip():
+            raise ValueError("SignalSet.evaluation_by must not be empty")
+        available = set(self.features) | set(self.candidates) | set(self.signals)
+        unknown = sorted(
+            {
+                column
+                for columns in self.groups.values()
+                for column in columns
+                if column not in available
+            }
+        )
+        if unknown:
+            raise ValueError(f"SignalSet groups contain undeclared columns: {unknown}")
+        overlaps = {
+            "keys/features": set(self.keys) & set(self.features),
+            "keys/candidates": set(self.keys) & set(self.candidates),
+            "keys/signals": set(self.keys) & set(self.signals),
+            "features/candidates": set(self.features) & set(self.candidates),
+            "features/signals": set(self.features) & set(self.signals),
+            "candidates/signals": set(self.candidates) & set(self.signals),
+        }
+        collisions = {
+            name: sorted(columns) for name, columns in overlaps.items() if columns
+        }
+        if collisions:
+            raise ValueError(f"SignalSet column roles overlap: {collisions}")
+
+    @property
+    def required(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (*self.keys, *self.features, *self.candidates, *self.signals)
+            )
+        )
+
+    def columns(self, on: str | tuple[str, ...] | None) -> tuple[str, ...]:
+        """Resolve a selection scope into declared feature or signal columns."""
+
+        if on is None or on == "features":
+            return self.features
+        if on == "candidates":
+            if not self.candidates:
+                raise ValueError("SignalSet does not declare candidate columns")
+            return self.candidates
+        if on == "signals":
+            if not self.signals:
+                raise ValueError("SignalSet does not declare signal columns yet")
+            return self.signals
+        if on == "all":
+            return tuple(
+                dict.fromkeys((*self.features, *self.candidates, *self.signals))
+            )
+        if on == "keys":
+            return self.keys
+        if isinstance(on, tuple):
+            selected = _names(on, "selected Sig columns")
+        else:
+            try:
+                selected = self.groups[on]
+            except KeyError as exc:
+                raise ValueError(f"unknown SignalSet group: {on!r}") from exc
+        available = set(self.features) | set(self.candidates) | set(self.signals)
+        unknown = sorted(set(selected) - available)
+        if unknown:
+            raise ValueError(f"selected SignalSet columns are not declared: {unknown}")
         return selected
 
 
@@ -184,7 +286,7 @@ class LibrarySelection:
         object.__setattr__(self, "methods", tuple(self.methods))
 
 
-StageDeclaration = DataSet | FeatureSet
+StageDeclaration = DataSet | FeatureSet | SignalSet
 
 
 __all__ = [
@@ -192,5 +294,6 @@ __all__ = [
     "FeatureSet",
     "LibrarySelection",
     "SelectedMethod",
+    "SignalSet",
     "StageDeclaration",
 ]

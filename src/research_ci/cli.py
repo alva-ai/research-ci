@@ -13,12 +13,33 @@ from typing import Any
 
 import polars as pl
 
-from .cards import contract_card, data_card, feat_card
+from .cards import contract_card, data_card, feat_card, sig_card
 from .contract import ContractError, validate_contract
-from .eval import EvalContext, EvalSpec, assess_features, assess_records
-from .eval.baseline import feature_output_shape
+from .eval import (
+    DataSet,
+    EvalContext,
+    EvalObservation,
+    EvalSpec,
+    FeatureSet,
+    LibrarySelection,
+    SignalSet,
+    assess_features,
+    assess_records,
+    assess_signal_evidence,
+    compile_stage_menu,
+)
+from .eval.baseline import (
+    feature_output_shape,
+    sidecar_output_shape,
+    signal_disposition_coverage,
+    signal_feature_universe,
+    signal_lineage_coverage,
+    signal_screening_artifact_coverage,
+    signal_screening_plan_coverage,
+)
 from .eval.library import METHODS as LIBRARY_METHODS
 from .eval.runner import run_eval_plan
+from .kit import BuildInfo, SignalBundle
 from .workflow import (
     STAGE_ORDER,
     WorkflowError,
@@ -66,6 +87,14 @@ def main(argv: list[str] | None = None) -> int:
     feat_run.add_argument("--out", required=True, type=Path)
     feat_run.add_argument("--context", type=Path)
 
+    sig = commands.add_parser("sig", help="run an external signal builder")
+    sig_commands = sig.add_subparsers(dest="sig_command", required=True)
+    sig_run = sig_commands.add_parser("run")
+    sig_run.add_argument("--builder", required=True, type=Path)
+    sig_run.add_argument("--plan", required=True, type=Path)
+    sig_run.add_argument("--out", required=True, type=Path)
+    sig_run.add_argument("--context", type=Path)
+
     evaluate = commands.add_parser("eval", help="run an external four-slot plan")
     eval_commands = evaluate.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_commands.add_parser("run")
@@ -79,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     eval_methods.add_argument("--stage", choices=("data", "feat", "sig", "algo"))
     eval_methods.add_argument("--family")
+    eval_methods.add_argument("--declaration", type=Path)
+    eval_methods.add_argument("--available-only", action="store_true")
     eval_methods.add_argument("--json", action="store_true", dest="as_json")
 
     status = commands.add_parser("status", help="show stage states and approvals")
@@ -105,9 +136,17 @@ def main(argv: list[str] | None = None) -> int:
         return _data_run(args.contract, args.builder, args.plan, args.out, args.context)
     if args.command == "feat":
         return _feat_run(args.builder, args.plan, args.out, args.context)
+    if args.command == "sig":
+        return _sig_run(args.builder, args.plan, args.out, args.context)
     if args.command == "eval":
         if args.eval_command == "methods":
-            return _eval_methods(args.stage, args.family, args.as_json)
+            return _eval_methods(
+                args.stage,
+                args.family,
+                args.declaration,
+                args.available_only,
+                args.as_json,
+            )
         return _eval_run(args.stage, args.table, args.plan, args.out, args.context)
     if args.command == "status":
         return _status(args.out)
@@ -206,36 +245,115 @@ def _eval_run(
     return 0 if result.passed else 1
 
 
-def _eval_methods(stage: str | None, family: str | None, as_json: bool) -> int:
+def _eval_methods(
+    stage: str | None,
+    family: str | None,
+    declaration_path: Path | None,
+    available_only: bool,
+    as_json: bool,
+) -> int:
     """Expose the methodology catalog to external research agents."""
 
-    methods = [
-        method
-        for method in LIBRARY_METHODS
-        if (stage is None or method.supports(stage))
-        and (family is None or method.family == family)
-    ]
-    payload = [
-        {
-            "name": method.name,
-            "family": method.family,
-            "stages": method.stages,
-            "input_kind": method.input_kind,
-            "description": method.description,
-        }
-        for method in methods
-    ]
+    try:
+        declaration = (
+            _load_stage_declaration(declaration_path, stage)
+            if declaration_path is not None
+            else None
+        )
+        if stage is None and declaration is not None:
+            stage = declaration.stage
+        if stage is None:
+            methods = [
+                method
+                for method in LIBRARY_METHODS
+                if family is None or method.family == family
+            ]
+            payload: object = [
+                {
+                    "name": method.name,
+                    "family": method.family,
+                    "purpose": method.purpose,
+                    "stages": method.stages,
+                    "input_kind": method.input_kind,
+                    "input_roles": method.input_roles,
+                    "requires": method.requires,
+                    "fit_policy": method.fit_policy,
+                    "description": method.description,
+                }
+                for method in methods
+            ]
+            menu = None
+        else:
+            menu = compile_stage_menu(
+                stage,
+                declaration,
+                family=family,
+                include_unavailable=not available_only,
+            )
+            payload = menu.as_dict()
+    except (AttributeError, ImportError, OSError, SyntaxError, ValueError) as exc:
+        print(f"eval methods failed: {exc}")
+        return 1
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
-    else:
-        for method in payload:
-            stages = ",".join(method["stages"])
+    elif menu is None:
+        for method in payload:  # type: ignore[union-attr]
+            stages = ",".join(method["stages"])  # type: ignore[index]
             print(
-                f"{method['name']} | family={method['family']} "
-                f"| input={method['input_kind']} | stages={stages}"
+                f"{method['name']} | family={method['family']} "  # type: ignore[index]
+                f"| purpose={method['purpose']} "  # type: ignore[index]
+                f"| input={method['input_kind']} | stages={stages}"  # type: ignore[index]
             )
-            print(f"  {method['description']}")
+            print(f"  {method['description']}")  # type: ignore[index]
+    else:
+        policy = menu.policy
+        print(f"stage: {policy.stage}")
+        print(f"objective: {policy.objective}")
+        print(f"input: {policy.input_boundary}")
+        print(f"output: {policy.output_boundary}")
+        print(f"allowed purposes: {', '.join(policy.allowed_purposes)}")
+        print(f"next stage: {policy.next_stage or '-'}")
+        for entry in menu.entries:
+            labels = [entry.availability]
+            if entry.recommended:
+                labels.append("recommended")
+            method = entry.method
+            print(
+                f"[{','.join(labels)}] {method.name} | family={method.family} "
+                f"| purpose={method.purpose} | input={method.input_kind}"
+            )
+            print(f"  {method.description}")
+            if method.requires:
+                print(f"  requires: {', '.join(method.requires)}")
+            if entry.reasons:
+                print(f"  unavailable because: {'; '.join(entry.reasons)}")
     return 0
+
+
+def _load_stage_declaration(
+    path: Path,
+    stage: str | None,
+) -> DataSet | FeatureSet | SignalSet:
+    module = _load_module(path)
+    declarations = [
+        value
+        for name in ("DECLARATION", "DATA_SET", "FEATURE_SET", "SIGNAL_SET")
+        if isinstance(
+            (value := getattr(module, name, None)),
+            (DataSet, FeatureSet, SignalSet),
+        )
+    ]
+    if stage is not None:
+        declarations = [item for item in declarations if item.stage == stage]
+    unique = list({id(item): item for item in declarations}.values())
+    if not unique:
+        raise ValueError(
+            "declaration module must expose DECLARATION, DATA_SET, FEATURE_SET, "
+            "or SIGNAL_SET"
+        )
+    if len(unique) > 1:
+        raise ValueError("declaration module exposes more than one matching stage set")
+    return unique[0]
 
 
 def _data_run(
@@ -270,6 +388,11 @@ def _data_run(
                 raise TypeError("data explore() must return a dict")
         (out_data / "exploration.json").write_text(
             json.dumps(exploration, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        recipe = _builder_recipe(builder, "data")
+        (out_data / "recipe.json").write_text(
+            json.dumps(recipe, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
         )
 
@@ -307,6 +430,7 @@ def _data_run(
                     "columns": table.columns,
                     "records": len(result.records),
                     "main_table": str(out_data / "main.parquet"),
+                    "recipe": str(out_data / "recipe.json"),
                     "eval_report": str(out_data / "eval" / "report.jsonl"),
                     "assessment": str(out_data / "eval" / "assessment.json"),
                     "context_tables": sorted(context.tables),
@@ -381,6 +505,11 @@ def _feat_run(
             json.dumps(exploration, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
         )
+        recipe = _builder_recipe(builder, "feat")
+        (out_feat / "recipe.json").write_text(
+            json.dumps(recipe, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
 
         result.write_report(out_feat / "eval" / "report.jsonl")
         assessment = assess_records(result.records)
@@ -418,6 +547,7 @@ def _feat_run(
                     "card_id": card_identifier,
                     "input_table": str(data_path),
                     "main_table": str(out_feat / "main.parquet"),
+                    "recipe": str(out_feat / "recipe.json"),
                     "eval_report": str(out_feat / "eval" / "report.jsonl"),
                     "assessment": str(out_feat / "eval" / "assessment.json"),
                     "context_tables": sorted(context.tables),
@@ -445,6 +575,337 @@ def _feat_run(
     print(
         "   or: rci approve "
         f"--stage feat --out {out} --by agent --card {card_identifier}"
+    )
+    return 0 if result.passed else 1
+
+
+def _sig_run(
+    builder_path: Path,
+    plan_path: Path,
+    out: Path,
+    context_path: Path | None = None,
+) -> int:
+    try:
+        state = read_workflow(out)
+        require_stage_ready(state, "sig")
+        feature_path = out / "feat" / "main.parquet"
+        feature_table = pl.read_parquet(feature_path)
+        feature_before = feature_table.clone()
+
+        builder = _load_module(builder_path)
+        bundle = _build_signals(builder, feature_table)
+        if not feature_table.equals(feature_before):
+            raise ValueError("signal builder modified the input Feature DataFrame")
+
+        plan_module = _load_module(plan_path)
+        declaration = _signal_declaration(plan_module)
+        library_selection = getattr(plan_module, "LIBRARY_SELECTION", None)
+        if not isinstance(library_selection, LibrarySelection):
+            raise TypeError(
+                "signal plan must expose a LibrarySelection as LIBRARY_SELECTION"
+            )
+        keys = declaration.keys
+        expected_main = (*keys, *declaration.signals)
+        missing_main = sorted(set(expected_main) - set(bundle.main.columns))
+        extra_main = sorted(set(bundle.main.columns) - set(expected_main))
+        if missing_main or extra_main:
+            raise ValueError(
+                "signal main table must contain exactly declared keys and signals; "
+                f"missing={missing_main}, extra={extra_main}"
+            )
+        signal_table = bundle.main.select(expected_main)
+        expected_candidates = (*keys, *declaration.candidates)
+        missing_candidates = sorted(
+            set(expected_candidates) - set(bundle.candidates.columns)
+        )
+        extra_candidates = sorted(
+            set(bundle.candidates.columns) - set(expected_candidates)
+        )
+        if missing_candidates or extra_candidates:
+            raise ValueError(
+                "signal candidate table must contain exactly declared keys and "
+                f"candidates; missing={missing_candidates}, extra={extra_candidates}"
+            )
+        candidate_table = bundle.candidates.select(expected_candidates)
+        missing_features = sorted(
+            set((*keys, *declaration.features)) - set(feature_table.columns)
+        )
+        if missing_features:
+            raise ValueError(
+                f"approved Feat table is missing Sig inputs: {missing_features}"
+            )
+
+        external_context = _load_context(context_path)
+        duplicate_sidecars = sorted(set(external_context.tables) & set(bundle.sidecars))
+        if duplicate_sidecars:
+            raise ValueError(
+                f"signal sidecars collide with external context: {duplicate_sidecars}"
+            )
+        context = EvalContext(
+            tables={**external_context.tables, **bundle.sidecars},
+            metadata={**external_context.metadata, **bundle.metadata},
+        )
+        evaluation_table = feature_table.select(
+            *keys,
+            *declaration.features,
+        )
+        if declaration.candidates:
+            evaluation_table = evaluation_table.join(
+                candidate_table,
+                on=list(keys),
+                how="left",
+            )
+        evaluation_table = evaluation_table.join(
+            signal_table,
+            on=list(keys),
+            how="left",
+        )
+
+        plan = _make_plan(plan_module, evaluation_table, "sig", context)
+        shape_rule = EvalSpec(
+            "engine.baseline.signal_output_shape",
+            runner=lambda _: feature_output_shape(
+                feature_table,
+                signal_table,
+                keys,
+            ),
+            failure_policy="stop",
+            description="preserve the approved Feat key grid in the signal output",
+            execution_mode="polars_join_group",
+        )
+        all_outputs = (*declaration.candidates, *declaration.signals)
+        baseline_rules = [
+            EvalSpec(
+                "engine.baseline.signal_feature_universe",
+                runner=lambda _: signal_feature_universe(
+                    feature_table,
+                    keys,
+                    declaration.features,
+                ),
+                failure_policy="stop",
+                description="declare every feature in the approved Feat table",
+                execution_mode="polars_select",
+            ),
+            EvalSpec(
+                "engine.baseline.signal_screening_plan_coverage",
+                runner=lambda _: signal_screening_plan_coverage(
+                    declaration,
+                    library_selection,
+                ),
+                failure_policy="stop",
+                description=(
+                    "screen every approved feature against every declared label"
+                ),
+                execution_mode="custom_runner",
+            ),
+            EvalSpec(
+                "engine.baseline.signal_screening_artifact_coverage",
+                runner=lambda _: signal_screening_artifact_coverage(
+                    bundle.research.get("screening"),
+                    declaration.features,
+                    declaration.targets,
+                ),
+                failure_policy="stop",
+                description="save reusable screening evidence for the full universe",
+                execution_mode="polars_select",
+            ),
+            EvalSpec(
+                "engine.baseline.signal_feature_disposition_coverage",
+                runner=lambda _: signal_disposition_coverage(
+                    feature_table,
+                    keys,
+                    bundle.dispositions,
+                    all_outputs,
+                ),
+                failure_policy="stop",
+                description="give every approved feature one explained disposition",
+                execution_mode="custom_runner",
+            ),
+            EvalSpec(
+                "engine.baseline.signal_lineage_coverage",
+                runner=lambda _: signal_lineage_coverage(
+                    declaration.features,
+                    declaration.candidates,
+                    declaration.signals,
+                    bundle.lineage,
+                ),
+                failure_policy="stop",
+                description="trace every candidate and final signal to named inputs",
+                execution_mode="custom_runner",
+            ),
+            shape_rule,
+        ]
+        if declaration.candidates:
+            baseline_rules.insert(
+                -1,
+                EvalSpec(
+                    "engine.baseline.signal_candidate_output_shape",
+                    runner=lambda _: feature_output_shape(
+                        feature_table,
+                        candidate_table,
+                        keys,
+                    ),
+                    failure_policy="stop",
+                    description="preserve the approved Feat key grid in candidates",
+                    execution_mode="polars_join_group",
+                ),
+            )
+        if declaration.targets:
+            baseline_rules.append(
+                EvalSpec(
+                    "engine.baseline.label_sidecar_shape",
+                    context_runner=lambda _, active_context: _label_sidecar_shape(
+                        feature_table,
+                        declaration,
+                        active_context,
+                    ),
+                    failure_policy="stop",
+                    description="preserve keys and declared labels in the sidecar",
+                    execution_mode="polars_join_group",
+                )
+            )
+        plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
+        result = run_eval_plan(evaluation_table, plan, context)
+
+        out_sig = out / "sig"
+        out_sig.mkdir(parents=True, exist_ok=True)
+        signal_table.write_parquet(out_sig / "main.parquet")
+        research_dir = out_sig / "research"
+        research_dir.mkdir(parents=True, exist_ok=True)
+        candidate_table.write_parquet(research_dir / "candidates.parquet")
+        disposition_table = bundle.disposition_frame()
+        disposition_table.write_parquet(research_dir / "disposition.parquet")
+        (research_dir / "lineage.json").write_text(
+            json.dumps(
+                bundle.lineage_records(),
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        research_manifest = {
+            "candidates": str(research_dir / "candidates.parquet"),
+            "disposition": str(research_dir / "disposition.parquet"),
+            "lineage": str(research_dir / "lineage.json"),
+        }
+        for name, research_table in sorted(bundle.research.items()):
+            _safe_artifact_name(name)
+            path = research_dir / f"{name}.parquet"
+            research_table.write_parquet(path)
+            research_manifest[name] = str(path)
+        context_dir = out_sig / "context"
+        context_dir.mkdir(parents=True, exist_ok=True)
+        for name, sidecar in sorted(context.tables.items()):
+            _safe_artifact_name(name)
+            sidecar.write_parquet(context_dir / f"{name}.parquet")
+        (context_dir / "metadata.json").write_text(
+            json.dumps(dict(context.metadata), indent=2, sort_keys=True, default=str)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        recipe = _builder_recipe(builder, "sig")
+        (out_sig / "recipe.json").write_text(
+            json.dumps(recipe, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        selection = dict(bundle.metadata).get("selection", {})
+        (out_sig / "selection.json").write_text(
+            json.dumps(selection, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        artifact_manifest = _write_signal_artifacts(out_sig, bundle.artifacts)
+
+        result.write_report(out_sig / "eval" / "report.jsonl")
+        assessment = assess_records(result.records)
+        assessment["signal_triage"] = assess_features(
+            signal_table,
+            keys,
+            result.records,
+        )
+        assessment["signal_evidence"] = assess_signal_evidence(
+            result.records,
+            declaration.signals,
+            declaration.features,
+        )
+        assessment["candidate_signal_evidence"] = assess_signal_evidence(
+            result.records,
+            declaration.candidates,
+        )
+        assessment["feature_disposition"] = {
+            "features": disposition_table.height,
+            "actions": disposition_table.group_by("action")
+            .len()
+            .sort("action")
+            .to_dicts(),
+        }
+        (out_sig / "eval" / "assessment.json").write_text(
+            json.dumps(assessment, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        result_status = _result_status(result)
+        card, card_identifier = sig_card(
+            signal_table,
+            result,
+            dict(bundle.metadata),
+            input_rows=feature_table.height,
+            evaluation_columns=tuple(evaluation_table.columns),
+            keys=keys,
+            sidecars=tuple(sorted(context.tables)),
+            candidates=declaration.candidates,
+            dispositions=disposition_table,
+            result_status=result_status,
+        )
+        (out_sig / "card.md").write_text(card + "\n", encoding="utf-8")
+        state = submit_for_review(
+            out,
+            stage="sig",
+            card=card_identifier,
+            result_status=result_status,
+        )
+        (out_sig / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "stage": "sig",
+                    "status": result_status,
+                    "workflow_state": state["stages"]["sig"],
+                    "card_id": card_identifier,
+                    "input_table": str(feature_path),
+                    "main_table": str(out_sig / "main.parquet"),
+                    "recipe": str(out_sig / "recipe.json"),
+                    "selection": str(out_sig / "selection.json"),
+                    "eval_report": str(out_sig / "eval" / "report.jsonl"),
+                    "assessment": str(out_sig / "eval" / "assessment.json"),
+                    "context_tables": sorted(context.tables),
+                    "research": research_manifest,
+                    "artifacts": artifact_manifest,
+                    "rows": signal_table.height,
+                    "columns": signal_table.columns,
+                    "keys": keys,
+                    "signals": declaration.signals,
+                    "candidates": declaration.candidates,
+                    "evaluation_columns": evaluation_table.columns,
+                    "records": len(result.records),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
+        print(f"sig run failed: {exc}")
+        return 1
+    print(card)
+    print(f"sig card: {out_sig / 'card.md'}")
+    print(
+        f"next: rci approve --stage sig --out {out} --by human --card {card_identifier}"
+    )
+    print(
+        "   or: rci approve "
+        f"--stage sig --out {out} --by agent --card {card_identifier}"
     )
     return 0 if result.passed else 1
 
@@ -534,6 +995,113 @@ def _build_features(module: ModuleType, table: pl.DataFrame) -> pl.DataFrame:
     raise AttributeError(
         "feature builder must define build_features(table) or build(table)"
     )
+
+
+def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
+    for name in ("build_signals", "build"):
+        builder = getattr(module, name, None)
+        if builder is not None:
+            result = builder(table)
+            if not isinstance(result, SignalBundle):
+                raise TypeError(
+                    "signal builder must return an research_ci.kit.SignalBundle"
+                )
+            return result
+    raise AttributeError(
+        "signal builder must define build_signals(table) or build(table)"
+    )
+
+
+def _signal_declaration(module: ModuleType) -> SignalSet:
+    for name in ("SIGNAL_SET", "DECLARATION"):
+        declaration = getattr(module, name, None)
+        if isinstance(declaration, SignalSet):
+            return declaration
+    raise AttributeError("signal plan must expose SIGNAL_SET or DECLARATION")
+
+
+def _label_sidecar_shape(
+    feature_table: pl.DataFrame,
+    declaration: SignalSet,
+    context: EvalContext,
+) -> EvalObservation:
+    try:
+        label = context.table(declaration.label_table)
+    except KeyError as exc:
+        return EvalObservation(
+            "failed",
+            output_kind="findings",
+            details={
+                "reason": str(exc),
+                "reason_code": "MISSING_CONTEXT",
+                "context_table": declaration.label_table,
+            },
+        )
+    required = list(declaration.targets.values())
+    if declaration.evaluation_by is not None:
+        required.append(declaration.evaluation_by)
+    observation = sidecar_output_shape(
+        feature_table,
+        label,
+        declaration.keys,
+        required,
+    )
+    return EvalObservation(
+        status=observation.status,
+        value=observation.value,
+        output_kind=observation.output_kind,
+        details={
+            **observation.details,
+            "context_table": declaration.label_table,
+        },
+    )
+
+
+def _safe_artifact_name(name: str) -> None:
+    if not name.strip() or Path(name).name != name or name in {".", ".."}:
+        raise ValueError(f"invalid signal artifact name: {name!r}")
+
+
+def _write_signal_artifacts(out_sig: Path, artifacts: Any) -> dict[str, str]:
+    directory = out_sig / "artifacts"
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest: dict[str, str] = {}
+    for name, value in sorted(dict(artifacts).items()):
+        _safe_artifact_name(name)
+        if isinstance(value, bytes):
+            filename = name if Path(name).suffix else f"{name}.bin"
+            (directory / filename).write_bytes(value)
+        else:
+            filename = name if Path(name).suffix == ".json" else f"{name}.json"
+            try:
+                payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
+            except TypeError as exc:
+                raise TypeError(
+                    f"signal artifact {name!r} must be JSON-serializable or bytes"
+                ) from exc
+            (directory / filename).write_text(payload, encoding="utf-8")
+        manifest[name] = str(directory / filename)
+    return manifest
+
+
+def _builder_recipe(module: ModuleType, stage: str) -> dict[str, Any]:
+    """Read optional construction metadata without constraining builder code."""
+
+    info = getattr(module, "BUILD_INFO", None)
+    if info is None:
+        return {
+            "declared": False,
+            "stage": stage,
+            "steps": [],
+            "summary": "",
+        }
+    if not isinstance(info, BuildInfo):
+        raise TypeError("builder BUILD_INFO must be an research_ci.kit.BuildInfo")
+    if info.stage != stage:
+        raise ValueError(
+            f"builder BUILD_INFO stage is {info.stage!r}; expected {stage!r}"
+        )
+    return {"declared": True, **info.as_dict()}
 
 
 def _feature_keys(

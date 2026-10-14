@@ -2,6 +2,7 @@ import polars as pl
 import pytest
 
 from research_ci import CaseEvalTest, EvalPlan, EvalSpec, Slot, run_eval_plan
+from research_ci.eval.library.quality import finite_columns
 
 
 def _plan() -> EvalPlan:
@@ -15,12 +16,9 @@ def _plan() -> EvalPlan:
             ),
         ),
         library=(
-            EvalSpec(
-                "prices_finite",
-                expr=pl.all_horizontal(
-                    pl.col("long_price").is_finite(),
-                    pl.col("short_price").is_finite(),
-                ),
+            finite_columns(
+                ("long_price", "short_price"),
+                name="prices_finite",
                 failure_policy="stop",
             ),
         ),
@@ -90,7 +88,12 @@ def test_slot_can_be_filled_without_a_business_value() -> None:
     plan = EvalPlan(
         stage="data",
         baseline=(EvalSpec.noop("baseline.not_applicable"),),
-        library=(EvalSpec.noop("library.not_selected"),),
+        library=(
+            EvalSpec.noop(
+                "library.not_selected",
+                library_method="library.not_applicable",
+            ),
+        ),
         case=(
             EvalSpec(
                 "case_rule",
@@ -149,7 +152,12 @@ def _plan_for_missing_values() -> EvalPlan:
     return EvalPlan(
         stage="data",
         baseline=(),
-        library=(EvalSpec.noop("library.ok"),),
+        library=(
+            EvalSpec.noop(
+                "library.ok",
+                library_method="library.not_applicable",
+            ),
+        ),
         case=(EvalSpec("case.ok", expr=pl.lit(True)),),
         case_eval=(
             CaseEvalTest.from_rows(

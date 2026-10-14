@@ -39,6 +39,13 @@ information, bucket behavior, out-of-sample stability, and ablation. A
 targetless rule-based Sig is also valid; target metrics are selected only when
 they match the case.
 
+A target-aware Sig must declare the complete approved Feat universe. Every
+feature is screened for every declared horizon and receives one explicit
+disposition: retained directly, used by a candidate component, retained as
+context, or rejected with evidence. Candidate construction and final signal
+materialization are separate outputs, so an agent cannot silently skip most of
+the Feat table and jump to one convenient rule.
+
 ## Minimal folder boundary
 
 ```text
@@ -50,6 +57,8 @@ research-ci/
       runner.py   Polars eval execution and sidecar records
       baseline.py Engine-owned floor checks
       assessment.py execution/research triage summary for Cards
+      menu.py     declaration-aware stage menu compiler
+      policies/   hard Data, Feat, Sig, and Algo method boundaries
       library/    reusable methods grouped by methodology
         quality.py coverage, finite values, dispersion
         structure.py correlation, VIF, PCA, autocorrelation
@@ -57,6 +66,11 @@ research-ci/
         information.py mutual information and target-sidecar MI
         stability.py split stability, rank persistence, drift
       defaults/   stage-specific method proposals
+    kit/          optional construction helpers for external Labs
+      common.py   recipe and tool metadata
+      data.py     table-in/table-out alignment helpers
+      feat.py     name-free Polars expressions and explicit layers
+      sig.py      targets, signal composition, time splits, and bundles
     cards.py      Markdown cards and stable card IDs
     workflow.py   stage states and human/agent approvals
     cli.py        command line orchestration
@@ -65,8 +79,10 @@ research-ci-lab/
     contract.py    external research boundary
     data.py        source exploration and Data table builder
     feat.py        feature exploration and feature table builder
+    sig.py         signal builder and explicit label sidecars
     evals/data.py  Data four-slot plan
     evals/feat.py  Feat four-slot plan
+    evals/sig.py   Sig four-slot plan and selected target methods
     raw/           source snapshots owned by the lab
   .rci/runs/<run>/workflow.json
                   stage states and approvals
@@ -76,11 +92,52 @@ research-ci-lab/
 
 The Engine library is organized by methodology rather than by stage. For
 example, correlation and PCA live in `eval/library/structure.py`, while IC
-methods live in `eval/library/association.py`. Stage proposal lists belong to
-`eval/defaults/` once that stage's input contract is explicit. This keeps one
-implementation reusable while retaining stage-specific selection. A method
-declares its supported stage and input shape; an inapplicable method reports
-`not_applicable` with a reason.
+methods live in `eval/library/association.py`. `eval/policies/` supplies hard
+stage boundaries, while `eval/defaults/` supplies recommendations. This keeps
+one implementation reusable while retaining stage-specific selection. A
+method declares its purpose, supported stages, input roles, requirements, and
+fit policy. The menu rejects a semantically incompatible choice before data
+execution; a compatible calculation can still report `not_applicable` when
+the actual data is insufficient.
+
+The Stage Kit has a different role from the eval library. It is an optional
+construction library that an external Lab may import while building a stage
+artifact. It is neither an allowlist nor another workflow stage:
+
+- Data helpers accept and return in-memory Polars tables; downloads, caches,
+  and source credentials remain in the Lab.
+- Feat helpers accept `pl.Expr` inputs and return an unnamed `pl.Expr`. The Lab
+  chooses source columns, output aliases, and expression layers.
+- Sig helpers construct explicit label sidecars, simple signal combinations,
+  chronological splits, and a `SignalBundle`. The bundle separates candidate
+  scores from final signals and records `FeatureDisposition` and
+  `SignalLineage`; case-specific estimators remain in the Lab.
+
+Kit functions do not silently sort, fill nulls, replace NaNs, add epsilon,
+infer timestamp units, or choose output column names. A builder may export
+optional `BUILD_INFO` metadata so the CLI can save the construction meaning in
+`recipe.json`; `exploration.json`, `manifest.json`, and eval evidence retain
+their separate purposes.
+
+For example, a Feat builder can declare independent expressions and apply
+dependent groups in order:
+
+```python
+import polars as pl
+
+from research_ci.kit.feat import apply_layers, difference, rolling_zscore_rows
+
+FEATURE_LAYERS = (
+    (
+        rolling_zscore_rows(
+            pl.col("spread"), window_size=24, min_samples=24
+        ).alias("spread_z_24h"),
+        difference(pl.col("spread"), periods=6).alias("spread_change_6h"),
+    ),
+)
+
+feature_table = apply_layers(data_table, FEATURE_LAYERS)
+```
 
 The run directory is the handoff boundary. A stage writes its Card and
 evidence, moves to `review`, and waits for an explicit human or agent approval.
@@ -90,24 +147,27 @@ The Engine always contributes the general baseline floor. A lab may add
 stage-specific baseline rules, but an empty external `baseline` tuple is valid;
 the other three slots must still be supplied by the lab.
 
-The library is a menu. `DataSet` and `FeatureSet` describe the current Data and
-Feat tables, their keys, columns, and column groups. They do not choose
-methodology. An external agent creates a `LibrarySelection`, records why each
-method applies, and supplies its scope and parameters. The Engine validates
-that choice, expands it across the declared columns, and records the evidence
-without appending eval columns to the main table. Agents can inspect the menu
-with:
+The library has one registry and a different compiled menu for each stage.
+`DataSet`, `FeatureSet`, and `SignalSet` describe the current inputs; a stage
+policy filters the registry before an external agent can select methods. The
+agent creates a `LibrarySelection`, records why each method applies, and
+supplies its scope and parameters. The Engine validates that choice, expands
+it across declared columns, and records the method identity and evidence
+without appending eval columns to the main table. Agents can inspect a static
+stage menu or compile it against a case declaration:
 
 ```text
 rci eval methods --stage feat
+rci eval methods --stage feat --declaration lab/<case>/evals/feat.py
 rci eval methods --family information --json
 ```
 
-`FeatureSet.targets` and `EvalContext` currently provide a low-level way to
-join named target Parquet sidecars without modifying a feature table. The
-canonical stage boundary is now Sig: the planned `SignalSet` will declare
-features, targets, horizons, or a targetless hypothesis and will own
-target-dependent selection. The Engine never infers a target or horizon from
+The menu reports `selectable` and `unavailable` methods with reasons, so an
+agent can see that IC belongs to Sig while working in Feat. `FeatureSet` has no
+target fields. `SignalSet` owns the complete feature universe, candidate and
+final signal columns, targets and horizons, or an explicit targetless
+hypothesis. `EvalContext` carries named label Parquet sidecars without
+modifying the main table. The Engine never infers a target or horizon from
 column names.
 
 Every Data and Feat Card now separates two questions:
@@ -216,14 +276,18 @@ rci dataloop run --contract path/to/contract.py --builder path/to/data.py \
 rci approve --stage data --out .rci/runs/001 --by human --card <card_id>
 rci feat run --builder path/to/feat.py --plan path/to/evals/feat.py \
   --out .rci/runs/001
+rci approve --stage feat --out .rci/runs/001 --by agent --card <card_id>
+rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
+  --out .rci/runs/001
 rci status --out .rci/runs/001
 rci eval run --stage data --table data.parquet --plan evals/data.py --out .rci/runs/001
 ```
 
 `rci contract derive` writes the Contract card. `rci dataloop run` then reads
 that approved boundary and writes the Data main table, the external
-exploration summary, the four-slot eval report, and a Data result card. It
-stops after Data so a person can review the result before Feat begins.
+exploration summary, the optional declared recipe, the four-slot eval report,
+and a Data result card. It stops after Data so a person can review the result
+before Feat begins.
 
 `rci feat run` reads only the approved `data/main.parquet`, calls the external
 `build_features(table)` or `build(table)`, and writes:
@@ -231,6 +295,7 @@ stops after Data so a person can review the result before Feat begins.
 ```text
 feat/main.parquet
 feat/exploration.json
+feat/recipe.json
 feat/eval/report.jsonl
 feat/card.md
 feat/manifest.json
@@ -244,14 +309,28 @@ and stability. It leaves target-aware screening to Sig. Feat remains in
 `review` until its active Card is approved, so Sig stays locked while an agent
 edits and reruns the feature builder or plan.
 
-## Planned Sig handoff
+## Sig handoff
 
-SigLoop will read only an approved `feat/main.parquet`. The external case agent
-will declare a target and horizon or a targetless hypothesis, choose the
-applicable library methods, and define a signal recipe. Planned outputs are:
+`SignalSet`, the declaration-aware Sig menu, and SigLoop are implemented.
+SigLoop reads only an approved `feat/main.parquet`. The external case agent
+declares a target and horizon or a targetless hypothesis, chooses applicable
+library methods, and returns a `SignalBundle` containing candidate and final
+scores, one disposition per approved feature, ordered signal lineage, named
+sidecars, metadata, research tables, and optional fitted artifacts. Runtime
+outputs are:
 
 ```text
 sig/main.parquet          keys and signal columns
+sig/research/candidates.parquet
+                          keys and all candidate signal columns
+sig/research/screening.parquet
+                          feature-target evidence by sample split
+sig/research/disposition.parquet
+                          one retained/rejected decision per Feat column
+sig/research/lineage.json ordered candidate and final signal recipes
+sig/research/*.parquet    optional redundancy, cluster, or ablation tables
+sig/context/*.parquet     explicit labels and other named sidecars
+sig/context/metadata.json sidecar and research metadata
 sig/selection.json        retained, excluded, and clustered features
 sig/recipe.json           rules, weights, normalization, and fit policy
 sig/artifacts/            optional fitted model or matrix artifacts
@@ -261,12 +340,23 @@ sig/card.md               human/agent review entry point
 sig/manifest.json         provenance and hashes
 ```
 
-The Sig baseline will check schema, key alignment, finite values, point-in-time
-behavior, fit/predict isolation, and reproducibility. The library slot remains
-agent-selected and may include IC, rank IC, ICIR, cumulative IC, target mutual
-information, bucket behavior, horizon decay, out-of-sample stability, null or
-permutation evidence, turnover, and concentration. The case slot defines the
-actual recipe; `case_eval` proves it with valid fixtures and counterexamples.
-Sig approval means the signal is defined and evidenced well enough for Algo
-research. Profitability, position sizing, stop rules, leverage, costs,
-slippage, capacity, and execution remain Algo concerns.
+The Engine checks that candidate scores, final signals, and the declared label
+sidecar preserve the approved Feat key grid. For target-aware Sig it also
+requires exact declaration of the complete Feat universe, library screening
+coverage for every feature-horizon pair, a complete screening artifact, one
+valid disposition per feature, and acyclic lineage for every candidate and
+final output. It builds a transient evaluation table from declared Feat,
+candidate, and final columns, then joins each label from its sidecar only
+inside the selected method. The library slot remains agent-selected and may
+include IC, rank IC, ICIR, cumulative IC, target mutual information, bucket
+behavior, split stability, rank persistence, and drift. The case slot defines
+the actual recipe; `case_eval` proves it with valid fixtures and
+counterexamples.
+
+The Sig Card presents final and candidate signal evidence, feature disposition
+counts, signal-by-horizon association, early/late stability, block IC evidence,
+cumulative paths, and feature rankings. The complete per-method records stay in
+`sig/eval/report.jsonl`. Sig approval means the final signal set is defined and
+evidenced well enough for Algo research. It does not automatically promote the
+highest metric or claim profitability. Position sizing, stop rules, leverage,
+costs, slippage, capacity, and execution remain Algo concerns.

@@ -21,6 +21,8 @@ METHODS = (
         family="quality",
         stages=("data", "feat", "sig", "algo"),
         input_kind="main_table",
+        purpose="quality",
+        input_roles=("table",),
         description=(
             "Check that caller-declared columns exist and the table is non-empty."
         ),
@@ -30,6 +32,8 @@ METHODS = (
         family="quality",
         stages=("data", "feat", "sig", "algo"),
         input_kind="main_table",
+        purpose="quality",
+        input_roles=("table",),
         description="Report non-finite values in caller-declared numeric columns.",
     ),
     MethodInfo(
@@ -37,6 +41,8 @@ METHODS = (
         family="quality",
         stages=("data", "feat", "sig", "algo"),
         input_kind="main_table",
+        purpose="quality",
+        input_roles=("table",),
         description="Report usable finite-value coverage for declared columns.",
     ),
     MethodInfo(
@@ -44,6 +50,8 @@ METHODS = (
         family="quality",
         stages=("feat", "sig"),
         input_kind="feature_panel",
+        purpose="quality",
+        input_roles=("features", "signals"),
         description="Report variation and quantile range for feature columns.",
     ),
 )
@@ -83,6 +91,7 @@ def required_columns(
         runner=check,
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.quality.required_columns",
     )
 
 
@@ -140,6 +149,7 @@ def finite_columns(
         runner=check,
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.quality.finite_columns",
     )
 
 
@@ -214,6 +224,7 @@ def coverage(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.quality.coverage",
     )
 
 
@@ -294,6 +305,7 @@ def dispersion(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.quality.dispersion",
     )
 
 

@@ -97,6 +97,7 @@ class EvalSpec:
     context_runner: ContextRunner | None = None
     execution_mode: ExecutionMode | None = None
     selection_reason: str = ""
+    library_method: str = ""
 
     @classmethod
     def noop(
@@ -106,6 +107,7 @@ class EvalSpec:
         status: EvalStatus = "not_applicable",
         reason: str = "",
         failure_policy: FailurePolicy = "record",
+        library_method: str = "",
     ) -> "EvalSpec":
         """Declare a filled slot when no rule is applicable."""
 
@@ -116,7 +118,12 @@ class EvalSpec:
                 details={"reason": reason} if reason else {},
             )
 
-        return cls(name=name, runner=run, failure_policy=failure_policy)
+        return cls(
+            name=name,
+            runner=run,
+            failure_policy=failure_policy,
+            library_method=library_method,
+        )
 
     def validate(self) -> None:
         if not self.name.strip():
@@ -226,6 +233,16 @@ class EvalPlan:
                 raise ValueError(f"eval slot {slot.value!r} must be filled")
             for item in items:
                 item.validate()
+                if slot is Slot.LIBRARY:
+                    if not item.library_method:
+                        raise ValueError(
+                            f"library eval {item.name!r} must come from a registered "
+                            "Engine method"
+                        )
+                    if item.library_method != "library.not_applicable":
+                        from .menu import require_selectable_method
+
+                        require_selectable_method(self.stage, item.library_method)
                 if item.name in names:
                     raise ValueError(f"duplicate eval name: {item.name!r}")
                 names.add(item.name)

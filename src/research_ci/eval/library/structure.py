@@ -23,29 +23,39 @@ METHODS = (
     MethodInfo(
         name="library.structure.pairwise_correlation",
         family="structure",
-        stages=("feat", "sig"),
+        stages=("feat",),
         input_kind="feature_panel",
+        purpose="structure",
+        input_roles=("features",),
         description="Measure dependence between two explicitly selected columns.",
     ),
     MethodInfo(
         name="library.structure.vif",
         family="structure",
-        stages=("feat", "sig"),
+        stages=("feat",),
         input_kind="feature_matrix",
+        purpose="structure",
+        input_roles=("features",),
+        fit_policy="diagnostic_only",
         description="Measure linear redundancy with variance inflation factors.",
     ),
     MethodInfo(
         name="library.structure.pca_diagnostics",
         family="structure",
-        stages=("feat", "sig"),
+        stages=("feat",),
         input_kind="feature_matrix",
+        purpose="structure",
+        input_roles=("features",),
+        fit_policy="diagnostic_only",
         description="Summarise explained variance and effective feature rank.",
     ),
     MethodInfo(
         name="library.structure.autocorrelation",
         family="structure",
-        stages=("feat", "sig"),
+        stages=("feat",),
         input_kind="feature_panel",
+        purpose="structure",
+        input_roles=("features",),
         description="Measure serial dependence at an explicit lag.",
     ),
 )
@@ -106,6 +116,7 @@ def pairwise_correlation(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.structure.pairwise_correlation",
     )
 
 
@@ -188,6 +199,7 @@ def vif(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="matrix_backend",
+        library_method="library.structure.vif",
     )
 
 
@@ -275,6 +287,7 @@ def pca_diagnostics(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="matrix_backend",
+        library_method="library.structure.pca_diagnostics",
     )
 
 
@@ -334,6 +347,7 @@ def autocorrelation(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.structure.autocorrelation",
     )
 
 

@@ -14,9 +14,9 @@ from .declarations import (
     FeatureSet,
     LibrarySelection,
     SelectedMethod,
+    SignalSet,
     StageDeclaration,
 )
-from .library import METHODS
 from .library.association import (
     bucket_spread,
     cumulative_ic,
@@ -25,8 +25,8 @@ from .library.association import (
     spearman_ic,
 )
 from .library.information import (
+    feature_pair_mutual_information,
     feature_target_mutual_information,
-    mutual_information,
 )
 from .library.quality import coverage, dispersion, finite_columns, required_columns
 from .library.stability import (
@@ -41,6 +41,7 @@ from .library.structure import (
     vif,
 )
 from .library.temporal import key_grid
+from .menu import require_selectable_method
 from .protocol import EvalContext, EvalObservation, EvalSpec
 
 
@@ -54,16 +55,12 @@ def expand_library(
 ) -> tuple[EvalSpec, ...]:
     """Expand only methods selected by the external case agent."""
 
-    catalog = {method.name: method for method in METHODS}
     specs: list[EvalSpec] = []
     for selected in selection.methods:
-        info = catalog.get(selected.name)
-        if info is None:
-            raise LibrarySelectionError(f"unknown library method: {selected.name}")
-        if not info.supports(declaration.stage):
-            raise LibrarySelectionError(
-                f"{selected.name} does not support stage {declaration.stage!r}"
-            )
+        try:
+            require_selectable_method(declaration.stage, selected.name, declaration)
+        except ValueError as exc:
+            raise LibrarySelectionError(str(exc)) from exc
         specs.extend(_expand_one(declaration, selected))
     names = [spec.name for spec in specs]
     duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -171,10 +168,10 @@ def _expand_one(
             )
             for column in columns
         ]
-    if method == "library.information.mutual_information":
+    if method == "library.information.feature_pair_mutual_information":
         return [
             _selected(
-                mutual_information(
+                feature_pair_mutual_information(
                     left,
                     right,
                     name=f"{base_name}.{_slug(left)}__{_slug(right)}",
@@ -212,8 +209,8 @@ def _expand_one(
             for column in columns
         ]
     if method in _TARGET_FACTORIES:
-        if not isinstance(declaration, FeatureSet):
-            raise LibrarySelectionError(f"{method} requires FeatureSet targets")
+        if not isinstance(declaration, SignalSet):
+            raise LibrarySelectionError(f"{method} requires SignalSet targets")
         return _expand_targets(declaration, selected, columns, base_name, parameters)
     raise LibrarySelectionError(
         f"{method} is registered but has no declaration expander"
@@ -223,16 +220,11 @@ def _expand_one(
 TargetFactory = Callable[..., EvalSpec]
 _TARGET_FACTORIES: dict[str, TargetFactory] = {
     "library.association.pearson_ic": pearson_ic,
-    "library.association.context_pearson_ic": pearson_ic,
     "library.association.spearman_ic": spearman_ic,
-    "library.association.context_spearman_ic": spearman_ic,
     "library.association.icir": icir,
     "library.association.cumulative_ic": cumulative_ic,
     "library.association.bucket_spread": bucket_spread,
     "library.information.feature_target_mutual_information": (
-        feature_target_mutual_information
-    ),
-    "library.information.context_feature_target_mutual_information": (
         feature_target_mutual_information
     ),
     "library.stability.split_association": split_association,
@@ -240,7 +232,7 @@ _TARGET_FACTORIES: dict[str, TargetFactory] = {
 
 
 def _expand_targets(
-    declaration: FeatureSet,
+    declaration: SignalSet,
     selected: SelectedMethod,
     features: tuple[str, ...],
     base_name: str,
@@ -248,7 +240,7 @@ def _expand_targets(
 ) -> list[EvalSpec]:
     if not declaration.targets:
         raise LibrarySelectionError(
-            f"{selected.name} was selected but FeatureSet.targets is empty"
+            f"{selected.name} was selected but SignalSet.targets is empty"
         )
     horizons = selected.targets or tuple(declaration.targets)
     unknown = sorted(set(horizons) - set(declaration.targets))
@@ -265,16 +257,29 @@ def _expand_targets(
             "library.association.icir",
             "library.association.cumulative_ic",
         }:
-            by = options.pop("by", declaration.cross_section_by)
+            by = options.pop(
+                "by",
+                declaration.evaluation_by or declaration.cross_section_by,
+            )
             if by is None:
                 raise LibrarySelectionError(
-                    f"{selected.name} requires FeatureSet.cross_section_by "
-                    "or parameter 'by'"
+                    f"{selected.name} requires SignalSet.evaluation_by, "
+                    "SignalSet.cross_section_by, or parameter 'by'"
                 )
             options["by"] = by
         name = f"{base_name}.{_slug(feature)}__{_slug(horizon)}"
         base = factory(feature, target, name=name, **options)
-        contextual = _from_target_sidecar(base, declaration, feature, target)
+        context_columns = ()
+        group_column = options.get("by")
+        if isinstance(group_column, str) and group_column:
+            context_columns = (group_column,)
+        contextual = _from_label_sidecar(
+            base,
+            declaration,
+            feature,
+            target,
+            context_columns=context_columns,
+        )
         specs.append(
             _selected(
                 contextual,
@@ -287,30 +292,32 @@ def _expand_targets(
     return specs
 
 
-def _from_target_sidecar(
+def _from_label_sidecar(
     base: EvalSpec,
-    declaration: FeatureSet,
+    declaration: SignalSet,
     feature: str,
     target: str,
+    *,
+    context_columns: tuple[str, ...] = (),
 ) -> EvalSpec:
-    """Join a declared target sidecar in scratch before running a method."""
+    """Join declared labels in scratch before running a target-aware method."""
 
     keys = declaration.keys
 
     def run(table: pl.DataFrame, context: EvalContext) -> EvalObservation:
         try:
-            sidecar = context.table(declaration.target_table)
+            sidecar = context.table(declaration.label_table)
         except KeyError as exc:
             return EvalObservation(
                 status="not_applicable",
                 details={
                     "reason": str(exc),
                     "reason_code": "MISSING_CONTEXT",
-                    "context_table": declaration.target_table,
+                    "context_table": declaration.label_table,
                 },
             )
         main_columns = tuple(dict.fromkeys((*keys, feature)))
-        target_columns = tuple(dict.fromkeys((*keys, target)))
+        target_columns = tuple(dict.fromkeys((*keys, target, *context_columns)))
         missing_main = sorted(set(main_columns) - set(table.columns))
         missing_target = sorted(set(target_columns) - set(sidecar.columns))
         if missing_main or missing_target:
@@ -333,7 +340,7 @@ def _from_target_sidecar(
                 details={
                     "reason_code": "CONTEXT_DUPLICATE_KEYS",
                     "duplicate_key_rows": duplicate_keys,
-                    "context_table": declaration.target_table,
+                    "context_table": declaration.label_table,
                 },
             )
         joined = table.select(main_columns).join(
@@ -347,7 +354,7 @@ def _from_target_sidecar(
         details = dict(observation.details)
         details.update(
             {
-                "context_table": declaration.target_table,
+                "context_table": declaration.label_table,
                 "join_on": keys,
                 "joined_rows": joined.height,
             }
@@ -372,6 +379,7 @@ def _selected(
         failure_policy=selected.failure_policy,
         execution_mode=execution_mode,
         selection_reason=selected.reason,
+        library_method=selected.name,
     )
 
 
@@ -390,7 +398,11 @@ def _base_name(declaration: StageDeclaration, selected: SelectedMethod) -> str:
     elif isinstance(selected.on, tuple):
         suffix = "selected"
     else:
-        suffix = "features" if isinstance(declaration, FeatureSet) else "default"
+        suffix = (
+            "features"
+            if isinstance(declaration, (FeatureSet, SignalSet))
+            else "default"
+        )
     return f"{declaration.stage}.{selected.name}.{suffix}"
 
 

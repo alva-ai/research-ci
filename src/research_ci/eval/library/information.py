@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
+from dataclasses import replace
 
 import numpy as np
 import polars as pl
@@ -15,32 +16,34 @@ from ._utils import missing_columns, not_applicable
 
 METHODS = (
     MethodInfo(
-        name="library.information.mutual_information",
+        name="library.information.feature_pair_mutual_information",
         family="information",
-        stages=("feat", "sig"),
+        stages=("feat",),
         input_kind="feature_panel",
-        description="Estimate pairwise mutual information with a k-NN estimator.",
+        purpose="structure",
+        input_roles=("features",),
+        fit_policy="diagnostic_only",
+        description=(
+            "Estimate pairwise feature mutual information with a k-NN estimator."
+        ),
     ),
     MethodInfo(
         name="library.information.feature_target_mutual_information",
         family="information",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="evaluation_table",
+        purpose="predictive",
+        input_roles=("features", "signals", "target"),
+        requires=("target", "horizon"),
+        fit_policy="diagnostic_only",
         description=(
             "Estimate nonlinear feature/target dependence with a k-NN estimator."
         ),
     ),
-    MethodInfo(
-        name="library.information.context_feature_target_mutual_information",
-        family="information",
-        stages=("feat", "sig"),
-        input_kind="feature_panel",
-        description="Estimate feature/target MI from a named target sidecar.",
-    ),
 )
 
 
-def mutual_information(
+def feature_pair_mutual_information(
     left: str,
     right: str,
     *,
@@ -50,7 +53,7 @@ def mutual_information(
     minimum: float | None = None,
     n_neighbors: int = 3,
     random_state: int | None = 0,
-    name: str = "library.information.mutual_information",
+    name: str = "library.information.feature_pair_mutual_information",
     failure_policy: FailurePolicy = "record",
 ) -> EvalSpec:
     """Build a k-NN mutual-information metric for two numeric columns.
@@ -149,6 +152,7 @@ def mutual_information(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="matrix_backend",
+        library_method="library.information.feature_pair_mutual_information",
     )
 
 
@@ -167,17 +171,20 @@ def feature_target_mutual_information(
 ) -> EvalSpec:
     """Convenience wrapper that names MI as a feature/target diagnostic."""
 
-    return mutual_information(
-        feature,
-        target,
-        bins=bins,
-        normalized=normalized,
-        min_rows=min_rows,
-        minimum=minimum,
-        n_neighbors=n_neighbors,
-        random_state=random_state,
-        name=name,
-        failure_policy=failure_policy,
+    return replace(
+        feature_pair_mutual_information(
+            feature,
+            target,
+            bins=bins,
+            normalized=normalized,
+            min_rows=min_rows,
+            minimum=minimum,
+            n_neighbors=n_neighbors,
+            random_state=random_state,
+            name=name,
+            failure_policy=failure_policy,
+        ),
+        library_method="library.information.feature_target_mutual_information",
     )
 
 
@@ -185,7 +192,7 @@ def context_feature_target_mutual_information(
     feature: str,
     target: str,
     *,
-    context_table: str = "target",
+    context_table: str = "label",
     join_on: Iterable[str] = ("event_time",),
     bins: int = 10,
     normalized: bool = True,
@@ -199,7 +206,7 @@ def context_feature_target_mutual_information(
     """Build target MI while keeping the target in a named sidecar."""
 
     keys = tuple(dict.fromkeys(join_on))
-    metric = mutual_information(
+    metric = feature_pair_mutual_information(
         feature,
         target,
         bins=bins,
@@ -254,6 +261,7 @@ def context_feature_target_mutual_information(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="matrix_backend",
+        library_method="library.information.feature_target_mutual_information",
     )
 
 
@@ -296,6 +304,6 @@ def _estimate_mi(
 __all__ = [
     "METHODS",
     "context_feature_target_mutual_information",
+    "feature_pair_mutual_information",
     "feature_target_mutual_information",
-    "mutual_information",
 ]

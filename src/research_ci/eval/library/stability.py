@@ -14,8 +14,11 @@ METHODS = (
     MethodInfo(
         name="library.stability.split_association",
         family="stability",
-        stages=("feat", "sig"),
+        stages=("sig",),
         input_kind="evaluation_table",
+        purpose="predictive",
+        input_roles=("features", "signals", "target"),
+        requires=("target", "horizon"),
         description="Compare score/target association across ordered sample halves.",
     ),
     MethodInfo(
@@ -23,15 +26,19 @@ METHODS = (
         family="stability",
         stages=("feat", "sig"),
         input_kind="feature_panel",
-        description="Measure persistence of the feature's cross-sectional rank order.",
+        purpose="stability",
+        input_roles=("features", "signals"),
+        description="Measure persistence of a selected column's rank order.",
     ),
     MethodInfo(
         name="library.stability.distribution_shift",
         family="stability",
         stages=("feat", "sig"),
         input_kind="feature_panel",
+        purpose="stability",
+        input_roles=("features", "signals"),
         description=(
-            "Compare early and late feature distributions with a standardised "
+            "Compare early and late selected-column distributions with a standardised "
             "mean shift."
         ),
     ),
@@ -109,6 +116,7 @@ def split_association(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.stability.split_association",
     )
 
 
@@ -156,6 +164,7 @@ def rank_autocorrelation(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.stability.rank_autocorrelation",
     )
 
 
@@ -233,6 +242,7 @@ def distribution_shift(
         output_kind="metric",
         failure_policy=failure_policy,
         execution_mode="polars_select",
+        library_method="library.stability.distribution_shift",
     )
 
 

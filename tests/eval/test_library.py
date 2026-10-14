@@ -9,9 +9,9 @@ from research_ci.eval.library.structure import pairwise_correlation
 from research_ci.eval.runner import run_eval_plan
 
 
-def _plan(*specs: EvalSpec) -> EvalPlan:
+def _plan(*specs: EvalSpec, stage: str = "feat") -> EvalPlan:
     return EvalPlan(
-        stage="feat",
+        stage=stage,
         baseline=(),
         library=specs or (EvalSpec.noop("library.placeholder"),),
         case=(EvalSpec("case.ok", expr=pl.lit(True)),),
@@ -47,23 +47,24 @@ def test_association_and_structure_methods_are_metrics() -> None:
         {"score": [1.0, 2.0, 3.0], "target": [2.0, 4.0, 6.0], "other": [3.0, 2.0, 1.0]}
     )
 
-    result = run_eval_plan(
+    association = run_eval_plan(
         table,
-        _plan(
-            pearson_ic("score", "target"),
-            pairwise_correlation("score", "other"),
-        ),
+        _plan(pearson_ic("score", "target"), stage="sig"),
+    )
+    structure = run_eval_plan(
+        table,
+        _plan(pairwise_correlation("score", "other")),
     )
 
-    assert result.records[1].value == 1.0
-    assert result.records[1].output_kind == "metric"
-    assert result.records[2].value == -1.0
+    assert association.records[1].value == 1.0
+    assert association.records[1].output_kind == "metric"
+    assert structure.records[1].value == -1.0
 
 
 def test_association_is_explicitly_not_applicable_without_a_target() -> None:
     result = run_eval_plan(
         pl.DataFrame({"score": [1.0, 2.0]}),
-        _plan(pearson_ic("score", "target")),
+        _plan(pearson_ic("score", "target"), stage="sig"),
     )
 
     assert result.records[1].status == "not_applicable"

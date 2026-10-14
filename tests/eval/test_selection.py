@@ -13,6 +13,7 @@ from research_ci import (
     LibrarySelection,
     LibrarySelectionError,
     SelectedMethod,
+    SignalSet,
     expand_library,
     run_eval_plan,
 )
@@ -69,11 +70,10 @@ def test_data_agent_selects_methods_and_engine_expands_declared_groups() -> None
     assert all(spec.execution_mode == "polars_select" for spec in specs)
 
 
-def test_feature_pair_and_target_methods_expand_from_agent_selection() -> None:
+def test_feat_expands_only_structural_methods() -> None:
     declaration = FeatureSet(
         keys=("event_time",),
         features=("x", "y"),
-        targets={"1h": "return_1h", "6h": "return_6h"},
     )
     selection = LibrarySelection(
         (
@@ -81,22 +81,38 @@ def test_feature_pair_and_target_methods_expand_from_agent_selection() -> None:
                 "library.structure.pairwise_correlation",
                 reason="screen linear redundancy",
             ),
-            SelectedMethod(
-                "library.association.pearson_ic",
-                reason="measure linear feature/target association",
-            ),
         )
     )
 
     specs = expand_library(declaration, selection)
 
-    assert len(specs) == 5
-    assert sum("pairwise_correlation" in spec.name for spec in specs) == 1
-    assert sum("pearson_ic" in spec.name for spec in specs) == 4
-    assert {spec.execution_mode for spec in specs} == {
-        "polars_select",
-        "polars_join_group",
-    }
+    assert len(specs) == 1
+    assert specs[0].library_method == "library.structure.pairwise_correlation"
+
+
+def test_sig_expands_target_methods_across_features_and_horizons() -> None:
+    declaration = SignalSet(
+        keys=("event_time",),
+        features=("x", "y"),
+        targets={"1h": "return_1h", "6h": "return_6h"},
+    )
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.association.pearson_ic",
+                    reason="measure linear feature/target association",
+                ),
+            )
+        ),
+    )
+
+    assert len(specs) == 4
+    assert all(
+        spec.library_method == "library.association.pearson_ic" for spec in specs
+    )
+    assert {spec.execution_mode for spec in specs} == {"polars_join_group"}
 
 
 def test_target_selection_reads_sidecar_without_mutating_feature_table() -> None:
@@ -112,11 +128,11 @@ def test_target_selection_reads_sidecar_without_mutating_feature_table() -> None
             "return_1h": [0.1, 0.2, 0.3, 0.4],
         }
     )
-    declaration = FeatureSet(
+    declaration = SignalSet(
         keys=("event_time",),
         features=("x",),
         targets={"1h": "return_1h"},
-        target_table="labels",
+        label_table="labels",
     )
     specs = expand_library(
         declaration,
@@ -132,7 +148,7 @@ def test_target_selection_reads_sidecar_without_mutating_feature_table() -> None
 
     result = run_eval_plan(
         features,
-        _plan("feat", specs),
+        _plan("sig", specs),
         EvalContext(tables={"labels": labels}),
     )
 
@@ -144,8 +160,12 @@ def test_target_selection_reads_sidecar_without_mutating_feature_table() -> None
     assert features.columns == ["event_time", "x"]
 
 
-def test_agent_cannot_select_target_method_without_declared_targets() -> None:
-    declaration = FeatureSet(keys=("event_time",), features=("x",), targets={})
+def test_agent_cannot_select_target_method_in_targetless_sig() -> None:
+    declaration = SignalSet(
+        keys=("event_time",),
+        features=("x",),
+        hypothesis="extreme values should mean revert",
+    )
     selection = LibrarySelection(
         (
             SelectedMethod(
@@ -155,21 +175,36 @@ def test_agent_cannot_select_target_method_without_declared_targets() -> None:
         )
     )
 
-    with pytest.raises(LibrarySelectionError, match="targets is empty"):
+    with pytest.raises(LibrarySelectionError, match="requires SignalSet.targets"):
         expand_library(declaration, selection)
 
 
-def test_catalog_context_method_expands_through_declared_target_sidecar() -> None:
-    declaration = FeatureSet(
+def test_agent_cannot_select_predictive_method_in_feat() -> None:
+    declaration = FeatureSet(keys=("event_time",), features=("x",))
+    selection = LibrarySelection(
+        (
+            SelectedMethod(
+                "library.association.pearson_ic",
+                reason="this belongs to Sig",
+            ),
+        )
+    )
+
+    with pytest.raises(LibrarySelectionError, match="unavailable in stage 'feat'"):
+        expand_library(declaration, selection)
+
+
+def test_catalog_target_method_expands_through_declared_label_sidecar() -> None:
+    declaration = SignalSet(
         keys=("event_time",),
         features=("x",),
         targets={"1h": "return_1h"},
-        target_table="labels",
+        label_table="labels",
     )
     selection = LibrarySelection(
         (
             SelectedMethod(
-                "library.association.context_spearman_ic",
+                "library.association.spearman_ic",
                 reason="evaluate the explicit label sidecar",
             ),
         )
@@ -180,3 +215,64 @@ def test_catalog_context_method_expands_through_declared_target_sidecar() -> Non
     assert len(specs) == 1
     assert specs[0].context_runner is not None
     assert specs[0].execution_mode == "polars_join_group"
+
+
+def test_grouped_sig_method_reads_evaluation_group_from_label_sidecar() -> None:
+    scores = pl.DataFrame(
+        {
+            "event_time": list(range(12)),
+            "signal": [float(value % 4) for value in range(12)],
+        }
+    )
+    labels = pl.DataFrame(
+        {
+            "event_time": list(range(12)),
+            "block": [value // 4 for value in range(12)],
+            "return_1h": [
+                0.0,
+                1.0,
+                2.0,
+                3.0,
+                3.0,
+                2.0,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                3.0,
+                2.0,
+            ],
+        }
+    )
+    declaration = SignalSet(
+        keys=("event_time",),
+        features=("x",),
+        signals=("signal",),
+        targets={"1h": "return_1h"},
+        label_table="labels",
+        evaluation_by="block",
+    )
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.association.icir",
+                    on="signals",
+                    reason="summarise IC over explicit time blocks",
+                    parameters={"min_group_size": 3},
+                ),
+            )
+        ),
+    )
+
+    result = run_eval_plan(
+        scores,
+        _plan("sig", specs),
+        EvalContext(tables={"labels": labels}),
+    )
+
+    record = next(record for record in result.records if "icir" in record.name)
+    assert record.status == "passed"
+    assert record.details["joined_rows"] == 12
+    assert record.details["group"] == "block"
