@@ -4,8 +4,8 @@ Research CI is the execution engine for agent-owned quantitative research
 workspaces. The first implementation establishes the protocol boundary:
 
 - `Contract` describes the research boundary and stage order;
-- every stage supplies four eval slots: `baseline`, `library`, `case`, and
-  `case_eval`;
+- every data-producing stage supplies four eval slots: `baseline`, `library`,
+  `case`, and `case_eval`; the small Contract is structurally validated instead;
 - evals read a Polars main table without modifying it;
 - results are written to an eval sidecar and may be booleans, metrics,
   findings, or no business output.
@@ -15,6 +15,16 @@ tables and assembles the stage-specific `EvalPlan`; Research CI executes and
 audits that plan.
 
 The project uses `uv` for environments and dependency locking.
+
+## Design documents
+
+- [Design and product requirements](docs/design.md) defines the normative
+  stage boundaries, shared four-slot protocol, artifact contracts, and the
+  detailed Sig research loop.
+- [Interactive design map](docs/research-ci-viz-en.html) shows the current MVP
+  workflow, stage ownership, Sig internals, and the guarantees still planned.
+- [TODO](TODO.md) records implementation status and open design work in
+  Chinese; it is not the normative architecture document.
 
 ## Stage boundary
 
@@ -77,6 +87,9 @@ research-ci/
     cards.py      Markdown cards and stable card IDs
     workflow.py   stage states and human/agent approvals
     cli.py        command line orchestration
+  docs/
+    design.md              normative requirements and stage contracts
+    research-ci-viz-en.html   interactive visual design map
 research-ci-lab/
   lab/<case>/
     contract.py    external research boundary
