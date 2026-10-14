@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Callable, Literal
@@ -23,8 +24,42 @@ EvalStatus = Literal["passed", "failed", "error", "not_applicable"]
 OutputKind = Literal["none", "summary", "metric", "findings", "full"]
 Reduction = Literal["all", "any", "count_true", "mean", "none"]
 FailurePolicy = Literal["stop", "record"]
+ExecutionMode = Literal[
+    "polars_expr",
+    "polars_select",
+    "polars_join_group",
+    "matrix_backend",
+    "custom_runner",
+]
 Runner = Callable[[pl.DataFrame], Any]
+ContextRunner = Callable[[pl.DataFrame, "EvalContext"], Any]
 Fixture = pl.DataFrame | Callable[[pl.DataFrame], pl.DataFrame]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalContext:
+    """Explicit sidecar inputs available to an evaluation plan.
+
+    The stage main table stays clean.  A lab can provide labels, targets,
+    horizons, panel metadata, or other research context as named sidecar
+    tables.  The Engine only passes the context through; it never invents a
+    target or joins one implicitly.
+    """
+
+    tables: Mapping[str, pl.DataFrame] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def table(self, name: str) -> pl.DataFrame:
+        """Return a named sidecar table with a clear missing-context error."""
+
+        try:
+            return self.tables[name]
+        except KeyError as exc:
+            available = ", ".join(sorted(self.tables)) or "<none>"
+            raise KeyError(
+                f"evaluation context table {name!r} is not available "
+                f"(available: {available})"
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +80,8 @@ class EvalObservation:
 class EvalSpec:
     """One externally named rule over the stage's main table.
 
-    Exactly one of ``expr``, ``column`` or ``runner`` is required. The
+    Exactly one of ``expr``, ``column``, ``runner`` or ``context_runner`` is
+    required. The
     expression or column is evaluated in a scratch result and never appended
     to the caller's main table.
     """
@@ -58,6 +94,9 @@ class EvalSpec:
     output_kind: OutputKind = "none"
     failure_policy: FailurePolicy = "record"
     description: str = ""
+    context_runner: ContextRunner | None = None
+    execution_mode: ExecutionMode | None = None
+    selection_reason: str = ""
 
     @classmethod
     def noop(
@@ -83,11 +122,13 @@ class EvalSpec:
         if not self.name.strip():
             raise ValueError("eval name must not be empty")
         provided = sum(
-            value is not None for value in (self.expr, self.column, self.runner)
+            value is not None
+            for value in (self.expr, self.column, self.runner, self.context_runner)
         )
         if provided != 1:
             raise ValueError(
-                f"eval {self.name!r} must provide exactly one of expr, column, runner"
+                f"eval {self.name!r} must provide exactly one of expr, column, "
+                "runner, context_runner"
             )
         if self.column is not None and not self.column.strip():
             raise ValueError(f"eval {self.name!r} has an empty column")
@@ -95,6 +136,18 @@ class EvalSpec:
             raise ValueError(
                 f"eval {self.name!r} has an invalid failure policy: "
                 f"{self.failure_policy!r}"
+            )
+        if self.execution_mode not in {
+            None,
+            "polars_expr",
+            "polars_select",
+            "polars_join_group",
+            "matrix_backend",
+            "custom_runner",
+        }:
+            raise ValueError(
+                f"eval {self.name!r} has an invalid execution mode: "
+                f"{self.execution_mode!r}"
             )
 
 

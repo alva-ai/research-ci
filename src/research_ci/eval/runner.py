@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import polars as pl
 from .baseline import general_missing_values
 from .protocol import (
     CaseEvalTest,
+    EvalContext,
     EvalObservation,
     EvalPlan,
     EvalSpec,
@@ -32,6 +34,8 @@ class EvalRecord:
     output_kind: str = "none"
     failure_policy: FailurePolicy = "record"
     details: dict[str, Any] | None = None
+    execution_mode: str = "custom_runner"
+    selection_reason: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,7 +46,9 @@ class EvalRecord:
             "value": _json_value(self.value),
             "output_kind": self.output_kind,
             "failure_policy": self.failure_policy,
-            "details": self.details or {},
+            "details": _json_value(self.details or {}),
+            "execution_mode": self.execution_mode,
+            "selection_reason": self.selection_reason,
         }
 
 
@@ -75,10 +81,15 @@ class EvalRunResult:
                 handle.write("\n")
 
 
-def run_eval_plan(table: pl.DataFrame, plan: EvalPlan) -> EvalRunResult:
-    """Run all four slots in order against a read-only main-table snapshot."""
+def run_eval_plan(
+    table: pl.DataFrame,
+    plan: EvalPlan,
+    context: EvalContext | None = None,
+) -> EvalRunResult:
+    """Run all four slots against a read-only table and explicit sidecars."""
 
     plan.validate()
+    context = context or EvalContext()
     records: list[EvalRecord] = []
     by_name = {spec.name: spec for spec in plan.case}
 
@@ -92,16 +103,17 @@ def run_eval_plan(table: pl.DataFrame, plan: EvalPlan) -> EvalRunResult:
             "engine.baseline.general_missing_values",
             "record",
             general_missing_values(table),
+            execution_mode="polars_select",
         )
     )
 
     for slot in (Slot.BASELINE, Slot.LIBRARY, Slot.CASE):
         specs = getattr(plan, slot.value)
         for spec in specs:
-            records.append(_run_spec(table, plan.stage, slot, spec))
+            records.append(_run_spec(table, plan.stage, slot, spec, context))
 
     for test in plan.case_eval:
-        records.append(_run_case_test(table, plan.stage, by_name, test))
+        records.append(_run_case_test(table, plan.stage, by_name, test, context))
 
     return EvalRunResult(table=table, records=tuple(records))
 
@@ -111,9 +123,10 @@ def _run_spec(
     stage: str,
     slot: Slot,
     spec: EvalSpec,
+    context: EvalContext,
 ) -> EvalRecord:
     try:
-        raw = _evaluate_value(table, spec)
+        raw = _evaluate_value(table, spec, context)
         observation = _normalize(raw, spec)
     except Exception as exc:  # noqa: BLE001 - an eval must leave an audit record
         observation = EvalObservation(
@@ -121,7 +134,15 @@ def _run_spec(
             output_kind="none",
             details={"error_type": type(exc).__name__, "error": str(exc)},
         )
-    return _record(stage, slot.value, spec.name, spec.failure_policy, observation)
+    return _record(
+        stage,
+        slot.value,
+        spec.name,
+        spec.failure_policy,
+        observation,
+        execution_mode=_execution_mode(spec),
+        selection_reason=spec.selection_reason,
+    )
 
 
 def _run_case_test(
@@ -129,14 +150,15 @@ def _run_case_test(
     stage: str,
     case_rules: dict[str, EvalSpec],
     test: CaseEvalTest,
+    context: EvalContext,
 ) -> EvalRecord:
     spec = case_rules[test.case]
     try:
         valid = _normalize(
-            _evaluate_value(_fixture(main_table, test.valid), spec), spec
+            _evaluate_value(_fixture(main_table, test.valid), spec, context), spec
         )
         invalid = _normalize(
-            _evaluate_value(_fixture(main_table, test.invalid), spec), spec
+            _evaluate_value(_fixture(main_table, test.invalid), spec, context), spec
         )
         passed = valid.status == "passed" and invalid.status == "failed"
         observation = EvalObservation(
@@ -161,6 +183,8 @@ def _run_case_test(
         test.name,
         test.failure_policy,
         observation,
+        execution_mode=_execution_mode(spec),
+        selection_reason=spec.selection_reason,
     )
 
 
@@ -175,13 +199,15 @@ def _fixture(main_table: pl.DataFrame, fixture: Any) -> pl.DataFrame:
     return fixture
 
 
-def _evaluate_value(table: pl.DataFrame, spec: EvalSpec) -> Any:
+def _evaluate_value(table: pl.DataFrame, spec: EvalSpec, context: EvalContext) -> Any:
     if spec.column is not None:
         return table.get_column(spec.column)
     if spec.expr is not None:
         return table.select(spec.expr.alias("__rci_eval_value")).to_series()
     if spec.runner is not None:
         return spec.runner(table)
+    if spec.context_runner is not None:
+        return spec.context_runner(table, context)
     raise ValueError(f"eval {spec.name!r} has no executable source")
 
 
@@ -227,6 +253,9 @@ def _record(
     name: str,
     failure_policy: FailurePolicy,
     observation: EvalObservation,
+    *,
+    execution_mode: str = "custom_runner",
+    selection_reason: str = "",
 ) -> EvalRecord:
     return EvalRecord(
         stage=stage,
@@ -237,12 +266,28 @@ def _record(
         output_kind=observation.output_kind,
         failure_policy=failure_policy,
         details=observation.details,
+        execution_mode=execution_mode,
+        selection_reason=selection_reason,
     )
 
 
+def _execution_mode(spec: EvalSpec) -> str:
+    if spec.execution_mode is not None:
+        return spec.execution_mode
+    if spec.expr is not None or spec.column is not None:
+        return "polars_expr"
+    return "custom_runner"
+
+
 def _json_value(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
-    if isinstance(value, (list, dict)):
-        return value
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
     return str(value)

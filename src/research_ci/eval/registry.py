@@ -9,6 +9,7 @@ StageName = Literal["data", "feat", "sig", "algo"]
 InputKind = Literal[
     "main_table",
     "feature_panel",
+    "feature_matrix",
     "evaluation_table",
     "trades",
 ]

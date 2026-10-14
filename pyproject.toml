@@ -5,7 +5,9 @@ description = "Execution protocol for agent-owned quantitative research stages"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=2.0",
     "polars>=2.0.0",
+    "scikit-learn>=1.7,<2",
 ]
 
 [project.scripts]
