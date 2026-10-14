@@ -71,6 +71,7 @@ research-ci/
       data.py     table-in/table-out alignment helpers
       feat.py     name-free Polars expressions and explicit layers
       sig.py      targets, signal composition, time splits, and bundles
+      viz.py      optional wide-table time-series and heatmap helpers
     cards.py      Markdown cards and stable card IDs
     workflow.py   stage states and human/agent approvals
     cli.py        command line orchestration
@@ -80,6 +81,7 @@ research-ci-lab/
     data.py        source exploration and Data table builder
     feat.py        feature exploration and feature table builder
     sig.py         signal builder and explicit label sidecars
+    visualize.py   case-owned selection of stage plots
     evals/data.py  Data four-slot plan
     evals/feat.py  Feat four-slot plan
     evals/sig.py   Sig four-slot plan and selected target methods
@@ -112,12 +114,28 @@ artifact. It is neither an allowlist nor another workflow stage:
   chronological splits, and a `SignalBundle`. The bundle separates candidate
   scores from final signals and records `FeatureDisposition` and
   `SignalLineage`; case-specific estimators remain in the Lab.
+- Visualization helpers draw aligned panels from a wide Polars table or a
+  row/column/value heatmap table. The Lab chooses the stage artifacts, columns,
+  plot names, and interpretation.
 
 Kit functions do not silently sort, fill nulls, replace NaNs, add epsilon,
 infer timestamp units, or choose output column names. A builder may export
 optional `BUILD_INFO` metadata so the CLI can save the construction meaning in
 `recipe.json`; `exploration.json`, `manifest.json`, and eval evidence retain
 their separate purposes.
+
+Visualization is an optional Kit capability, not a workflow stage or a fifth
+eval slot. Normal stage runs neither import plotting libraries nor write plots.
+Install the `visualization` extra and invoke the case renderer explicitly when
+a reviewer needs figures:
+
+```text
+uv run --extra visualization rci visualize --stage sig \
+  --renderer lab/<case>/visualize.py --out .rci/runs/001
+```
+
+The same command works for Data, Feat, Sig, and Algo. The external renderer
+decides which stages it supports and writes only under `<stage>/plots/`.
 
 For example, a Feat builder can declare independent expressions and apply
 dependent groups in order:
@@ -279,6 +297,7 @@ rci feat run --builder path/to/feat.py --plan path/to/evals/feat.py \
 rci approve --stage feat --out .rci/runs/001 --by agent --card <card_id>
 rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
   --out .rci/runs/001
+rci visualize --stage sig --renderer path/to/visualize.py --out .rci/runs/001
 rci status --out .rci/runs/001
 rci eval run --stage data --table data.parquet --plan evals/data.py --out .rci/runs/001
 ```
@@ -321,6 +340,7 @@ outputs are:
 
 ```text
 sig/main.parquet          keys and signal columns
+sig/algo_input.parquet    optional fixed-instrument wide Algo handoff
 sig/research/candidates.parquet
                           keys and all candidate signal columns
 sig/research/screening.parquet
@@ -338,6 +358,7 @@ sig/eval/report.jsonl     four-slot evidence
 sig/eval/assessment.json  review disposition and reason codes
 sig/card.md               human/agent review entry point
 sig/manifest.json         provenance and hashes
+sig/plots/                optional case-owned review figures
 ```
 
 The Engine checks that candidate scores, final signals, and the declared label
@@ -352,6 +373,13 @@ include IC, rank IC, ICIR, cumulative IC, target mutual information, bucket
 behavior, split stability, rank persistence, and drift. The case slot defines
 the actual recipe; `case_eval` proves it with valid fixtures and
 counterexamples.
+
+For a fixed set of instruments, a case may expose `build_algo_input(data,
+signals)`. SigLoop then writes one wide row per signal key, with paired
+`<name>_inst` and `<name>_price` columns plus the final signals. The Engine
+checks the key grid, instrument/price pairs, and positive finite prices. A
+cross-sectional case may define a different downstream table when its row
+grain is instrument-by-time.
 
 The Sig Card presents final and candidate signal evidence, feature disposition
 counts, signal-by-horizon association, early/late stability, block IC evidence,

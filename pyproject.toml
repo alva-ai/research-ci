@@ -10,6 +10,12 @@ dependencies = [
     "scikit-learn>=1.7,<2",
 ]
 
+[project.optional-dependencies]
+visualization = [
+    "matplotlib>=3.10,<4",
+    "seaborn>=0.13,<1",
+]
+
 [project.scripts]
 rci = "research_ci.cli:main"
 

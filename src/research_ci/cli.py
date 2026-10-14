@@ -31,6 +31,7 @@ from .eval import (
 from .eval.baseline import (
     feature_output_shape,
     sidecar_output_shape,
+    signal_algo_input_shape,
     signal_disposition_coverage,
     signal_feature_universe,
     signal_lineage_coverage,
@@ -112,6 +113,15 @@ def main(argv: list[str] | None = None) -> int:
     eval_methods.add_argument("--available-only", action="store_true")
     eval_methods.add_argument("--json", action="store_true", dest="as_json")
 
+    visualize = commands.add_parser(
+        "visualize", help="run an optional external stage renderer"
+    )
+    visualize.add_argument(
+        "--stage", required=True, choices=("data", "feat", "sig", "algo")
+    )
+    visualize.add_argument("--renderer", required=True, type=Path)
+    visualize.add_argument("--out", required=True, type=Path)
+
     status = commands.add_parser("status", help="show stage states and approvals")
     status.add_argument("--out", required=True, type=Path)
 
@@ -148,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.as_json,
             )
         return _eval_run(args.stage, args.table, args.plan, args.out, args.context)
+    if args.command == "visualize":
+        return _visualize(args.stage, args.renderer, args.out)
     if args.command == "status":
         return _status(args.out)
     if args.command == "next":
@@ -634,6 +646,11 @@ def _sig_run(
             raise ValueError(
                 f"approved Feat table is missing Sig inputs: {missing_features}"
             )
+        algo_input = _build_algo_input(
+            builder,
+            out / "data" / "main.parquet",
+            signal_table,
+        )
 
         external_context = _load_context(context_path)
         duplicate_sidecars = sorted(set(external_context.tables) & set(bundle.sidecars))
@@ -764,12 +781,34 @@ def _sig_run(
                     execution_mode="polars_join_group",
                 )
             )
+        if algo_input is not None:
+            baseline_rules.append(
+                EvalSpec(
+                    "engine.baseline.signal_algo_input_shape",
+                    runner=lambda _: signal_algo_input_shape(
+                        signal_table,
+                        algo_input,
+                        keys,
+                        declaration.signals,
+                    ),
+                    failure_policy="stop",
+                    description=(
+                        "preserve one wide row per signal key with named instrument "
+                        "and price columns"
+                    ),
+                    execution_mode="polars_join_group",
+                )
+            )
         plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
         result = run_eval_plan(evaluation_table, plan, context)
 
         out_sig = out / "sig"
         out_sig.mkdir(parents=True, exist_ok=True)
         signal_table.write_parquet(out_sig / "main.parquet")
+        algo_input_path: Path | None = None
+        if algo_input is not None:
+            algo_input_path = out_sig / "algo_input.parquet"
+            algo_input.write_parquet(algo_input_path)
         research_dir = out_sig / "research"
         research_dir.mkdir(parents=True, exist_ok=True)
         candidate_table.write_parquet(research_dir / "candidates.parquet")
@@ -874,6 +913,9 @@ def _sig_run(
                     "card_id": card_identifier,
                     "input_table": str(feature_path),
                     "main_table": str(out_sig / "main.parquet"),
+                    "algo_input": (
+                        str(algo_input_path) if algo_input_path is not None else None
+                    ),
                     "recipe": str(out_sig / "recipe.json"),
                     "selection": str(out_sig / "selection.json"),
                     "eval_report": str(out_sig / "eval" / "report.jsonl"),
@@ -1010,6 +1052,92 @@ def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
     raise AttributeError(
         "signal builder must define build_signals(table) or build(table)"
     )
+
+
+def _build_algo_input(
+    module: ModuleType,
+    data_path: Path,
+    signal_table: pl.DataFrame,
+) -> pl.DataFrame | None:
+    """Run an optional case-owned wide handoff builder for the Algo stage."""
+
+    builder = getattr(module, "build_algo_input", None)
+    if builder is None:
+        return None
+    data_table = pl.read_parquet(data_path)
+    data_before = data_table.clone()
+    signal_before = signal_table.clone()
+    result = builder(data_table, signal_table)
+    if not isinstance(result, pl.DataFrame):
+        raise TypeError(
+            "build_algo_input(data, signals) must return a Polars DataFrame"
+        )
+    if not data_table.equals(data_before) or not signal_table.equals(signal_before):
+        raise ValueError("build_algo_input modified an input DataFrame")
+    return result
+
+
+def _visualize(stage: str, renderer_path: Path, out: Path) -> int:
+    """Run a case renderer only when the explicit visualize command is used."""
+
+    try:
+        if not (out / stage / "main.parquet").exists():
+            raise FileNotFoundError(
+                f"{stage.title()} output is missing; run that stage first"
+            )
+        module = _load_module(renderer_path)
+        renderer = next(
+            (
+                getattr(module, name)
+                for name in ("render_visualizations", "render")
+                if getattr(module, name, None) is not None
+            ),
+            None,
+        )
+        if renderer is None:
+            raise AttributeError(
+                "renderer must define render_visualizations(run_dir, stage, output_dir)"
+            )
+        output_dir = (out / stage / "plots").resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        rendered = renderer(out, stage, output_dir)
+        if not isinstance(rendered, dict) or not rendered:
+            raise TypeError("stage renderer must return a non-empty name-to-path dict")
+
+        root = output_dir.resolve()
+        manifest: dict[str, str] = {}
+        for name, raw_path in sorted(rendered.items()):
+            _safe_artifact_name(name)
+            path = Path(raw_path)
+            if not path.is_absolute():
+                path = output_dir / path
+            resolved = path.resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError(f"visualization {name!r} is outside {output_dir}")
+            if not resolved.is_file():
+                raise FileNotFoundError(f"visualization {name!r} was not written")
+            manifest[name] = str(path)
+
+        plot_manifest = output_dir / "manifest.json"
+        plot_manifest.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        stage_manifest_path = out / stage / "manifest.json"
+        if stage_manifest_path.exists():
+            stage_manifest = json.loads(stage_manifest_path.read_text(encoding="utf-8"))
+            stage_manifest["visualizations"] = manifest
+            stage_manifest_path.write_text(
+                json.dumps(stage_manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    except Exception as exc:  # noqa: BLE001 - CLI reports external renderer errors
+        print(f"{stage} visualization failed: {exc}")
+        return 1
+    for name, path in manifest.items():
+        print(f"{name}: {path}")
+    print(f"visualization manifest: {plot_manifest}")
+    return 0
 
 
 def _signal_declaration(module: ModuleType) -> SignalSet:

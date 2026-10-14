@@ -11,6 +11,7 @@ from research_ci.workflow import new_workflow, read_workflow, write_workflow
 def test_sig_cli_writes_clean_main_label_sidecar_and_review_card(tmp_path) -> None:
     out = tmp_path / "run"
     (out / "feat").mkdir(parents=True)
+    (out / "data").mkdir(parents=True)
     feature_table = pl.DataFrame(
         {
             "event_time": [1, 2, 3, 4],
@@ -18,6 +19,13 @@ def test_sig_cli_writes_clean_main_label_sidecar_and_review_card(tmp_path) -> No
         }
     )
     feature_table.write_parquet(out / "feat" / "main.parquet")
+    pl.DataFrame(
+        {
+            "event_time": [1, 2, 3, 4],
+            "left_price": [10.0, 11.0, 12.0, 13.0],
+            "right_price": [5.0, 5.5, 6.0, 6.5],
+        }
+    ).write_parquet(out / "data" / "main.parquet")
 
     state = new_workflow(("data", "feat", "sig", "algo"), "contract-card")
     state["stages"].update(
@@ -75,6 +83,15 @@ def build_signals(table):
         metadata={"selection": {"signals": ["signal"]}},
         artifacts={"weights": {"signal": 1.0}},
     )
+
+def build_algo_input(data, signals):
+    return data.select(
+        "event_time",
+        pl.lit("left").alias("left_inst"),
+        pl.col("left_price"),
+        pl.lit("right").alias("right_inst"),
+        pl.col("right_price"),
+    ).join(signals, on="event_time", how="inner")
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -156,9 +173,19 @@ def make_plan(table, stage="sig", context=None):
     assert exit_code == 0
     signal_table = pl.read_parquet(out / "sig" / "main.parquet")
     label = pl.read_parquet(out / "sig" / "context" / "label.parquet")
+    algo_input = pl.read_parquet(out / "sig" / "algo_input.parquet")
     assert signal_table.columns == ["event_time", "signal"]
     assert label.columns == ["event_time", "return_1h"]
     assert "return_1h" not in signal_table.columns
+    assert algo_input.columns == [
+        "event_time",
+        "left_inst",
+        "left_price",
+        "right_inst",
+        "right_price",
+        "signal",
+    ]
+    assert algo_input.height == signal_table.height
     assert (out / "sig" / "selection.json").exists()
     assert (out / "sig" / "research" / "candidates.parquet").exists()
     assert (out / "sig" / "research" / "disposition.parquet").exists()
@@ -169,4 +196,37 @@ def make_plan(table, stage="sig", context=None):
     assert manifest["signals"] == ["signal"]
     assert manifest["candidates"] == ["candidate"]
     assert manifest["context_tables"] == ["label"]
+    assert manifest["algo_input"] == str(out / "sig" / "algo_input.parquet")
+    assert not (out / "sig" / "plots").exists()
     assert read_workflow(out)["stages"]["sig"] == "review"
+
+    renderer = tmp_path / "sig_renderer.py"
+    renderer.write_text(
+        """
+def render_visualizations(run_dir, stage, output_dir):
+    path = output_dir / "overview.txt"
+    path.write_text(f"rendered {stage} from {run_dir}\\n", encoding="utf-8")
+    return {"overview": path}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    visualize_exit = main(
+        [
+            "visualize",
+            "--stage",
+            "sig",
+            "--renderer",
+            str(renderer),
+            "--out",
+            str(out),
+        ]
+    )
+
+    assert visualize_exit == 0
+    assert (out / "sig" / "plots" / "overview.txt").exists()
+    manifest = json.loads((out / "sig" / "manifest.json").read_text())
+    assert manifest["visualizations"] == {
+        "overview": str(out / "sig" / "plots" / "overview.txt")
+    }

@@ -20,6 +20,9 @@ The three modules deliberately have different shapes:
   return, log return, and forward difference so an already-log-transformed
   spread is not logged twice. Models remain case-owned until repeated cases
   justify a stable adapter.
+- `viz.py` contains optional, stage-agnostic helpers for aligned panels from a
+  wide Polars table and heatmaps from row/column/value evidence. A case-owned
+  renderer selects the artifacts and columns.
 
 Helpers do not fill nulls, replace NaNs, add epsilon, infer time units, sort
 tables, or choose output column names. Those choices change research meaning
@@ -28,3 +31,8 @@ and must remain visible in the Lab recipe.
 `BuildInfo` and `BuildStep` are optional recipe metadata. When a builder
 exports `BUILD_INFO`, the CLI records it as `recipe.json`. The Kit catalog is
 for discovery only; unlike the eval menu, it is not an allowlist.
+
+Plotting dependencies are lazy and live in the `visualization` extra. Stage
+runs do not import them. `rci visualize --stage ...` calls an external Lab
+renderer explicitly and confines its files to that stage's `plots/` directory.
+Visualization does not participate in the four eval slots or stage approval.

@@ -255,6 +255,74 @@ def sidecar_output_shape(
     )
 
 
+def signal_algo_input_shape(
+    signal_table: pl.DataFrame,
+    algo_input: pl.DataFrame,
+    keys: Iterable[str],
+    signals: Iterable[str],
+) -> EvalObservation:
+    """Validate a fixed-instrument, wide Sig-to-Algo handoff table."""
+
+    key_names = tuple(dict.fromkeys(keys))
+    signal_names = tuple(dict.fromkeys(signals))
+    grid = sidecar_output_shape(
+        signal_table,
+        algo_input,
+        key_names,
+        signal_names,
+    )
+    inst_columns = tuple(
+        column for column in algo_input.columns if column.endswith("_inst")
+    )
+    price_columns = tuple(
+        column for column in algo_input.columns if column.endswith("_price")
+    )
+    inst_prefixes = {column.removesuffix("_inst") for column in inst_columns}
+    price_prefixes = {column.removesuffix("_price") for column in price_columns}
+    unmatched_inst = sorted(inst_prefixes - price_prefixes)
+    unmatched_price = sorted(price_prefixes - inst_prefixes)
+    invalid_inst_columns = [
+        column
+        for column in inst_columns
+        if algo_input.schema[column] != pl.String
+        or algo_input.get_column(column).null_count()
+    ]
+    invalid_price_columns: list[str] = []
+    for column in price_columns:
+        series = algo_input.get_column(column)
+        if not series.dtype.is_numeric():
+            invalid_price_columns.append(column)
+            continue
+        invalid = series.is_null() | ~series.is_finite() | (series <= 0)
+        if bool(invalid.any()):
+            invalid_price_columns.append(column)
+    details = {
+        **grid.details,
+        "layout": "wide",
+        "inst_columns": inst_columns,
+        "price_columns": price_columns,
+        "unmatched_inst_prefixes": unmatched_inst,
+        "unmatched_price_prefixes": unmatched_price,
+        "invalid_inst_columns": invalid_inst_columns,
+        "invalid_price_columns": invalid_price_columns,
+    }
+    valid = (
+        grid.status == "passed"
+        and bool(inst_columns)
+        and inst_prefixes == price_prefixes
+        and not invalid_inst_columns
+        and not invalid_price_columns
+    )
+    if not valid and "reason_code" not in details:
+        details["reason_code"] = "INVALID_WIDE_ALGO_INPUT"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
 def signal_feature_universe(
     feature_table: pl.DataFrame,
     keys: Iterable[str],

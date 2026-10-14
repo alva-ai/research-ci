@@ -1,4 +1,4 @@
-"""Optional construction helpers for external Data, Feat, and Sig builders."""
+"""Optional construction and visualization helpers for external Labs."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from .data import TOOLS as DATA_TOOLS
 from .feat import TOOLS as FEAT_TOOLS
 from .sig import TOOLS as SIG_TOOLS
 from .sig import FeatureDisposition, SignalBundle, SignalLineage, TimeSplit
+from .viz import TimeSeriesPanel, save_heatmap, save_time_series_panels
 
 CATALOG = (*DATA_TOOLS, *FEAT_TOOLS, *SIG_TOOLS)
 
@@ -28,7 +29,10 @@ __all__ = [
     "SignalLineage",
     "StageName",
     "TimeSplit",
+    "TimeSeriesPanel",
     "ToolInfo",
     "ToolKind",
     "catalog",
+    "save_heatmap",
+    "save_time_series_panels",
 ]

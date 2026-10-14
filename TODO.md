@@ -121,6 +121,8 @@
 - **完成**：Feat operator 不隐藏 `fill_null`、`fill_nan`、epsilon、排序、列名和 forward shift；窗口时钟和 warm-up 参数保持显式。
 - **完成**：`kit/sig.py` 第一版提供 forward target Expr、固定权重/等权组合、方向与裁剪、显式时间切分和 `SignalBundle`；模型仍由 case Lab 自己实现。
 - **完成**：外部 builder 可声明 `BUILD_INFO`/`BuildStep`；DataLoop、FeatLoop 和 SigLoop 将它单独保存为 `recipe.json`。recipe 记录构建语义，manifest 记录产物索引，exploration/selection 记录研究过程，eval report 记录判断证据。
+- **决定**：可视化属于通用 Kit，不是新 stage、第五个 eval slot 或阶段通过条件。Data、Feat、Sig、Algo 的外部 Agent 都可按各自中间产物显式生成图；正常 stage run 默认不生成。
+- **完成**：第一版 Visualization Kit 只提供宽表多面板时序图和 row/column/value 热力图；matplotlib/seaborn 为可选依赖，`rci visualize --stage ...` 调用 case-owned renderer，并把文件限制在 `<stage>/plots/`。
 - **决定**：Kit catalog 只用于发现工具；Eval menu 才按 stage policy 和声明限制 Slot 2 可选择的方法。
 - **后置**：等多个真实 case 出现重复需求后，再决定是否增加 Kit CLI、walk-forward window generator 或模型 adapter。
 
@@ -267,6 +269,7 @@
 - **完成**：最小 Sig Kit 已提供显式 forward target、简单 signal 组合、时间切分、`FeatureDisposition`、`SignalLineage` 和 `SignalBundle`；它不等同于 SigLoop，也不替 Agent 选择 target、feature 或模型。
 - **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划，生成 review 状态并锁住 Algo。
 - **完成**：`sig/main.parquet` 只包含 key 和下游需要的 signal columns；已实现的未来值叫 label，保存在 `sig/context/label.parquet`；target/horizon 只表达研究要预测哪个 label。
+- **完成**：固定标的 case 可由 `build_algo_input(data, signals)` 生成 `sig/algo_input.parquet`；当前 SK Hynix case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
 - **完成**：`sig/research/candidates.parquet` 保存全部 candidate；`screening.parquet` 保存分 sample 的 feature-target 证据；`disposition.parquet` 覆盖每个 feature；`lineage.json` 覆盖每个 candidate 和 final signal；其他 research 表保存相关簇和冗余证据。
 - **完成**：`sig/selection.json` 保存本轮候选、物化 signal、horizon、决策原则和是否自动筛选。
 - **完成**：`sig/recipe.json` 保存 builder 声明的规则、组合和 target 生成语义。

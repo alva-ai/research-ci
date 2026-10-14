@@ -4,6 +4,7 @@ from research_ci import LibrarySelection, SelectedMethod, SignalSet
 from research_ci.eval.baseline import (
     feature_output_shape,
     sidecar_output_shape,
+    signal_algo_input_shape,
     signal_disposition_coverage,
     signal_feature_universe,
     signal_lineage_coverage,
@@ -11,6 +12,36 @@ from research_ci.eval.baseline import (
     signal_screening_plan_coverage,
 )
 from research_ci.kit import FeatureDisposition, SignalLineage
+
+
+def test_signal_algo_input_shape_requires_one_wide_row_per_time() -> None:
+    signals = pl.DataFrame(
+        {"event_time": [1, 2], "signal": [0.5, -0.25]}
+    )
+    wide = pl.DataFrame(
+        {
+            "event_time": [1, 2],
+            "skhx_inst": ["xyz:SKHX", "xyz:SKHX"],
+            "skhx_price": [100.0, 101.0],
+            "skhy_inst": ["xyz:SKHY", "xyz:SKHY"],
+            "skhy_price": [10.0, 10.5],
+            "signal": [0.5, -0.25],
+        }
+    )
+
+    passed = signal_algo_input_shape(signals, wide, ("event_time",), ("signal",))
+    invalid = signal_algo_input_shape(
+        signals,
+        wide.drop("skhy_price"),
+        ("event_time",),
+        ("signal",),
+    )
+
+    assert passed.status == "passed"
+    assert passed.details["layout"] == "wide"
+    assert passed.details["inst_columns"] == ("skhx_inst", "skhy_inst")
+    assert invalid.status == "failed"
+    assert invalid.details["unmatched_inst_prefixes"] == ["skhy"]
 
 
 def test_feature_output_shape_preserves_keys_and_allows_warmup_nulls() -> None:
