@@ -220,8 +220,8 @@ def sig_card(
     if dispositions.is_empty():
         lines.append("- no feature disposition was supplied")
     else:
-        for row in dispositions.group_by("action").len().sort("action").iter_rows(
-            named=True
+        for row in (
+            dispositions.group_by("action").len().sort("action").iter_rows(named=True)
         ):
             lines.append(f"- `{row['action']}`: {row['len']}")
         lines.append(f"- covered features: {dispositions.height}")
@@ -249,6 +249,69 @@ def sig_card(
             "selection: `sig/selection.json`",
             "construction recipe: `sig/recipe.json`",
             "eval report: `sig/eval/report.jsonl`",
+        )
+    )
+    return render_card("\n".join(lines))
+
+
+def algo_card(
+    table: pl.DataFrame,
+    result: Any,
+    metadata: dict[str, Any],
+    summary: pl.DataFrame,
+    *,
+    input_rows: int,
+    keys: tuple[str, ...],
+    positions: tuple[str, ...],
+    representation: str,
+    strategies: tuple[str, ...],
+    result_status: str,
+    workflow_state: str = "review",
+) -> tuple[str, str]:
+    """Render an Algo review card with external backtest evidence."""
+
+    lines = ["# Algo Card", "", f"- workflow_state: {workflow_state}"]
+    lines.append(f"- result: {result_status}")
+    lines.append(f"- input_rows: {input_rows}")
+    lines.append(f"- output_rows: {table.height}")
+    lines.append(f"- representation: {representation}")
+    lines.append(f"- keys: {', '.join(keys)}")
+    lines.append(f"- strategies: {', '.join(strategies)}")
+    lines.append(f"- position_columns: {', '.join(positions)}")
+    _append_assessment(lines, result)
+
+    lines.extend(("", "## External backtest summary", ""))
+    if summary.is_empty():
+        lines.append("- no summary rows")
+    else:
+        columns = summary.columns
+        lines.append("| " + " | ".join(columns) + " |")
+        lines.append("| " + " | ".join("---" for _ in columns) + " |")
+        for row in summary.iter_rows(named=True):
+            values = [_card_value(row[column]) for column in columns]
+            lines.append("| " + " | ".join(values) + " |")
+
+    lines.extend(("", "## Four slots", ""))
+    _append_slot_contract(lines)
+    _append_compact_eval_summary(lines, result.records, stage="algo")
+    lines.extend(("", "## Algo recipe metadata", "", "```json"))
+    lines.append(json.dumps(metadata, indent=2, sort_keys=True, default=str))
+    lines.extend(
+        (
+            "```",
+            "",
+            "## Review",
+            "",
+            "The positions, external backtest, and four-slot evidence are ready "
+            "for review.",
+            "",
+            "`rci approve --stage algo --out <run> --by human|agent --card <card_id>`",
+            "",
+            "position table: `algo/main.parquet`",
+            "backtest timeseries: `algo/backtest/timeseries.parquet`",
+            "backtest summary: `algo/backtest/summary.parquet`",
+            "construction recipe: `algo/recipe.json`",
+            "eval report: `algo/eval/report.jsonl`",
         )
     )
     return render_card("\n".join(lines))
@@ -325,7 +388,12 @@ def _append_signal_evidence(
         )
 
 
-def _append_compact_eval_summary(lines: list[str], records: Any) -> None:
+def _append_compact_eval_summary(
+    lines: list[str],
+    records: Any,
+    *,
+    stage: str = "sig",
+) -> None:
     records = tuple(records)
     counts = Counter((record.slot, record.status) for record in records)
     for slot in ("baseline", "library", "case", "case_eval"):
@@ -355,7 +423,15 @@ def _append_compact_eval_summary(lines: list[str], records: Any) -> None:
             else (record.details or {}).get("reason", "review the full report")
         )
         lines.append(f"- `{record.name}`: {record.status} ({reason})")
-    lines.append("- Complete per-method details remain in `sig/eval/report.jsonl`.")
+    lines.append(
+        f"- Complete per-method details remain in `{stage}/eval/report.jsonl`."
+    )
+
+
+def _card_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
 
 
 def _metric(value: Any) -> str:

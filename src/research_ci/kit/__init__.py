@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .algo import TOOLS as ALGO_TOOLS
+from .algo import AlgoBundle, BacktestResult, bounded_score, dollar_neutral_pair
 from .common import BuildInfo, BuildStep, StageName, ToolInfo, ToolKind
 from .data import TOOLS as DATA_TOOLS
 from .feat import TOOLS as FEAT_TOOLS
@@ -9,7 +11,7 @@ from .sig import TOOLS as SIG_TOOLS
 from .sig import FeatureDisposition, SignalBundle, SignalLineage, TimeSplit
 from .viz import TimeSeriesPanel, save_heatmap, save_time_series_panels
 
-CATALOG = (*DATA_TOOLS, *FEAT_TOOLS, *SIG_TOOLS)
+CATALOG = (*DATA_TOOLS, *FEAT_TOOLS, *SIG_TOOLS, *ALGO_TOOLS)
 
 
 def catalog(stage: StageName | None = None) -> tuple[ToolInfo, ...]:
@@ -24,6 +26,8 @@ __all__ = [
     "BuildInfo",
     "BuildStep",
     "CATALOG",
+    "AlgoBundle",
+    "BacktestResult",
     "FeatureDisposition",
     "SignalBundle",
     "SignalLineage",
@@ -33,6 +37,8 @@ __all__ = [
     "ToolInfo",
     "ToolKind",
     "catalog",
+    "bounded_score",
+    "dollar_neutral_pair",
     "save_heatmap",
     "save_time_series_panels",
 ]

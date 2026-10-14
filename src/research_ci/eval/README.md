@@ -11,20 +11,26 @@ each stage's hard semantic boundary, while `defaults/` marks recommended
 starting methods. `menu.py` combines all three with the case declaration and
 reports which methods are selectable or unavailable, including the reason.
 
-`DataSet`, target-free `FeatureSet`, and `SignalSet` describe the Data, Feat,
-and Sig inputs. An external case agent creates `LibrarySelection` with the
+`DataSet`, target-free `FeatureSet`, `SignalSet`, and `AlgoSet` describe the
+Data, Feat, Sig, and Algo inputs. An external case agent creates
+`LibrarySelection` with the
 method, column scope, parameters, and reason for every choice. `selection.py`
 checks the compiled menu before it expands those choices. A method that is
 incompatible with the stage or declaration is rejected before table
 execution. The Engine recommends defaults but does not choose case semantics.
 
 The current families are `quality`, `temporal`, `structure`, `association`,
-`information`, and `stability`. Structure methods include PCA and VIF;
+`information`, `stability`, and `economic`. Structure methods include PCA and VIF;
 information methods use scikit-learn k-nearest-neighbour mutual information;
 association methods include IC, ICIR, cumulative IC, and bucket spreads.
 Target-dependent methods use `SignalSet` together with `EvalContext` and a
 named sidecar table, so a label or forward return never becomes an untracked
 feature column.
+
+`AlgoSet` declares whether its main table represents weights or trades, the
+source prices and signals, position columns grouped by strategy, and the
+external backtest return/equity/turnover schema. Economic methods read the
+named backtest sidecar; they evaluate it but do not create a backtest.
 
 Method location and stage ownership are separate. Feat selects correctness,
 coverage, feature-feature structure, redundancy, and stability methods. Sig

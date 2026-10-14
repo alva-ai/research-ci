@@ -6,7 +6,7 @@ An external builder may use these helpers, combine them with case code, or
 ignore them entirely as long as it returns the stage protocol's expected
 object.
 
-The three modules deliberately have different shapes:
+The construction modules deliberately have different shapes:
 
 - `data.py` contains table-in/table-out assembly helpers. Source downloads and
   caches stay in the Lab.
@@ -20,6 +20,9 @@ The three modules deliberately have different shapes:
   return, log return, and forward difference so an already-log-transformed
   spread is not logged twice. Models remain case-owned until repeated cases
   justify a stable adapter.
+- `algo.py` contains bounded-score and dollar-neutral pair expressions plus
+  `AlgoBundle` and `BacktestResult`. The Lab still owns sizing, orders, costs,
+  fills, and the backtest implementation.
 - `viz.py` contains optional, stage-agnostic helpers for aligned panels from a
   wide Polars table and heatmaps from row/column/value evidence. A case-owned
   renderer selects the artifacts and columns.

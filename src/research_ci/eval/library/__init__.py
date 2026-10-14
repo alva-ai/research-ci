@@ -10,6 +10,8 @@ from .association import (
     pearson_ic,
     spearman_ic,
 )
+from .economic import METHODS as ECONOMIC_METHODS
+from .economic import backtest_summary
 from .information import METHODS as INFORMATION_METHODS
 from .information import (
     context_feature_target_mutual_information,
@@ -27,6 +29,7 @@ from .temporal import key_grid
 
 METHODS = (
     QUALITY_METHODS
+    + ECONOMIC_METHODS
     + STRUCTURE_METHODS
     + ASSOCIATION_METHODS
     + INFORMATION_METHODS
@@ -36,6 +39,7 @@ METHODS = (
 
 __all__ = [
     "ASSOCIATION_METHODS",
+    "ECONOMIC_METHODS",
     "INFORMATION_METHODS",
     "METHODS",
     "QUALITY_METHODS",
@@ -43,6 +47,7 @@ __all__ = [
     "STRUCTURE_METHODS",
     "TEMPORAL_METHODS",
     "autocorrelation",
+    "backtest_summary",
     "bucket_spread",
     "context_pearson_ic",
     "context_spearman_ic",

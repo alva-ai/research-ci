@@ -10,6 +10,7 @@ from typing import Any, Callable
 import polars as pl
 
 from .declarations import (
+    AlgoSet,
     DataSet,
     FeatureSet,
     LibrarySelection,
@@ -24,6 +25,7 @@ from .library.association import (
     pearson_ic,
     spearman_ic,
 )
+from .library.economic import backtest_summary
 from .library.information import (
     feature_pair_mutual_information,
     feature_target_mutual_information,
@@ -74,9 +76,36 @@ def _expand_one(
     selected: SelectedMethod,
 ) -> list[EvalSpec]:
     method = selected.name
-    columns = declaration.columns(selected.on)
     parameters = dict(selected.parameters)
     base_name = _base_name(declaration, selected)
+
+    if method == "library.economic.backtest_summary":
+        if not isinstance(declaration, AlgoSet):
+            raise LibrarySelectionError(f"{method} requires AlgoSet")
+        annualization_periods = parameters.pop("annualization_periods", None)
+        if annualization_periods is None:
+            raise LibrarySelectionError(
+                f"{method} requires parameter 'annualization_periods'"
+            )
+        if parameters:
+            unknown = ", ".join(sorted(parameters))
+            raise LibrarySelectionError(f"{method} has unknown parameters: {unknown}")
+        return [
+            _selected(
+                backtest_summary(
+                    table_name=declaration.backtest_table,
+                    return_columns=declaration.return_columns,
+                    equity_columns=declaration.equity_columns,
+                    turnover_columns=declaration.turnover_columns,
+                    annualization_periods=float(annualization_periods),
+                    name=base_name,
+                ),
+                selected,
+                "polars_select",
+            )
+        ]
+
+    columns = declaration.columns(selected.on)
 
     if method == "library.quality.required_columns":
         required = declaration.required if selected.on is None else columns

@@ -1,10 +1,10 @@
 # Research Engine TODO
 
-状态：Contract、DataLoop、FeatLoop 和 SigLoop 已实现；当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个暂定最终 signal 运行到 Sig Card review。全量 feature 筛选、逐列处置、候选/最终分离、signal 血缘和 Sig 四槽已实现；Algo 仍待实现。
+状态：Contract、DataLoop、FeatLoop、SigLoop 和最小 AlgoLoop 已实现；当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个已批准 signal 运行到 Algo Card review。两套独立 pair strategy 已生成宽表权重，并通过外部 Lab 回测器和 Algo 四槽检查。
 
 这份文件只记录当前有效的设计任务。历史讨论、失败方案和旧实现保存在仓库外部的 agent log，不在这里重复维护。
 
-当前用 `research-ci-lab` 的 SK Hynix proxy case 验证 Contract → DataLoop → FeatLoop → SigLoop 的可审核闭环。
+当前用 `research-ci-lab` 的 SK Hynix proxy case 验证 Contract → DataLoop → FeatLoop → SigLoop → AlgoLoop 的可审核闭环。
 
 不继承旧 `research-ci` 的代码、API、数据模型或兼容约束，也不设版本迁移计划。
 
@@ -115,12 +115,13 @@
 ### 2.5 Stage Kit 与构建 recipe
 
 - **决定**：Kit 是给外部 Lab 使用的可选构建工具，不是新 stage、第五个 slot 或硬 allowlist；Engine 只约束 builder 的输入输出协议。
-- **决定**：Data、Feat、Sig 不强行共用一个万能抽象。Data 工具采用 table-in/table-out；Feat 工具优先采用无列名、无 alias 的纯 `pl.Expr`；Sig 工具覆盖显式 label sidecar、简单 signal 组合、时间切分和 bundle。
+- **决定**：Data、Feat、Sig、Algo 不强行共用一个万能抽象。Data 工具采用 table-in/table-out；Feat 工具优先采用无列名、无 alias 的纯 `pl.Expr`；Sig 工具覆盖显式 label sidecar、简单 signal 组合、时间切分和 bundle；Algo 工具只提供通用 sizing Expr 和 Algo/backtest bundle 接口。
 - **完成**：`kit/data.py` 第一版提供显式 epoch 转换、去重、列名前缀和已排序表的 as-of join；不负责下载、缓存和文件读写。
 - **完成**：`kit/feat.py` 第一版提供 lag、difference、ratio、log/log1p return、row-clock/time-clock rolling、rolling std/quantile、z-score 和 median/IQR robust scale，并用 `apply_layers` 顺序执行依赖层。
 - **完成**：Feat operator 不隐藏 `fill_null`、`fill_nan`、epsilon、排序、列名和 forward shift；窗口时钟和 warm-up 参数保持显式。
 - **完成**：`kit/sig.py` 第一版提供 forward target Expr、固定权重/等权组合、方向与裁剪、显式时间切分和 `SignalBundle`；模型仍由 case Lab 自己实现。
-- **完成**：外部 builder 可声明 `BUILD_INFO`/`BuildStep`；DataLoop、FeatLoop 和 SigLoop 将它单独保存为 `recipe.json`。recipe 记录构建语义，manifest 记录产物索引，exploration/selection 记录研究过程，eval report 记录判断证据。
+- **完成**：`kit/algo.py` 第一版提供 bounded score、美元中性 pair weights、`AlgoBundle` 和 `BacktestResult`；策略与回测实现仍由 case Lab 自己提供。
+- **完成**：外部 builder 可声明 `BUILD_INFO`/`BuildStep`；DataLoop、FeatLoop、SigLoop 和 AlgoLoop 将它单独保存为 `recipe.json`。recipe 记录构建语义，manifest 记录产物索引，exploration/selection 记录研究过程，eval report 记录判断证据。
 - **决定**：可视化属于通用 Kit，不是新 stage、第五个 eval slot 或阶段通过条件。Data、Feat、Sig、Algo 的外部 Agent 都可按各自中间产物显式生成图；正常 stage run 默认不生成。
 - **完成**：第一版 Visualization Kit 只提供宽表多面板时序图和 row/column/value 热力图；matplotlib/seaborn 为可选依赖，`rci visualize --stage ...` 调用 case-owned renderer，并把文件限制在 `<stage>/plots/`。
 - **决定**：Kit catalog 只用于发现工具；Eval menu 才按 stage policy 和声明限制 Slot 2 可选择的方法。
@@ -141,7 +142,7 @@
 - **完成**：`EvalContext` 支持显式加载 label、target/horizon 声明等外部 Parquet sidecar；context runner 可以按声明的 key 连接评估，不把这些列写回主表。
 - **完成**：CLI 提供 `rci eval methods` 动态菜单，Agent 可以按 stage、方法族和外部声明查看 `selectable`、`unavailable`、推荐状态与原因，不需要把库代码复制到 lab。
 - **完成**：Engine 自动填充一个 `engine.baseline.general_missing_values` 底线记录；外部 baseline 规则可以追加，但不再要求 Agent 重复声明底线。
-- **完成**：`DataSet`、target-free `FeatureSet` 和 `SignalSet` 分别声明 Data、Feat、Sig 输入；`SignalSet` 独占完整 feature universe、candidate/final signal columns、target、horizon、targetless hypothesis 和 fit policy。
+- **完成**：`DataSet`、target-free `FeatureSet`、`SignalSet` 和 `AlgoSet` 分别声明 Data、Feat、Sig、Algo 输入；`SignalSet` 独占完整 feature universe、candidate/final signal columns、target、horizon、targetless hypothesis 和 fit policy；`AlgoSet` 声明 weights/trades 表示、价格、signal、策略仓位分组和回测列。
 - **完成**：外部 Agent 通过 `LibrarySelection` 选择方法、范围、参数和理由；Engine 在读取数据前按 stage policy 和声明拒绝跨阶段或缺少能力的方法。
 - **完成**：Slot 2 只接受带注册方法身份的 Engine library spec；直接把任意 `EvalSpec` 塞入 library slot 会在计划校验时失败。
 - **完成**：每条执行记录保存 `library_method`、`execution_mode` 和 `selection_reason`，Card 可以追溯方法身份并区分 Polars 表达式、列式聚合、连接分组、矩阵后端和自定义 runner。
@@ -305,7 +306,14 @@
 - **决定**：Algo 只读取已批准的 signal 产物，把 signal value 转成 entry/exit、rebalance、position sizing、资产/资本权重和订单。
 - **决定**：止损、止盈、杠杆、gross/net exposure、风险预算、组合约束、成本、滑点、容量、执行和 PnL 属于 Algo。
 - **决定**：Sig 的组合权重用于形成预测分数；Algo 的组合权重用于分配资本。两者分别记录，不能共用一个含义不清的 `weight`。
-- **后置**：Algo 自己的四个插槽。
+- **完成**：`rci algo run` 只读取已批准的 `sig/main.parquet`，执行外部 `AlgoBundle` builder、显式 `--backtester` 和 Algo 四槽，保存 `algo/main.parquet`、backtest timeseries/summary、Card、manifest 与 eval sidecar，并停在 review。
+- **完成**：Algo Engine baseline 验证 source price/signal 保真、key grid、价格正且有限、仓位有限、max absolute position、每策略 gross exposure、回测 key grid、return/equity/turnover 路径和 summary strategy coverage。
+- **完成**：Algo 通用库第一项 `library.economic.backtest_summary` 从外部回测时序重新计算 total return、annualized volatility、Sharpe、max drawdown 和 average turnover；它不负责产生 PnL。
+- **完成**：当前 SK Hynix Lab 将 fast/slow signal 各自映射成一套美元中性双腿权重；`tanh(signal / 2)` 限幅，总 gross 上限 1，回测延迟一根小时 bar，按双腿总换手收取 5 bps 成本。
+- **完成**：当前 Algo case 规则独立验证仓位公式和回测会计，case_eval 通过修改一条 fast leg 权重证明两个规则都能识别反例。
+- **决定**：Algo 主表由 `AlgoSet.representation` 选择 `weights` 或 `trades`；当前 case 使用每个 `event_time` 一行的宽表 weights。逐笔 contract 可使用 trade keys 和独立 backtest keys。
+- **待实现**：Engine 默认回测器、默认交易成本/滑点模型和默认撮合器；在至少两个外部 backtester 验证接口前不固化默认经济语义。
+- **待实现**：资金费率、借券/融资、容量、market impact、停牌/交易时段和代理标的 basis 风险的通用接口；当前 case metadata 明确记录 funding 与 capacity 未纳入。
 - **后置**：Seal、Forward、重新打开阶段和最终证据规则。
 
 ## 8. Freeze、血缘和审计

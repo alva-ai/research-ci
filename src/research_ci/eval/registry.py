@@ -27,6 +27,8 @@ InputRole = Literal[
     "features",
     "signals",
     "target",
+    "positions",
+    "pnl",
     "trades",
 ]
 MethodRequirement = Literal[

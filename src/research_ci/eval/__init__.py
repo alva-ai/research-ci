@@ -1,8 +1,15 @@
 """Four-slot evaluation protocol, runner, floor checks, and method library."""
 
 from .assessment import assess_features, assess_records, assess_signal_evidence
-from .baseline import feature_output_shape, general_missing_values
+from .baseline import (
+    algo_backtest_output_shape,
+    algo_backtest_summary_shape,
+    algo_main_output_shape,
+    feature_output_shape,
+    general_missing_values,
+)
 from .declarations import (
+    AlgoSet,
     DataSet,
     FeatureSet,
     LibrarySelection,
@@ -42,6 +49,10 @@ from .runner import EvalRecord, EvalRunResult, run_eval_plan
 from .selection import LibrarySelectionError, expand_library
 
 __all__ = [
+    "AlgoSet",
+    "algo_backtest_output_shape",
+    "algo_backtest_summary_shape",
+    "algo_main_output_shape",
     "CaseEvalTest",
     "DataSet",
     "FeatureSet",

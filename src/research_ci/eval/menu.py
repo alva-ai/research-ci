@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .declarations import DataSet, SignalSet, StageDeclaration
+from .declarations import AlgoSet, DataSet, SignalSet, StageDeclaration
 from .defaults import default_method_names
 from .library import METHODS
 from .policies import stage_policy
@@ -160,8 +160,20 @@ def _declaration_reasons(
         if not isinstance(declaration, DataSet) or declaration.time_key is None:
             reasons.append("requires DataSet.time_key")
     if "signals" in requirements:
-        if not isinstance(declaration, SignalSet) or not declaration.signals:
-            reasons.append("requires declared SignalSet.signals")
+        if not isinstance(declaration, (SignalSet, AlgoSet)) or not declaration.signals:
+            reasons.append("requires declared signal columns")
+    if "positions" in requirements:
+        if not isinstance(declaration, AlgoSet) or not declaration.positions:
+            reasons.append("requires declared AlgoSet.positions")
+    if "pnl" in requirements:
+        if not isinstance(declaration, AlgoSet) or not declaration.return_columns:
+            reasons.append("requires declared AlgoSet return columns")
+    if "trades" in requirements:
+        if (
+            not isinstance(declaration, AlgoSet)
+            or declaration.representation != "trades"
+        ):
+            reasons.append("requires an AlgoSet with trades representation")
     return reasons
 
 

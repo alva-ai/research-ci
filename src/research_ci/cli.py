@@ -13,9 +13,10 @@ from typing import Any
 
 import polars as pl
 
-from .cards import contract_card, data_card, feat_card, sig_card
+from .cards import algo_card, contract_card, data_card, feat_card, sig_card
 from .contract import ContractError, validate_contract
 from .eval import (
+    AlgoSet,
     DataSet,
     EvalContext,
     EvalObservation,
@@ -29,6 +30,9 @@ from .eval import (
     compile_stage_menu,
 )
 from .eval.baseline import (
+    algo_backtest_output_shape,
+    algo_backtest_summary_shape,
+    algo_main_output_shape,
     feature_output_shape,
     sidecar_output_shape,
     signal_disposition_coverage,
@@ -40,7 +44,7 @@ from .eval.baseline import (
 )
 from .eval.library import METHODS as LIBRARY_METHODS
 from .eval.runner import run_eval_plan
-from .kit import BuildInfo, SignalBundle
+from .kit import AlgoBundle, BacktestResult, BuildInfo, SignalBundle
 from .workflow import (
     STAGE_ORDER,
     WorkflowError,
@@ -96,6 +100,15 @@ def main(argv: list[str] | None = None) -> int:
     sig_run.add_argument("--out", required=True, type=Path)
     sig_run.add_argument("--context", type=Path)
 
+    algo = commands.add_parser("algo", help="run an external portfolio builder")
+    algo_commands = algo.add_subparsers(dest="algo_command", required=True)
+    algo_run = algo_commands.add_parser("run")
+    algo_run.add_argument("--builder", required=True, type=Path)
+    algo_run.add_argument("--plan", required=True, type=Path)
+    algo_run.add_argument("--backtester", required=True, type=Path)
+    algo_run.add_argument("--out", required=True, type=Path)
+    algo_run.add_argument("--context", type=Path)
+
     evaluate = commands.add_parser("eval", help="run an external four-slot plan")
     eval_commands = evaluate.add_subparsers(dest="eval_command", required=True)
     eval_run = eval_commands.add_parser("run")
@@ -148,6 +161,14 @@ def main(argv: list[str] | None = None) -> int:
         return _feat_run(args.builder, args.plan, args.out, args.context)
     if args.command == "sig":
         return _sig_run(args.builder, args.plan, args.out, args.context)
+    if args.command == "algo":
+        return _algo_run(
+            args.builder,
+            args.plan,
+            args.backtester,
+            args.out,
+            args.context,
+        )
     if args.command == "eval":
         if args.eval_command == "methods":
             return _eval_methods(
@@ -345,14 +366,20 @@ def _eval_methods(
 def _load_stage_declaration(
     path: Path,
     stage: str | None,
-) -> DataSet | FeatureSet | SignalSet:
+) -> DataSet | FeatureSet | SignalSet | AlgoSet:
     module = _load_module(path)
     declarations = [
         value
-        for name in ("DECLARATION", "DATA_SET", "FEATURE_SET", "SIGNAL_SET")
+        for name in (
+            "DECLARATION",
+            "DATA_SET",
+            "FEATURE_SET",
+            "SIGNAL_SET",
+            "ALGO_SET",
+        )
         if isinstance(
             (value := getattr(module, name, None)),
-            (DataSet, FeatureSet, SignalSet),
+            (DataSet, FeatureSet, SignalSet, AlgoSet),
         )
     ]
     if stage is not None:
@@ -361,7 +388,7 @@ def _load_stage_declaration(
     if not unique:
         raise ValueError(
             "declaration module must expose DECLARATION, DATA_SET, FEATURE_SET, "
-            "or SIGNAL_SET"
+            "SIGNAL_SET, or ALGO_SET"
         )
     if len(unique) > 1:
         raise ValueError("declaration module exposes more than one matching stage set")
@@ -951,6 +978,213 @@ def _sig_run(
     return 0 if result.passed else 1
 
 
+def _algo_run(
+    builder_path: Path,
+    plan_path: Path,
+    backtester_path: Path,
+    out: Path,
+    context_path: Path | None = None,
+) -> int:
+    """Run an external Algo builder and an explicit external backtester."""
+
+    try:
+        state = read_workflow(out)
+        require_stage_ready(state, "algo")
+        signal_path = out / "sig" / "main.parquet"
+        signal_table = pl.read_parquet(signal_path)
+        signal_before = signal_table.clone()
+
+        builder = _load_module(builder_path)
+        bundle = _build_algo(builder, signal_table)
+        if not signal_table.equals(signal_before):
+            raise ValueError("algo builder modified the input Sig DataFrame")
+
+        plan_module = _load_module(plan_path)
+        declaration = _algo_declaration(plan_module)
+        expected_columns = declaration.required
+        missing = sorted(set(expected_columns) - set(bundle.main.columns))
+        extra = sorted(set(bundle.main.columns) - set(expected_columns))
+        if missing or extra:
+            raise ValueError(
+                "AlgoBundle.main must contain exactly the declared Algo columns; "
+                f"missing={missing}, extra={extra}"
+            )
+        main_table = bundle.main.select(expected_columns)
+
+        backtester = _load_module(backtester_path)
+        backtest_result = _run_backtest(backtester, main_table)
+
+        external_context = _load_context(context_path)
+        backtest_summary_name = f"{declaration.backtest_table}_summary"
+        generated_tables = {
+            declaration.backtest_table: backtest_result.timeseries,
+            backtest_summary_name: backtest_result.summary,
+        }
+        if backtest_result.trades is not None:
+            generated_tables["trades"] = backtest_result.trades
+        collisions = sorted(set(external_context.tables) & set(generated_tables))
+        if collisions:
+            raise ValueError(
+                f"algo backtest sidecars collide with external context: {collisions}"
+            )
+        context = EvalContext(
+            tables={**external_context.tables, **generated_tables},
+            metadata={
+                **external_context.metadata,
+                **bundle.metadata,
+                "backtest": dict(backtest_result.metadata),
+            },
+        )
+
+        plan = _make_plan(plan_module, main_table, "algo", context)
+        baseline_rules = (
+            EvalSpec(
+                "engine.baseline.algo_main_output_shape",
+                runner=lambda _: algo_main_output_shape(
+                    signal_table,
+                    main_table,
+                    declaration,
+                ),
+                failure_policy="stop",
+                description="preserve approved Sig inputs and validate positions",
+                execution_mode="polars_join_group",
+            ),
+            EvalSpec(
+                "engine.baseline.algo_backtest_output_shape",
+                runner=lambda _: algo_backtest_output_shape(
+                    signal_table,
+                    backtest_result.timeseries,
+                    declaration,
+                ),
+                failure_policy="stop",
+                description="validate the external backtest key grid and paths",
+                execution_mode="polars_join_group",
+            ),
+            EvalSpec(
+                "engine.baseline.algo_backtest_summary_shape",
+                runner=lambda _: algo_backtest_summary_shape(
+                    backtest_result.summary,
+                    declaration,
+                ),
+                failure_policy="stop",
+                description="require one summary row per strategy",
+                execution_mode="polars_select",
+            ),
+        )
+        plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
+        eval_result = run_eval_plan(main_table, plan, context)
+
+        out_algo = out / "algo"
+        out_algo.mkdir(parents=True, exist_ok=True)
+        main_table.write_parquet(out_algo / "main.parquet")
+        backtest_dir = out_algo / "backtest"
+        backtest_dir.mkdir(parents=True, exist_ok=True)
+        backtest_result.timeseries.write_parquet(backtest_dir / "timeseries.parquet")
+        backtest_result.summary.write_parquet(backtest_dir / "summary.parquet")
+        trades_path: Path | None = None
+        if backtest_result.trades is not None:
+            trades_path = backtest_dir / "trades.parquet"
+            backtest_result.trades.write_parquet(trades_path)
+        (backtest_dir / "metadata.json").write_text(
+            json.dumps(
+                dict(backtest_result.metadata),
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        recipe = _builder_recipe(builder, "algo")
+        recipe["backtester"] = str(backtester_path)
+        (out_algo / "recipe.json").write_text(
+            json.dumps(recipe, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        artifact_manifest = _write_stage_artifacts(
+            out_algo,
+            bundle.artifacts,
+            stage="algo",
+        )
+
+        eval_result.write_report(out_algo / "eval" / "report.jsonl")
+        assessment = assess_records(eval_result.records)
+        (out_algo / "eval" / "assessment.json").write_text(
+            json.dumps(assessment, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        result_status = _result_status(eval_result)
+        card, card_identifier = algo_card(
+            main_table,
+            eval_result,
+            {**dict(bundle.metadata), "backtest": dict(backtest_result.metadata)},
+            backtest_result.summary,
+            input_rows=signal_table.height,
+            keys=declaration.keys,
+            positions=declaration.positions,
+            representation=declaration.representation,
+            strategies=tuple(declaration.strategies),
+            result_status=result_status,
+        )
+        (out_algo / "card.md").write_text(card + "\n", encoding="utf-8")
+        state = submit_for_review(
+            out,
+            stage="algo",
+            card=card_identifier,
+            result_status=result_status,
+        )
+        (out_algo / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "stage": "algo",
+                    "status": result_status,
+                    "workflow_state": state["stages"]["algo"],
+                    "card_id": card_identifier,
+                    "input_table": str(signal_path),
+                    "main_table": str(out_algo / "main.parquet"),
+                    "representation": declaration.representation,
+                    "recipe": str(out_algo / "recipe.json"),
+                    "backtester": str(backtester_path),
+                    "backtest": {
+                        "timeseries": str(backtest_dir / "timeseries.parquet"),
+                        "summary": str(backtest_dir / "summary.parquet"),
+                        "trades": str(trades_path) if trades_path else None,
+                        "metadata": str(backtest_dir / "metadata.json"),
+                    },
+                    "eval_report": str(out_algo / "eval" / "report.jsonl"),
+                    "assessment": str(out_algo / "eval" / "assessment.json"),
+                    "artifacts": artifact_manifest,
+                    "rows": main_table.height,
+                    "columns": main_table.columns,
+                    "keys": declaration.keys,
+                    "signals": declaration.signals,
+                    "positions": declaration.positions,
+                    "strategies": list(declaration.strategies),
+                    "context_tables": sorted(context.tables),
+                    "records": len(eval_result.records),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
+        print(f"algo run failed: {exc}")
+        return 1
+    print(card)
+    print(f"algo card: {out_algo / 'card.md'}")
+    print(
+        f"next: rci approve --stage algo --out {out} --by human "
+        f"--card {card_identifier}"
+    )
+    print(
+        "   or: rci approve "
+        f"--stage algo --out {out} --by agent --card {card_identifier}"
+    )
+    return 0 if eval_result.passed else 1
+
+
 def _status(out: Path) -> int:
     try:
         state = read_workflow(out)
@@ -1053,6 +1287,34 @@ def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
     )
 
 
+def _build_algo(module: ModuleType, table: pl.DataFrame) -> AlgoBundle:
+    for name in ("build_algo", "build"):
+        builder = getattr(module, name, None)
+        if builder is not None:
+            result = builder(table)
+            if not isinstance(result, AlgoBundle):
+                raise TypeError(
+                    "algo builder must return a research_ci.kit.AlgoBundle"
+                )
+            return result
+    raise AttributeError("algo builder must define build_algo(table) or build(table)")
+
+
+def _run_backtest(module: ModuleType, table: pl.DataFrame) -> BacktestResult:
+    runner = getattr(module, "run_backtest", None)
+    if runner is None:
+        raise AttributeError("backtester must define run_backtest(algo_table)")
+    before = table.clone()
+    result = runner(table)
+    if not isinstance(result, BacktestResult):
+        raise TypeError(
+            "run_backtest(algo_table) must return research_ci.kit.BacktestResult"
+        )
+    if not table.equals(before):
+        raise ValueError("external backtester modified the Algo main DataFrame")
+    return result
+
+
 def _build_signal_main(
     module: ModuleType,
     data_path: Path,
@@ -1062,9 +1324,7 @@ def _build_signal_main(
 
     builder = getattr(module, "build_main_table", None)
     if builder is None:
-        raise TypeError(
-            "signal builder must define build_main_table(data, signals)"
-        )
+        raise TypeError("signal builder must define build_main_table(data, signals)")
     data_table = pl.read_parquet(data_path)
     data_before = data_table.clone()
     signal_before = signal_table.clone()
@@ -1149,6 +1409,14 @@ def _signal_declaration(module: ModuleType) -> SignalSet:
     raise AttributeError("signal plan must expose SIGNAL_SET or DECLARATION")
 
 
+def _algo_declaration(module: ModuleType) -> AlgoSet:
+    for name in ("ALGO_SET", "DECLARATION"):
+        declaration = getattr(module, name, None)
+        if isinstance(declaration, AlgoSet):
+            return declaration
+    raise AttributeError("algo plan must expose ALGO_SET or DECLARATION")
+
+
 def _label_sidecar_shape(
     feature_table: pl.DataFrame,
     declaration: SignalSet,
@@ -1188,11 +1456,16 @@ def _label_sidecar_shape(
 
 def _safe_artifact_name(name: str) -> None:
     if not name.strip() or Path(name).name != name or name in {".", ".."}:
-        raise ValueError(f"invalid signal artifact name: {name!r}")
+        raise ValueError(f"invalid stage artifact name: {name!r}")
 
 
-def _write_signal_artifacts(out_sig: Path, artifacts: Any) -> dict[str, str]:
-    directory = out_sig / "artifacts"
+def _write_stage_artifacts(
+    stage_dir: Path,
+    artifacts: Any,
+    *,
+    stage: str,
+) -> dict[str, str]:
+    directory = stage_dir / "artifacts"
     directory.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, str] = {}
     for name, value in sorted(dict(artifacts).items()):
@@ -1206,11 +1479,15 @@ def _write_signal_artifacts(out_sig: Path, artifacts: Any) -> dict[str, str]:
                 payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
             except TypeError as exc:
                 raise TypeError(
-                    f"signal artifact {name!r} must be JSON-serializable or bytes"
+                    f"{stage} artifact {name!r} must be JSON-serializable or bytes"
                 ) from exc
             (directory / filename).write_text(payload, encoding="utf-8")
         manifest[name] = str(directory / filename)
     return manifest
+
+
+def _write_signal_artifacts(out_sig: Path, artifacts: Any) -> dict[str, str]:
+    return _write_stage_artifacts(out_sig, artifacts, stage="signal")
 
 
 def _builder_recipe(module: ModuleType, stage: str) -> dict[str, Any]:

@@ -17,6 +17,13 @@ def _names(values: tuple[str, ...] | list[str], label: str) -> tuple[str, ...]:
     return result
 
 
+def _optional_names(values: tuple[str, ...] | list[str], label: str) -> tuple[str, ...]:
+    result = tuple(dict.fromkeys(values))
+    if any(not value.strip() for value in result):
+        raise ValueError(f"{label} must not contain empty column names")
+    return result
+
+
 def _groups(
     values: Mapping[str, tuple[str, ...] | list[str]],
 ) -> dict[str, tuple[str, ...]]:
@@ -213,9 +220,7 @@ class SignalSet:
     @property
     def required(self) -> tuple[str, ...]:
         return tuple(
-            dict.fromkeys(
-                (*self.keys, *self.features, *self.candidates, *self.signals)
-            )
+            dict.fromkeys((*self.keys, *self.features, *self.candidates, *self.signals))
         )
 
     def columns(self, on: str | tuple[str, ...] | None) -> tuple[str, ...]:
@@ -249,6 +254,184 @@ class SignalSet:
         if unknown:
             raise ValueError(f"selected SignalSet columns are not declared: {unknown}")
         return selected
+
+
+@dataclass(frozen=True, slots=True)
+class AlgoSet:
+    """Describe an Algo table and its external backtest evidence.
+
+    ``representation`` selects the row contract.  ``weights`` preserves the
+    approved Sig key grid.  ``trades`` allows one row per declared trade key;
+    the Engine still validates the declared columns and external backtest
+    schema, while the Lab owns order and fill semantics.
+    """
+
+    keys: tuple[str, ...]
+    context: tuple[str, ...]
+    prices: tuple[str, ...]
+    signals: tuple[str, ...]
+    positions: tuple[str, ...]
+    strategies: Mapping[str, tuple[str, ...]]
+    return_columns: Mapping[str, str]
+    equity_columns: Mapping[str, str]
+    turnover_columns: Mapping[str, str] = field(default_factory=dict)
+    representation: str = "weights"
+    time_key: str = "event_time"
+    backtest_table: str = "backtest"
+    backtest_keys: tuple[str, ...] = ()
+    max_abs_position: float | None = 1.0
+    max_gross: float | None = 1.0
+    stage: str = field(default="algo", init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "keys", _names(self.keys, "AlgoSet.keys"))
+        object.__setattr__(
+            self, "context", _optional_names(self.context, "AlgoSet.context")
+        )
+        object.__setattr__(self, "prices", _names(self.prices, "AlgoSet.prices"))
+        object.__setattr__(self, "signals", _names(self.signals, "AlgoSet.signals"))
+        object.__setattr__(
+            self, "positions", _names(self.positions, "AlgoSet.positions")
+        )
+        strategies = _groups(self.strategies)
+        return_columns = dict(self.return_columns)
+        equity_columns = dict(self.equity_columns)
+        turnover_columns = dict(self.turnover_columns)
+        object.__setattr__(self, "strategies", strategies)
+        object.__setattr__(self, "return_columns", return_columns)
+        object.__setattr__(self, "equity_columns", equity_columns)
+        object.__setattr__(self, "turnover_columns", turnover_columns)
+        if self.representation not in {"weights", "trades"}:
+            raise ValueError("AlgoSet.representation must be weights or trades")
+        backtest_keys = (
+            _names(self.backtest_keys, "AlgoSet.backtest_keys")
+            if self.backtest_keys
+            else (self.keys if self.representation == "weights" else (self.time_key,))
+        )
+        object.__setattr__(self, "backtest_keys", backtest_keys)
+
+        if self.time_key not in self.keys:
+            raise ValueError("AlgoSet.time_key must be one of AlgoSet.keys")
+        if not self.backtest_table.strip():
+            raise ValueError("AlgoSet.backtest_table must not be empty")
+        if self.time_key not in backtest_keys:
+            raise ValueError("AlgoSet.time_key must be one of AlgoSet.backtest_keys")
+        strategy_names = set(strategies)
+        for label, mapping in (
+            ("return_columns", return_columns),
+            ("equity_columns", equity_columns),
+        ):
+            if set(mapping) != strategy_names:
+                raise ValueError(
+                    f"AlgoSet.{label} must define every strategy exactly once"
+                )
+        unknown_turnover = sorted(set(turnover_columns) - strategy_names)
+        if unknown_turnover:
+            raise ValueError(
+                "AlgoSet.turnover_columns contains unknown strategies: "
+                f"{unknown_turnover}"
+            )
+        backtest_columns = (
+            *return_columns.values(),
+            *equity_columns.values(),
+            *turnover_columns.values(),
+        )
+        if any(not name.strip() for name in backtest_columns):
+            raise ValueError("AlgoSet backtest column names must not be empty")
+        declared_backtest_columns = (*backtest_keys, *backtest_columns)
+        duplicated_backtest_columns = sorted(
+            name
+            for name in set(declared_backtest_columns)
+            if declared_backtest_columns.count(name) > 1
+        )
+        if duplicated_backtest_columns:
+            raise ValueError(
+                "AlgoSet backtest keys and metric columns must be distinct; "
+                f"duplicates={duplicated_backtest_columns}"
+            )
+
+        assigned = [column for columns in strategies.values() for column in columns]
+        missing_positions = sorted(set(self.positions) - set(assigned))
+        unknown_positions = sorted(set(assigned) - set(self.positions))
+        duplicate_positions = sorted(
+            column for column in set(assigned) if assigned.count(column) > 1
+        )
+        if missing_positions or unknown_positions or duplicate_positions:
+            raise ValueError(
+                "AlgoSet.strategies must partition positions; "
+                f"missing={missing_positions}, unknown={unknown_positions}, "
+                f"duplicates={duplicate_positions}"
+            )
+        roles = {
+            "keys": set(self.keys),
+            "context": set(self.context),
+            "prices": set(self.prices),
+            "signals": set(self.signals),
+            "positions": set(self.positions),
+        }
+        collisions = {
+            f"{left}/{right}": sorted(roles[left] & roles[right])
+            for index, left in enumerate(roles)
+            for right in tuple(roles)[index + 1 :]
+            if roles[left] & roles[right]
+        }
+        if collisions:
+            raise ValueError(f"AlgoSet column roles overlap: {collisions}")
+        if self.max_abs_position is not None and self.max_abs_position <= 0:
+            raise ValueError("AlgoSet.max_abs_position must be positive")
+        if self.max_gross is not None and self.max_gross <= 0:
+            raise ValueError("AlgoSet.max_gross must be positive")
+
+    @property
+    def required(self) -> tuple[str, ...]:
+        return (
+            *self.keys,
+            *self.context,
+            *self.prices,
+            *self.signals,
+            *self.positions,
+        )
+
+    @property
+    def backtest_required(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    *self.backtest_keys,
+                    *self.return_columns.values(),
+                    *self.equity_columns.values(),
+                    *self.turnover_columns.values(),
+                )
+            )
+        )
+
+    def columns(self, on: str | tuple[str, ...] | None) -> tuple[str, ...]:
+        """Resolve a selection scope into declared Algo main-table columns."""
+
+        if on is None or on == "positions":
+            return self.positions
+        scopes = {
+            "keys": self.keys,
+            "context": self.context,
+            "prices": self.prices,
+            "signals": self.signals,
+            "all_numeric": (*self.prices, *self.signals, *self.positions),
+            "required": self.required,
+        }
+        if isinstance(on, tuple):
+            selected = _names(on, "selected Algo columns")
+        else:
+            try:
+                selected = scopes[on]
+            except KeyError as exc:
+                if on in self.strategies:
+                    selected = self.strategies[on]
+                else:
+                    raise ValueError(f"unknown AlgoSet column group: {on!r}") from exc
+        unknown = sorted(set(selected) - set(self.required))
+        if unknown:
+            raise ValueError(f"selected Algo columns are not declared: {unknown}")
+        return tuple(selected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,10 +469,11 @@ class LibrarySelection:
         object.__setattr__(self, "methods", tuple(self.methods))
 
 
-StageDeclaration = DataSet | FeatureSet | SignalSet
+StageDeclaration = DataSet | FeatureSet | SignalSet | AlgoSet
 
 
 __all__ = [
+    "AlgoSet",
     "DataSet",
     "FeatureSet",
     "LibrarySelection",

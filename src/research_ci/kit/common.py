@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
-StageName = Literal["data", "feat", "sig"]
+StageName = Literal["data", "feat", "sig", "algo"]
 ToolKind = Literal["table", "expr", "split", "bundle"]
 
 
@@ -27,8 +27,8 @@ class ToolInfo:
     def __post_init__(self) -> None:
         _non_empty(self.name, "ToolInfo.name")
         _non_empty(self.purpose, "ToolInfo.purpose")
-        if self.stage not in {"data", "feat", "sig"}:
-            raise ValueError("ToolInfo.stage must be data, feat, or sig")
+        if self.stage not in {"data", "feat", "sig", "algo"}:
+            raise ValueError("ToolInfo.stage must be data, feat, sig, or algo")
         if self.kind not in {"table", "expr", "split", "bundle"}:
             raise ValueError("ToolInfo.kind must be table, expr, split, or bundle")
 
@@ -79,8 +79,8 @@ class BuildInfo:
 
     def __post_init__(self) -> None:
         _non_empty(self.summary, "BuildInfo.summary")
-        if self.stage not in {"data", "feat", "sig"}:
-            raise ValueError("BuildInfo.stage must be data, feat, or sig")
+        if self.stage not in {"data", "feat", "sig", "algo"}:
+            raise ValueError("BuildInfo.stage must be data, feat, sig, or algo")
         object.__setattr__(self, "steps", tuple(self.steps))
         if not self.steps:
             raise ValueError("BuildInfo.steps must contain at least one step")

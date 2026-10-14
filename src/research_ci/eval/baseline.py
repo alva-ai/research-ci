@@ -9,7 +9,7 @@ import polars as pl
 
 from research_ci.kit.sig import FeatureDisposition, SignalLineage
 
-from .declarations import LibrarySelection, SignalSet
+from .declarations import AlgoSet, LibrarySelection, SignalSet
 from .protocol import EvalObservation
 
 _TARGET_SCREENING_METHODS = frozenset(
@@ -323,6 +323,264 @@ def signal_main_output_shape(
     )
 
 
+def algo_main_output_shape(
+    signal_table: pl.DataFrame,
+    main_table: pl.DataFrame,
+    declaration: AlgoSet,
+) -> EvalObservation:
+    """Validate declared prices and positions in the Algo main table."""
+
+    required = declaration.required
+    missing = sorted(set(required) - set(main_table.columns))
+    extra = sorted(set(main_table.columns) - set(required))
+    source_columns = (
+        *declaration.context,
+        *declaration.prices,
+        *declaration.signals,
+    )
+    source_keys = (
+        declaration.keys
+        if declaration.representation == "weights"
+        else (declaration.time_key,)
+    )
+    missing_source = sorted(
+        set((*source_keys, *source_columns)) - set(signal_table.columns)
+    )
+    details: dict[str, object] = {
+        "representation": declaration.representation,
+        "keys": declaration.keys,
+        "required_columns": required,
+        "missing_columns": missing,
+        "extra_columns": extra,
+        "missing_source_columns": missing_source,
+    }
+    if missing or extra or missing_source:
+        details["reason_code"] = "INVALID_ALGO_SCHEMA"
+        return EvalObservation("failed", output_kind="findings", details=details)
+
+    if declaration.representation == "weights":
+        grid = sidecar_output_shape(
+            signal_table,
+            main_table,
+            declaration.keys,
+            (*source_columns, *declaration.positions),
+        )
+        grid_valid = grid.status == "passed"
+        details.update(grid.details)
+    else:
+        output_keys = main_table.select(declaration.keys)
+        duplicate_keys = output_keys.height - output_keys.unique().height
+        source_times = signal_table.select(declaration.time_key).unique()
+        unknown_times = (
+            main_table.select(declaration.time_key)
+            .join(
+                source_times,
+                on=declaration.time_key,
+                how="anti",
+            )
+            .height
+        )
+        grid_valid = duplicate_keys == 0 and unknown_times == 0
+        details.update(
+            {
+                "duplicate_key_rows": duplicate_keys,
+                "unknown_source_times": unknown_times,
+            }
+        )
+
+    source_equal = False
+    if declaration.representation == "weights":
+        expected = signal_table.select(*declaration.keys, *source_columns).sort(
+            declaration.keys
+        )
+        actual = main_table.select(*declaration.keys, *source_columns).sort(
+            declaration.keys
+        )
+        source_equal = actual.equals(expected)
+    else:
+        output_times = main_table.select(declaration.time_key).unique()
+        expected = (
+            signal_table.select(declaration.time_key, *source_columns)
+            .join(output_times, on=declaration.time_key, how="semi")
+            .sort(declaration.time_key)
+        )
+        actual = (
+            main_table.select(declaration.time_key, *source_columns)
+            .unique()
+            .sort(declaration.time_key)
+        )
+        source_equal = actual.equals(expected)
+
+    invalid_prices: list[str] = []
+    for column in declaration.prices:
+        series = main_table.get_column(column)
+        if not series.dtype.is_numeric() or bool(
+            (series.is_null() | ~series.is_finite() | (series <= 0)).any()
+        ):
+            invalid_prices.append(column)
+
+    invalid_positions: list[str] = []
+    position_limits: dict[str, float] = {}
+    for column in declaration.positions:
+        series = main_table.get_column(column)
+        if not series.dtype.is_numeric() or bool(
+            (series.is_null() | ~series.is_finite()).any()
+        ):
+            invalid_positions.append(column)
+            continue
+        maximum = float(series.abs().max()) if main_table.height else 0.0
+        position_limits[column] = maximum
+        if (
+            declaration.max_abs_position is not None
+            and maximum > declaration.max_abs_position + 1e-12
+        ):
+            invalid_positions.append(column)
+
+    gross_exposure: dict[str, float] = {}
+    invalid_gross: list[str] = []
+    if declaration.representation == "weights":
+        for strategy, columns in declaration.strategies.items():
+            gross = main_table.select(
+                pl.sum_horizontal(*(pl.col(column).abs() for column in columns)).max()
+            ).item()
+            maximum = float(gross) if gross is not None else 0.0
+            gross_exposure[strategy] = maximum
+            if (
+                declaration.max_gross is not None
+                and maximum > declaration.max_gross + 1e-12
+            ):
+                invalid_gross.append(strategy)
+
+    details.update(
+        {
+            "source_columns_preserved": source_equal,
+            "invalid_price_columns": invalid_prices,
+            "invalid_position_columns": invalid_positions,
+            "maximum_absolute_position": position_limits,
+            "maximum_gross_exposure": gross_exposure,
+            "strategies_above_maximum_gross": invalid_gross,
+        }
+    )
+    valid = (
+        grid_valid
+        and source_equal
+        and not invalid_prices
+        and not invalid_positions
+        and not invalid_gross
+    )
+    if not valid and "reason_code" not in details:
+        details["reason_code"] = "INVALID_ALGO_MAIN"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def algo_backtest_output_shape(
+    signal_table: pl.DataFrame,
+    backtest_table: pl.DataFrame,
+    declaration: AlgoSet,
+) -> EvalObservation:
+    """Validate a standardized external backtest timeseries sidecar."""
+
+    grid = sidecar_output_shape(
+        signal_table,
+        backtest_table,
+        declaration.backtest_keys,
+        declaration.backtest_required,
+    )
+    invalid_returns: list[str] = []
+    invalid_equity: list[str] = []
+    invalid_turnover: list[str] = []
+    for column in declaration.return_columns.values():
+        if column not in backtest_table.columns:
+            invalid_returns.append(column)
+            continue
+        series = backtest_table.get_column(column)
+        if not series.dtype.is_numeric() or bool(
+            (series.is_null() | ~series.is_finite()).any()
+        ):
+            invalid_returns.append(column)
+    for column in declaration.equity_columns.values():
+        if column not in backtest_table.columns:
+            invalid_equity.append(column)
+            continue
+        series = backtest_table.get_column(column)
+        if not series.dtype.is_numeric() or bool(
+            (series.is_null() | ~series.is_finite() | (series <= 0)).any()
+        ):
+            invalid_equity.append(column)
+    for column in declaration.turnover_columns.values():
+        if column not in backtest_table.columns:
+            invalid_turnover.append(column)
+            continue
+        series = backtest_table.get_column(column)
+        if not series.dtype.is_numeric() or bool(
+            (series.is_null() | ~series.is_finite() | (series < 0)).any()
+        ):
+            invalid_turnover.append(column)
+    details = {
+        **grid.details,
+        "context_table": declaration.backtest_table,
+        "invalid_return_columns": invalid_returns,
+        "invalid_equity_columns": invalid_equity,
+        "invalid_turnover_columns": invalid_turnover,
+    }
+    valid = (
+        grid.status == "passed"
+        and not invalid_returns
+        and not invalid_equity
+        and not invalid_turnover
+    )
+    if not valid and "reason_code" not in details:
+        details["reason_code"] = "INVALID_BACKTEST_OUTPUT"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
+def algo_backtest_summary_shape(
+    summary: pl.DataFrame,
+    declaration: AlgoSet,
+) -> EvalObservation:
+    """Require one external backtest summary row per declared strategy."""
+
+    missing_columns = sorted({"strategy"} - set(summary.columns))
+    actual: list[str] = []
+    if not missing_columns:
+        actual = [str(value) for value in summary.get_column("strategy")]
+    expected = sorted(declaration.strategies)
+    duplicates = sorted(
+        strategy for strategy, count in Counter(actual).items() if count > 1
+    )
+    missing_strategies = sorted(set(expected) - set(actual))
+    unknown_strategies = sorted(set(actual) - set(expected))
+    valid = not (
+        missing_columns or duplicates or missing_strategies or unknown_strategies
+    )
+    details: dict[str, object] = {
+        "summary_rows": summary.height,
+        "expected_strategies": expected,
+        "missing_columns": missing_columns,
+        "missing_strategies": missing_strategies,
+        "unknown_strategies": unknown_strategies,
+        "duplicate_strategies": duplicates,
+    }
+    if not valid:
+        details["reason_code"] = "INVALID_BACKTEST_SUMMARY"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
 def signal_feature_universe(
     feature_table: pl.DataFrame,
     keys: Iterable[str],
@@ -386,8 +644,7 @@ def signal_screening_plan_coverage(
         "coverage": len(expected & covered) / len(expected) if expected else 1.0,
         "screening_methods": sorted(set(selected_methods)),
         "missing_pairs": [
-            {"feature": feature, "horizon": horizon}
-            for feature, horizon in missing
+            {"feature": feature, "horizon": horizon} for feature, horizon in missing
         ],
     }
     if not valid:
@@ -459,12 +716,10 @@ def signal_screening_artifact_coverage(
             "covered_feature_target_pairs": len(expected & actual),
             "coverage": len(expected & actual) / len(expected) if expected else 1.0,
             "missing_pairs": [
-                {"feature": feature, "horizon": horizon}
-                for feature, horizon in missing
+                {"feature": feature, "horizon": horizon} for feature, horizon in missing
             ],
             "unknown_pairs": [
-                {"feature": feature, "horizon": horizon}
-                for feature, horizon in unknown
+                {"feature": feature, "horizon": horizon} for feature, horizon in unknown
             ],
         }
     )
@@ -568,9 +823,7 @@ def signal_lineage_coverage(
     actual = [item.signal for item in items]
     missing = sorted(set(expected_roles) - set(actual))
     unknown = sorted(set(actual) - set(expected_roles))
-    duplicates = sorted(
-        name for name, count in Counter(actual).items() if count > 1
-    )
+    duplicates = sorted(name for name, count in Counter(actual).items() if count > 1)
     wrong_roles = sorted(
         item.signal
         for item in items

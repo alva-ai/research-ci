@@ -65,12 +65,14 @@ research-ci/
         association.py IC, ICIR, cumulative IC, bucket spread
         information.py mutual information and target-sidecar MI
         stability.py split stability, rank persistence, drift
+        economic.py external-backtest return, risk, and turnover summary
       defaults/   stage-specific method proposals
     kit/          optional construction helpers for external Labs
       common.py   recipe and tool metadata
       data.py     table-in/table-out alignment helpers
       feat.py     name-free Polars expressions and explicit layers
       sig.py      targets, signal composition, time splits, and bundles
+      algo.py     bounded sizing, pair weights, and Algo/backtest bundles
       viz.py      optional wide-table time-series and heatmap helpers
     cards.py      Markdown cards and stable card IDs
     workflow.py   stage states and human/agent approvals
@@ -81,10 +83,13 @@ research-ci-lab/
     data.py        source exploration and Data table builder
     feat.py        feature exploration and feature table builder
     sig.py         signal builder and explicit label sidecars
+    algo.py        position or trade builder
+    backtest.py    case-owned external backtester
     visualize.py   case-owned selection of stage plots
     evals/data.py  Data four-slot plan
     evals/feat.py  Feat four-slot plan
     evals/sig.py   Sig four-slot plan and selected target methods
+    evals/algo.py  Algo four-slot plan and selected economic methods
     raw/           source snapshots owned by the lab
   .rci/runs/<run>/workflow.json
                   stage states and approvals
@@ -114,6 +119,9 @@ artifact. It is neither an allowlist nor another workflow stage:
   chronological splits, and a `SignalBundle`. The bundle separates candidate
   scores from final signals and records `FeatureDisposition` and
   `SignalLineage`; case-specific estimators remain in the Lab.
+- Algo helpers provide bounded scores, dollar-neutral pair sizing,
+  `AlgoBundle`, and the standardized `BacktestResult` interface. Portfolio
+  rules, cost assumptions, and the backtest implementation remain in the Lab.
 - Visualization helpers draw aligned panels from a wide Polars table or a
   row/column/value heatmap table. The Lab chooses the stage artifacts, columns,
   plot names, and interpretation.
@@ -166,7 +174,8 @@ stage-specific baseline rules, but an empty external `baseline` tuple is valid;
 the other three slots must still be supplied by the lab.
 
 The library has one registry and a different compiled menu for each stage.
-`DataSet`, `FeatureSet`, and `SignalSet` describe the current inputs; a stage
+`DataSet`, `FeatureSet`, `SignalSet`, and `AlgoSet` describe the current inputs;
+a stage
 policy filters the registry before an external agent can select methods. The
 agent creates a `LibrarySelection`, records why each method applies, and
 supplies its scope and parameters. The Engine validates that choice, expands
@@ -297,6 +306,9 @@ rci feat run --builder path/to/feat.py --plan path/to/evals/feat.py \
 rci approve --stage feat --out .rci/runs/001 --by agent --card <card_id>
 rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
   --out .rci/runs/001
+rci approve --stage sig --out .rci/runs/001 --by human --card <card_id>
+rci algo run --builder path/to/algo.py --plan path/to/evals/algo.py \
+  --backtester path/to/backtest.py --out .rci/runs/001
 rci visualize --stage sig --renderer path/to/visualize.py --out .rci/runs/001
 rci status --out .rci/runs/001
 rci eval run --stage data --table data.parquet --plan evals/data.py --out .rci/runs/001
@@ -388,3 +400,38 @@ cumulative paths, and feature rankings. The complete per-method records stay in
 evidenced well enough for Algo research. It does not automatically promote the
 highest metric or claim profitability. Position sizing, stop rules, leverage,
 costs, slippage, capacity, and execution remain Algo concerns.
+
+## Algo handoff
+
+AlgoLoop reads only an approved `sig/main.parquet`. The Lab returns an
+`AlgoBundle` whose main table follows an `AlgoSet` contract. The declaration
+chooses `weights` or `trades`, names source prices and signals, partitions
+position columns by strategy, and declares standardized backtest return,
+equity, and turnover columns.
+
+The backtest implementation is injected explicitly with `--backtester` and
+must return a `BacktestResult`. The Engine does not currently calculate fills,
+costs, or PnL. It validates the position table, external backtest paths, and
+one summary row per strategy, then exposes those artifacts to all four eval
+slots. Runtime outputs are:
+
+```text
+algo/main.parquet                 prices, signals, and positions/trades
+algo/backtest/timeseries.parquet standardized economic paths
+algo/backtest/summary.parquet    one review row per strategy
+algo/backtest/trades.parquet     optional trade ledger
+algo/backtest/metadata.json      external assumptions and backend identity
+algo/recipe.json                 construction and backtester provenance
+algo/artifacts/                  optional sizing or execution artifacts
+algo/eval/report.jsonl           four-slot evidence
+algo/eval/assessment.json        review disposition and reason codes
+algo/card.md                     human/agent review entry point
+algo/manifest.json               artifact index and declared schema
+algo/plots/                      optional case-owned review figures
+```
+
+The first economic library method recomputes total return, annualized
+volatility, Sharpe, maximum drawdown, and average turnover from the declared
+external timeseries. Case rules still verify the actual position formula and
+backtest accounting, while `case_eval` proves those rules against mutated
+counterexamples. A built-in default backtester remains future work.

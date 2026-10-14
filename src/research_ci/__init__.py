@@ -2,6 +2,7 @@
 
 from .contract import Contract, ContractError, validate_contract
 from .eval import (
+    AlgoSet,
     CaseEvalTest,
     DataSet,
     EvalContext,
@@ -29,6 +30,7 @@ from .eval import (
 )
 
 __all__ = [
+    "AlgoSet",
     "CaseEvalTest",
     "DataSet",
     "EvalContext",
