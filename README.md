@@ -339,8 +339,7 @@ sidecars, metadata, research tables, and optional fitted artifacts. Runtime
 outputs are:
 
 ```text
-sig/main.parquet          keys and signal columns
-sig/algo_input.parquet    optional fixed-instrument wide Algo handoff
+sig/main.parquet          direct Algo input: keys, market context, and signals
 sig/research/candidates.parquet
                           keys and all candidate signal columns
 sig/research/screening.parquet
@@ -374,12 +373,13 @@ behavior, split stability, rank persistence, and drift. The case slot defines
 the actual recipe; `case_eval` proves it with valid fixtures and
 counterexamples.
 
-For a fixed set of instruments, a case may expose `build_algo_input(data,
-signals)`. SigLoop then writes one wide row per signal key, with paired
-`<name>_inst` and `<name>_price` columns plus the final signals. The Engine
-checks the key grid, instrument/price pairs, and positive finite prices. A
-cross-sectional case may define a different downstream table when its row
-grain is instrument-by-time.
+For a fixed set of instruments, a case exposes `build_main_table(data,
+signals)`. SigLoop writes that result directly to `sig/main.parquet`: one wide
+row per signal key, with paired `<name>_inst` and `<name>_price` columns,
+market context, and the final signals. Algo reads this table as its sole stage
+input. The Engine checks the key grid, instrument/price pairs, and positive
+finite prices. A cross-sectional case may define a different downstream table
+when its row grain is instrument-by-time.
 
 The Sig Card presents final and candidate signal evidence, feature disposition
 counts, signal-by-horizon association, early/late stability, block IC evidence,

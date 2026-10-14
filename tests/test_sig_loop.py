@@ -84,7 +84,7 @@ def build_signals(table):
         artifacts={"weights": {"signal": 1.0}},
     )
 
-def build_algo_input(data, signals):
+def build_main_table(data, signals):
     return data.select(
         "event_time",
         pl.lit("left").alias("left_inst"),
@@ -171,13 +171,9 @@ def make_plan(table, stage="sig", context=None):
     )
 
     assert exit_code == 0
-    signal_table = pl.read_parquet(out / "sig" / "main.parquet")
+    main_table = pl.read_parquet(out / "sig" / "main.parquet")
     label = pl.read_parquet(out / "sig" / "context" / "label.parquet")
-    algo_input = pl.read_parquet(out / "sig" / "algo_input.parquet")
-    assert signal_table.columns == ["event_time", "signal"]
-    assert label.columns == ["event_time", "return_1h"]
-    assert "return_1h" not in signal_table.columns
-    assert algo_input.columns == [
+    assert main_table.columns == [
         "event_time",
         "left_inst",
         "left_price",
@@ -185,7 +181,10 @@ def make_plan(table, stage="sig", context=None):
         "right_price",
         "signal",
     ]
-    assert algo_input.height == signal_table.height
+    assert label.columns == ["event_time", "return_1h"]
+    assert "return_1h" not in main_table.columns
+    assert main_table.height == feature_table.height
+    assert not (out / "sig" / "algo_input.parquet").exists()
     assert (out / "sig" / "selection.json").exists()
     assert (out / "sig" / "research" / "candidates.parquet").exists()
     assert (out / "sig" / "research" / "disposition.parquet").exists()
@@ -196,7 +195,13 @@ def make_plan(table, stage="sig", context=None):
     assert manifest["signals"] == ["signal"]
     assert manifest["candidates"] == ["candidate"]
     assert manifest["context_tables"] == ["label"]
-    assert manifest["algo_input"] == str(out / "sig" / "algo_input.parquet")
+    assert manifest["main_table"] == str(out / "sig" / "main.parquet")
+    assert manifest["main_layout"] == "wide"
+    assert manifest["columns"] == main_table.columns
+    assert manifest["input_tables"] == {
+        "data": str(out / "data" / "main.parquet"),
+        "feat": str(out / "feat" / "main.parquet"),
+    }
     assert not (out / "sig" / "plots").exists()
     assert read_workflow(out)["stages"]["sig"] == "review"
 

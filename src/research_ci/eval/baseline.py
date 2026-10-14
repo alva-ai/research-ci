@@ -255,27 +255,27 @@ def sidecar_output_shape(
     )
 
 
-def signal_algo_input_shape(
+def signal_main_output_shape(
     signal_table: pl.DataFrame,
-    algo_input: pl.DataFrame,
+    main_table: pl.DataFrame,
     keys: Iterable[str],
     signals: Iterable[str],
 ) -> EvalObservation:
-    """Validate a fixed-instrument, wide Sig-to-Algo handoff table."""
+    """Validate a fixed-instrument, wide Sig main table for Algo."""
 
     key_names = tuple(dict.fromkeys(keys))
     signal_names = tuple(dict.fromkeys(signals))
     grid = sidecar_output_shape(
         signal_table,
-        algo_input,
+        main_table,
         key_names,
         signal_names,
     )
     inst_columns = tuple(
-        column for column in algo_input.columns if column.endswith("_inst")
+        column for column in main_table.columns if column.endswith("_inst")
     )
     price_columns = tuple(
-        column for column in algo_input.columns if column.endswith("_price")
+        column for column in main_table.columns if column.endswith("_price")
     )
     inst_prefixes = {column.removesuffix("_inst") for column in inst_columns}
     price_prefixes = {column.removesuffix("_price") for column in price_columns}
@@ -284,12 +284,12 @@ def signal_algo_input_shape(
     invalid_inst_columns = [
         column
         for column in inst_columns
-        if algo_input.schema[column] != pl.String
-        or algo_input.get_column(column).null_count()
+        if main_table.schema[column] != pl.String
+        or main_table.get_column(column).null_count()
     ]
     invalid_price_columns: list[str] = []
     for column in price_columns:
-        series = algo_input.get_column(column)
+        series = main_table.get_column(column)
         if not series.dtype.is_numeric():
             invalid_price_columns.append(column)
             continue
@@ -314,7 +314,7 @@ def signal_algo_input_shape(
         and not invalid_price_columns
     )
     if not valid and "reason_code" not in details:
-        details["reason_code"] = "INVALID_WIDE_ALGO_INPUT"
+        details["reason_code"] = "INVALID_WIDE_SIGNAL_MAIN"
     return EvalObservation(
         "passed" if valid else "failed",
         value=valid,

@@ -4,17 +4,17 @@ from research_ci import LibrarySelection, SelectedMethod, SignalSet
 from research_ci.eval.baseline import (
     feature_output_shape,
     sidecar_output_shape,
-    signal_algo_input_shape,
     signal_disposition_coverage,
     signal_feature_universe,
     signal_lineage_coverage,
+    signal_main_output_shape,
     signal_screening_artifact_coverage,
     signal_screening_plan_coverage,
 )
 from research_ci.kit import FeatureDisposition, SignalLineage
 
 
-def test_signal_algo_input_shape_requires_one_wide_row_per_time() -> None:
+def test_signal_main_output_shape_requires_one_wide_row_per_time() -> None:
     signals = pl.DataFrame(
         {"event_time": [1, 2], "signal": [0.5, -0.25]}
     )
@@ -29,8 +29,8 @@ def test_signal_algo_input_shape_requires_one_wide_row_per_time() -> None:
         }
     )
 
-    passed = signal_algo_input_shape(signals, wide, ("event_time",), ("signal",))
-    invalid = signal_algo_input_shape(
+    passed = signal_main_output_shape(signals, wide, ("event_time",), ("signal",))
+    invalid = signal_main_output_shape(
         signals,
         wide.drop("skhy_price"),
         ("event_time",),

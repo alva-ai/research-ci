@@ -164,6 +164,7 @@ def sig_card(
     input_rows: int,
     evaluation_columns: tuple[str, ...],
     keys: tuple[str, ...],
+    signals: tuple[str, ...],
     sidecars: tuple[str, ...],
     candidates: tuple[str, ...],
     dispositions: pl.DataFrame,
@@ -172,18 +173,23 @@ def sig_card(
 ) -> tuple[str, str]:
     """Render a Sig card while keeping targets in named sidecars."""
 
-    signal_columns = [column for column in table.columns if column not in keys]
+    signal_columns = list(signals)
+    handoff_columns = [
+        column for column in table.columns if column not in {*keys, *signals}
+    ]
     lines = ["# Sig Card", "", f"- workflow_state: {workflow_state}"]
     lines.append(f"- result: {result_status}")
     lines.append(f"- input_rows: {input_rows}")
     lines.append(f"- output_rows: {table.height}")
     lines.append(f"- keys: {', '.join(keys) or '-'}")
     lines.append(f"- signal_columns: {', '.join(signal_columns) or '-'}")
+    lines.append(f"- handoff_columns: {', '.join(handoff_columns) or '-'}")
     lines.append(f"- candidate_signals: {len(candidates)}")
     lines.append(f"- evaluation_columns: {len(evaluation_columns)}")
     lines.append(f"- sidecars: {', '.join(sidecars) or '-'}")
     _append_assessment(lines, result)
-    triage = assess_features(table, keys, result.records)
+    signal_table = table.select(*keys, *signals)
+    triage = assess_features(signal_table, keys, result.records)
     lines.extend(("", "## Signal output triage", ""))
     for column, evidence in triage.items():
         reasons = ", ".join(evidence["reason_codes"]) or "-"

@@ -269,7 +269,8 @@
 - **完成**：最小 Sig Kit 已提供显式 forward target、简单 signal 组合、时间切分、`FeatureDisposition`、`SignalLineage` 和 `SignalBundle`；它不等同于 SigLoop，也不替 Agent 选择 target、feature 或模型。
 - **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划，生成 review 状态并锁住 Algo。
 - **完成**：`sig/main.parquet` 只包含 key 和下游需要的 signal columns；已实现的未来值叫 label，保存在 `sig/context/label.parquet`；target/horizon 只表达研究要预测哪个 label。
-- **完成**：固定标的 case 可由 `build_algo_input(data, signals)` 生成 `sig/algo_input.parquet`；当前 SK Hynix case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
+- **完成**：固定标的 case 由 `build_main_table(data, signals)` 直接生成 `sig/main.parquet`；当前 SK Hynix case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal，Algo 只读取这张正式阶段表。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
+- **决定**：同一 Sig 表可以保存多个独立策略候选 signal；signal 是价差预测值，不是单腿仓位。当前 fast/slow 各自进入一个 Algo 策略候选，每个 Algo 再把标量 signal 映射为两腿对冲仓位。若要合并，组合规则和组合后的 signal 必须先回到 Sig 中评价。
 - **完成**：`sig/research/candidates.parquet` 保存全部 candidate；`screening.parquet` 保存分 sample 的 feature-target 证据；`disposition.parquet` 覆盖每个 feature；`lineage.json` 覆盖每个 candidate 和 final signal；其他 research 表保存相关簇和冗余证据。
 - **完成**：`sig/selection.json` 保存本轮候选、物化 signal、horizon、决策原则和是否自动筛选。
 - **完成**：`sig/recipe.json` 保存 builder 声明的规则、组合和 target 生成语义。

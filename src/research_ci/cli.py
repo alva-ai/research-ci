@@ -31,10 +31,10 @@ from .eval import (
 from .eval.baseline import (
     feature_output_shape,
     sidecar_output_shape,
-    signal_algo_input_shape,
     signal_disposition_coverage,
     signal_feature_universe,
     signal_lineage_coverage,
+    signal_main_output_shape,
     signal_screening_artifact_coverage,
     signal_screening_plan_coverage,
 )
@@ -617,15 +617,15 @@ def _sig_run(
                 "signal plan must expose a LibrarySelection as LIBRARY_SELECTION"
             )
         keys = declaration.keys
-        expected_main = (*keys, *declaration.signals)
-        missing_main = sorted(set(expected_main) - set(bundle.main.columns))
-        extra_main = sorted(set(bundle.main.columns) - set(expected_main))
+        expected_signal_columns = (*keys, *declaration.signals)
+        missing_main = sorted(set(expected_signal_columns) - set(bundle.main.columns))
+        extra_main = sorted(set(bundle.main.columns) - set(expected_signal_columns))
         if missing_main or extra_main:
             raise ValueError(
-                "signal main table must contain exactly declared keys and signals; "
+                "SignalBundle.main must contain exactly declared keys and signals; "
                 f"missing={missing_main}, extra={extra_main}"
             )
-        signal_table = bundle.main.select(expected_main)
+        signal_table = bundle.main.select(expected_signal_columns)
         expected_candidates = (*keys, *declaration.candidates)
         missing_candidates = sorted(
             set(expected_candidates) - set(bundle.candidates.columns)
@@ -646,9 +646,10 @@ def _sig_run(
             raise ValueError(
                 f"approved Feat table is missing Sig inputs: {missing_features}"
             )
-        algo_input = _build_algo_input(
+        data_path = out / "data" / "main.parquet"
+        main_table = _build_signal_main(
             builder,
-            out / "data" / "main.parquet",
+            data_path,
             signal_table,
         )
 
@@ -781,34 +782,30 @@ def _sig_run(
                     execution_mode="polars_join_group",
                 )
             )
-        if algo_input is not None:
-            baseline_rules.append(
-                EvalSpec(
-                    "engine.baseline.signal_algo_input_shape",
-                    runner=lambda _: signal_algo_input_shape(
-                        signal_table,
-                        algo_input,
-                        keys,
-                        declaration.signals,
-                    ),
-                    failure_policy="stop",
-                    description=(
-                        "preserve one wide row per signal key with named instrument "
-                        "and price columns"
-                    ),
-                    execution_mode="polars_join_group",
-                )
+        baseline_rules.append(
+            EvalSpec(
+                "engine.baseline.signal_main_output_shape",
+                runner=lambda _: signal_main_output_shape(
+                    signal_table,
+                    main_table,
+                    keys,
+                    declaration.signals,
+                ),
+                failure_policy="stop",
+                description=(
+                    "write the direct Algo input as one wide row per signal key "
+                    "with named instrument and price columns"
+                ),
+                execution_mode="polars_join_group",
             )
+        )
         plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
         result = run_eval_plan(evaluation_table, plan, context)
 
         out_sig = out / "sig"
         out_sig.mkdir(parents=True, exist_ok=True)
-        signal_table.write_parquet(out_sig / "main.parquet")
-        algo_input_path: Path | None = None
-        if algo_input is not None:
-            algo_input_path = out_sig / "algo_input.parquet"
-            algo_input.write_parquet(algo_input_path)
+        main_table.write_parquet(out_sig / "main.parquet")
+        (out_sig / "algo_input.parquet").unlink(missing_ok=True)
         research_dir = out_sig / "research"
         research_dir.mkdir(parents=True, exist_ok=True)
         candidate_table.write_parquet(research_dir / "candidates.parquet")
@@ -886,12 +883,13 @@ def _sig_run(
         )
         result_status = _result_status(result)
         card, card_identifier = sig_card(
-            signal_table,
+            main_table,
             result,
             dict(bundle.metadata),
             input_rows=feature_table.height,
             evaluation_columns=tuple(evaluation_table.columns),
             keys=keys,
+            signals=declaration.signals,
             sidecars=tuple(sorted(context.tables)),
             candidates=declaration.candidates,
             dispositions=disposition_table,
@@ -911,11 +909,12 @@ def _sig_run(
                     "status": result_status,
                     "workflow_state": state["stages"]["sig"],
                     "card_id": card_identifier,
-                    "input_table": str(feature_path),
+                    "input_tables": {
+                        "data": str(data_path),
+                        "feat": str(feature_path),
+                    },
                     "main_table": str(out_sig / "main.parquet"),
-                    "algo_input": (
-                        str(algo_input_path) if algo_input_path is not None else None
-                    ),
+                    "main_layout": "wide",
                     "recipe": str(out_sig / "recipe.json"),
                     "selection": str(out_sig / "selection.json"),
                     "eval_report": str(out_sig / "eval" / "report.jsonl"),
@@ -923,8 +922,8 @@ def _sig_run(
                     "context_tables": sorted(context.tables),
                     "research": research_manifest,
                     "artifacts": artifact_manifest,
-                    "rows": signal_table.height,
-                    "columns": signal_table.columns,
+                    "rows": main_table.height,
+                    "columns": main_table.columns,
                     "keys": keys,
                     "signals": declaration.signals,
                     "candidates": declaration.candidates,
@@ -1054,26 +1053,28 @@ def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
     )
 
 
-def _build_algo_input(
+def _build_signal_main(
     module: ModuleType,
     data_path: Path,
     signal_table: pl.DataFrame,
-) -> pl.DataFrame | None:
-    """Run an optional case-owned wide handoff builder for the Algo stage."""
+) -> pl.DataFrame:
+    """Build the case-owned Sig main table consumed directly by Algo."""
 
-    builder = getattr(module, "build_algo_input", None)
+    builder = getattr(module, "build_main_table", None)
     if builder is None:
-        return None
+        raise TypeError(
+            "signal builder must define build_main_table(data, signals)"
+        )
     data_table = pl.read_parquet(data_path)
     data_before = data_table.clone()
     signal_before = signal_table.clone()
     result = builder(data_table, signal_table)
     if not isinstance(result, pl.DataFrame):
         raise TypeError(
-            "build_algo_input(data, signals) must return a Polars DataFrame"
+            "build_main_table(data, signals) must return a Polars DataFrame"
         )
     if not data_table.equals(data_before) or not signal_table.equals(signal_before):
-        raise ValueError("build_algo_input modified an input DataFrame")
+        raise ValueError("build_main_table modified an input DataFrame")
     return result
 
 
