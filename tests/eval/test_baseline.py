@@ -15,9 +15,7 @@ from research_ci.kit import FeatureDisposition, SignalLineage
 
 
 def test_signal_main_output_shape_requires_one_wide_row_per_time() -> None:
-    signals = pl.DataFrame(
-        {"event_time": [1, 2], "signal": [0.5, -0.25]}
-    )
+    signals = pl.DataFrame({"event_time": [1, 2], "signal": [0.5, -0.25]})
     wide = pl.DataFrame(
         {
             "event_time": [1, 2],
@@ -109,9 +107,7 @@ def test_sidecar_output_shape_requires_an_exact_unique_key_grid() -> None:
 
 
 def test_signal_research_protocol_requires_the_complete_feature_universe() -> None:
-    features = pl.DataFrame(
-        {"event_time": [1, 2], "x": [1.0, 2.0], "y": [3.0, 4.0]}
-    )
+    features = pl.DataFrame({"event_time": [1, 2], "x": [1.0, 2.0], "y": [3.0, 4.0]})
     declaration = SignalSet(
         keys=("event_time",),
         features=("x", "y"),
@@ -145,42 +141,60 @@ def test_signal_research_protocol_requires_the_complete_feature_universe() -> No
         }
     )
 
-    assert signal_feature_universe(
-        features, ("event_time",), declaration.features
-    ).status == "passed"
-    assert signal_feature_universe(
-        features,
-        ("event_time",),
-        (feature for feature in ("x", "y")),
-    ).status == "passed"
-    assert signal_feature_universe(
-        features, ("event_time",), ("x",)
-    ).details["reason_code"] == "INCOMPLETE_FEATURE_UNIVERSE"
-    assert signal_screening_plan_coverage(
-        declaration, complete_selection
-    ).status == "passed"
-    assert signal_screening_plan_coverage(
-        declaration, incomplete_selection
-    ).details["reason_code"] == "INCOMPLETE_TARGET_SCREENING"
-    assert signal_screening_artifact_coverage(
-        screening, declaration.features, declaration.targets
-    ).status == "passed"
-    assert signal_screening_artifact_coverage(
-        screening.filter(pl.col("feature") == "x"),
-        declaration.features,
-        declaration.targets,
-    ).details["reason_code"] == "INCOMPLETE_SCREENING_ARTIFACT"
-    assert signal_screening_artifact_coverage(
-        None,
-        declaration.features,
-        {},
-    ).status == "passed"
+    assert (
+        signal_feature_universe(features, ("event_time",), declaration.features).status
+        == "passed"
+    )
+    assert (
+        signal_feature_universe(
+            features,
+            ("event_time",),
+            (feature for feature in ("x", "y")),
+        ).status
+        == "passed"
+    )
+    assert (
+        signal_feature_universe(features, ("event_time",), ("x",)).details[
+            "reason_code"
+        ]
+        == "INCOMPLETE_FEATURE_UNIVERSE"
+    )
+    assert (
+        signal_screening_plan_coverage(declaration, complete_selection).status
+        == "passed"
+    )
+    assert (
+        signal_screening_plan_coverage(declaration, incomplete_selection).details[
+            "reason_code"
+        ]
+        == "INCOMPLETE_TARGET_SCREENING"
+    )
+    assert (
+        signal_screening_artifact_coverage(
+            screening, declaration.features, declaration.targets
+        ).status
+        == "passed"
+    )
+    assert (
+        signal_screening_artifact_coverage(
+            screening.filter(pl.col("feature") == "x"),
+            declaration.features,
+            declaration.targets,
+        ).details["reason_code"]
+        == "INCOMPLETE_SCREENING_ARTIFACT"
+    )
+    assert (
+        signal_screening_artifact_coverage(
+            None,
+            declaration.features,
+            {},
+        ).status
+        == "passed"
+    )
 
 
 def test_signal_research_protocol_requires_disposition_and_lineage() -> None:
-    features = pl.DataFrame(
-        {"event_time": [1, 2], "x": [1.0, 2.0], "y": [3.0, 4.0]}
-    )
+    features = pl.DataFrame({"event_time": [1, 2], "x": [1.0, 2.0], "y": [3.0, 4.0]})
     dispositions = (
         FeatureDisposition(
             feature="x",
@@ -253,9 +267,12 @@ def test_signal_research_protocol_requires_disposition_and_lineage() -> None:
         ("candidate", "signal"),
     )
     assert unconnected_disposition.details["selected_without_outputs"] == ["x"]
-    assert signal_lineage_coverage(
-        ("x", "y"),
-        ("candidate",),
-        ("signal",),
-        lineage[:1],
-    ).details["reason_code"] == "INCOMPLETE_SIGNAL_LINEAGE"
+    assert (
+        signal_lineage_coverage(
+            ("x", "y"),
+            ("candidate",),
+            ("signal",),
+            lineage[:1],
+        ).details["reason_code"]
+        == "INCOMPLETE_SIGNAL_LINEAGE"
+    )

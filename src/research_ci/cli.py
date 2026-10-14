@@ -1293,9 +1293,7 @@ def _build_algo(module: ModuleType, table: pl.DataFrame) -> AlgoBundle:
         if builder is not None:
             result = builder(table)
             if not isinstance(result, AlgoBundle):
-                raise TypeError(
-                    "algo builder must return a research_ci.kit.AlgoBundle"
-                )
+                raise TypeError("algo builder must return a research_ci.kit.AlgoBundle")
             return result
     raise AttributeError("algo builder must define build_algo(table) or build(table)")
 

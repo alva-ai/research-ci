@@ -162,9 +162,7 @@ def test_sig_helpers_keep_targets_sidecars_and_time_splits_explicit() -> None:
     )
     bundle = SignalBundle(
         main=main,
-        candidates=feature_table.select(
-            "event_time", pl.col("x").alias("candidate")
-        ),
+        candidates=feature_table.select("event_time", pl.col("x").alias("candidate")),
         dispositions=(
             FeatureDisposition(
                 feature="x",

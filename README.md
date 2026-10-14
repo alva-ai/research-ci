@@ -168,9 +168,9 @@ from research_ci.kit.feat import apply_layers, difference, rolling_zscore_rows
 
 FEATURE_LAYERS = (
     (
-        rolling_zscore_rows(
-            pl.col("spread"), window_size=24, min_samples=24
-        ).alias("spread_z_24h"),
+        rolling_zscore_rows(pl.col("spread"), window_size=24, min_samples=24).alias(
+            "spread_z_24h"
+        ),
         difference(pl.col("spread"), periods=6).alias("spread_change_6h"),
     ),
 )
