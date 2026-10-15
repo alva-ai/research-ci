@@ -107,7 +107,11 @@ research-ci-lab/
   .rci/runs/<run>/workflow.json
                   stage states and approvals
   .rci/runs/<run>/<stage>/
-                  stage Card, main table, and sidecar evidence
+    attempts/<id>/ Agent-owned iterations; never a downstream input
+    main.parquet   submitted artifact; readable downstream only after approval
+    card.md        submitted review Card
+    candidate.json selected attempt and recommendation
+                  plus stage-specific sidecar evidence
 ```
 
 The Engine library is organized by methodology rather than by stage. For
@@ -178,9 +182,12 @@ FEATURE_LAYERS = (
 feature_table = apply_layers(data_table, FEATURE_LAYERS)
 ```
 
-The run directory is the handoff boundary. A stage writes its Card and
-evidence, moves to `review`, and waits for an explicit human or agent approval.
-The next stage remains locked until that approval is recorded.
+The run directory is the handoff boundary. `rci <stage> run` writes a numbered
+attempt and leaves the stage `ready`, so an Agent can diagnose, revise, and run
+again without interrupting a person. `rci <stage> submit` selects one valid
+attempt, publishes its formal artifacts, records the Agent's recommendation,
+and moves the stage to `review`. The next stage remains locked until a reviewer
+accepts the Card with a `continue` decision.
 
 The Engine always contributes the general baseline floor. A lab may add
 stage-specific baseline rules, but an empty external `baseline` tuple is valid;
@@ -210,7 +217,19 @@ hypothesis. `EvalContext` carries named label Parquet sidecars without
 modifying the main table. The Engine never infers a target or horizon from
 column names.
 
-Every Data and Feat Card now separates two questions:
+Every stage has one workflow state and a submitted Card has one Agent
+recommendation:
+
+- workflow state: `locked`, `ready`, `review`, `approved`, `stopped`, or
+  `disabled`;
+- recommendation: `continue`, `stop`, or `uncertain`.
+
+Attempts separately report whether mandatory checks are `valid` or `invalid`.
+Draft Cards therefore use `workflow_state: ready` with
+`artifact_role: attempt`; submitted Cards use `workflow_state: review` with
+`artifact_role: candidate`. An invalid attempt cannot be submitted. Detailed
+assessments still separate
+two evidence questions:
 
 - `execution_status`: did the requested checks run and did any stop-policy
   correctness rule halt the stage?
@@ -310,48 +329,62 @@ The command line entry point is `rci`:
 ```text
 rci contract check path/to/contract.py
 rci contract derive path/to/contract.py --out .rci/runs/001
-rci approve --stage contract --out .rci/runs/001 --by agent --card <card_id>
+rci approve --stage contract --out .rci/runs/001 --by human \
+  --decision continue --card <card_id>
 rci dataloop run --contract path/to/contract.py --builder path/to/data.py \
   --plan path/to/evals/data.py --out .rci/runs/001
-rci approve --stage data --out .rci/runs/001 --by human --card <card_id>
+rci data submit --out .rci/runs/001 --attempt 0001 --recommendation continue
+rci approve --stage data --out .rci/runs/001 --by human \
+  --decision continue --card <card_id>
 rci feat run --builder path/to/feat.py --plan path/to/evals/feat.py \
   --out .rci/runs/001
-rci approve --stage feat --out .rci/runs/001 --by agent --card <card_id>
+rci feat submit --out .rci/runs/001 --attempt 0001 --recommendation continue
+rci approve --stage feat --out .rci/runs/001 --by human \
+  --decision continue --card <card_id>
 rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
   --out .rci/runs/001
-rci approve --stage sig --out .rci/runs/001 --by human --card <card_id>
+rci sig submit --out .rci/runs/001 --attempt 0001 --recommendation uncertain
+rci approve --stage sig --out .rci/runs/001 --by human \
+  --decision continue --card <card_id>
 rci algo run --builder path/to/algo.py --plan path/to/evals/algo.py \
   --backtester path/to/backtest.py --out .rci/runs/001
+rci algo submit --out .rci/runs/001 --attempt 0001 --recommendation stop
+rci approve --stage algo --out .rci/runs/001 --by human \
+  --decision stop --card <card_id>
+rci next --out .rci/runs/001 --json
+rci guide --stage sig
 rci visualize --stage sig --renderer path/to/visualize.py --out .rci/runs/001
 rci status --out .rci/runs/001
 rci eval run --stage data --table data.parquet --plan evals/data.py --out .rci/runs/001
 ```
 
-`rci contract derive` writes the Contract card. `rci dataloop run` then reads
-that approved boundary and writes the Data main table, the external
-exploration summary, the optional declared recipe, the four-slot eval report,
-and a Data result card. It stops after Data so a person can review the result
-before Feat begins.
+`rci contract derive` writes the Contract Card. After approval,
+`rci dataloop run` writes the Data table, exploration summary, recipe,
+four-slot report, and
+draft Card under `data/attempts/<id>/`. A hard-check failure remains an invalid
+attempt in `ready`; it cannot reach review. A valid attempt becomes the formal
+Data candidate only through `rci data submit`.
 
 `rci feat run` reads only the approved `data/main.parquet`, calls the external
-`build_features(table)` or `build(table)`, and writes:
+`build_features(table)` or `build(table)`, and first writes:
 
 ```text
-feat/main.parquet
-feat/exploration.json
-feat/recipe.json
-feat/eval/report.jsonl
-feat/card.md
-feat/manifest.json
+feat/attempts/<id>/main.parquet
+feat/attempts/<id>/exploration.json
+feat/attempts/<id>/recipe.json
+feat/attempts/<id>/eval/report.jsonl
+feat/attempts/<id>/card.md
+feat/attempts/<id>/manifest.json
 ```
 
 The Engine verifies that the feature output preserves the Data key grid and
 that the builder did not modify its input. Warm-up nulls remain visible to the
 general missing-value baseline and can be reviewed without being written back
 as eval columns. Feat evaluates correctness, coverage, structure, redundancy,
-and stability. It leaves target-aware screening to Sig. Feat remains in
-`review` until its active Card is approved, so Sig stays locked while an agent
-edits and reruns the feature builder or plan.
+and stability. It leaves target-aware screening to Sig. Feat remains `ready`
+while the Agent edits and reruns its builder or plan. Submission moves one
+valid attempt to `review`; the stage cannot run again until the reviewer either
+rejects it back to `ready` or accepts it.
 
 ## Sig handoff
 

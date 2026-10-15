@@ -1,6 +1,6 @@
 # Research CI design and requirements
 
-> **Status, 2026-10-14:** the MVP path from Contract through Algo is
+> **Status, 2026-10-15:** the MVP path from Contract through Algo is
 > implemented and has been exercised on the SK Hynix/SKHY proxy-spread case.
 > Seal, forward validation, a tamper-evident ledger, and a built-in backtester
 > are planned. This document states the product requirements and stage
@@ -8,11 +8,11 @@
 > [TODO.md](../TODO.md) is the implementation ledger, and
 > [research-ci-viz-en.html](research-ci-viz-en.html) is the visual version.
 
-Research CI keeps its strongest product idea: an external research
-agent may explore freely, while a small deterministic engine owns stage order,
-output contracts, reusable checks, evidence records, and review gates. Alpha
-CI deliberately starts with a smaller contract and no universal statistical
-verdict. The research target, labels, feature selection, signal recipe, and
+Research CI keeps its strongest product idea: an external research agent may
+explore freely, while a small deterministic engine owns stage order, output
+contracts, reusable checks, evidence records, and review gates. This
+implementation deliberately starts with a smaller contract and no universal
+statistical verdict. The research target, labels, feature selection, signal recipe, and
 portfolio logic become explicit at the stage where they can be understood.
 
 ## Contents
@@ -187,15 +187,19 @@ the declared builder result and the four-slot plan.
 
 ```mermaid
 flowchart LR
-    C[Contract Card] -->|approve| D[Data loop]
-    D --> DC[Data Card]
-    DC -->|approve| F[Feat loop]
-    F --> FC[Feat Card]
-    FC -->|approve| S[Sig loop]
-    S --> SC[Sig Card]
-    SC -->|approve| A[Algo loop]
-    A --> AC[Algo Card]
+    C[Contract review] -->|approve continue| D[Data ready]
+    D -->|run one or more attempts| DA[Data attempts]
+    DA -->|submit one valid attempt| DC[Data review]
+    DC -->|reject| D
+    DC -->|approve continue| F[Feat ready]
+    DC -->|approve stop| X[Stopped]
+    F --> S[Sig ready]
+    S --> A[Algo ready]
 ```
+
+Feat, Sig, and Algo use the same `ready -> attempts -> review` protocol shown
+for Data. The short arrows between those stages mean that the submitted Card
+was approved with `continue`, not that a stage run approved itself.
 
 Every enabled stage is in one of these states:
 
@@ -203,17 +207,27 @@ Every enabled stage is in one of these states:
 | --- | --- |
 | `locked` | An earlier enabled stage has not been approved. |
 | `ready` | The upstream artifact is approved and the Agent may run this stage. |
-| `review` | A new Card exists; the workflow stops for review. |
-| `passed` | The active Card was explicitly approved. |
+| `review` | One valid attempt was submitted as the formal candidate; only a reviewer may act. |
+| `approved` | The submitted Card was explicitly approved with `continue`. |
+| `stopped` | The submitted Card was explicitly approved with `stop`; the workflow ends without advancing. |
 | `disabled` | The Contract omitted this stage. |
 
-The Agent may rerun a stage in `review` after changing its builder or eval
-plan. That produces a new Card ID. The old approval cannot approve the new
-Card accidentally.
+Attempt validity is not a workflow state. A failed mandatory check marks that
+attempt `invalid`, leaves the stage `ready`, and prevents submission. A valid
+attempt also leaves the stage `ready`, so the Agent may inspect it, improve the
+Lab, and run again. Only `submit` chooses one valid attempt and moves the stage
+to `review`. Cards expose these as separate fields: `workflow_state` remains
+one of the six states above, while `artifact_role` is `attempt` or `candidate`.
 
-The workflow does not assume who drives it. A person, an agent, or a future
-orchestrator can call the same CLI. `rci status` and `rci next` expose the
-current legal action.
+In `review`, the reviewer may approve with `continue`, approve with `stop`, or
+reject with a reason. Rejection returns the stage to `ready`; the Agent must
+produce a new attempt before resubmitting. Reopening an approved or stopped
+stage is an explicit human action and locks every downstream stage again.
+
+The workflow does not assume which Agent implementation drives it. The CLI is
+the authority for legal transitions: a skipped or out-of-order command is
+refused with an error code and the exact next legal actor, command, and reason.
+`rci next --json` exposes the same instruction for an orchestrator.
 
 ## The common stage protocol
 
@@ -221,14 +235,18 @@ current legal action.
 
 Each stage after Contract follows the same outer protocol:
 
-1. Read the approved upstream `main.parquet`.
-2. Execute an external Lab builder without allowing it to mutate the input.
-3. Validate the builder result against a stage declaration.
-4. Build the external Agent's selected library plan and case rules.
-5. Run four slots against the formal table and explicit sidecars.
-6. Save the main table, research artifacts, eval report, assessment, Card, and
-   manifest.
-7. Stop in `review`.
+1. Refuse the run unless the stage is exactly `ready`.
+2. Read the approved upstream `main.parquet`.
+3. Execute an external Lab builder without allowing it to mutate the input.
+4. Validate the builder result against a stage declaration.
+5. Build the external Agent's selected library plan and case rules.
+6. Run four slots against the formal table and explicit sidecars.
+7. Save an immutable numbered attempt containing the main table, research
+   artifacts, eval report, assessment, Card, and manifest.
+8. Record the attempt as `valid` or `invalid` while the stage remains `ready`.
+9. Submit one valid attempt to publish it as the formal candidate and enter
+   `review`.
+10. Wait for explicit approval or rejection before any downstream work.
 
 ### The four slots
 
@@ -277,22 +295,35 @@ selection reason, status, metrics, findings, and reason code.
 
 ### Common runtime layout
 
-Each stage writes under `.rci/runs/<run>/<stage>/`:
+Data, Feat, Sig, and Algo first write under a numbered attempt directory. A
+valid submitted attempt is then published at the stage root:
 
 ```text
-main.parquet
+attempts/
+  0001/
+    main.parquet
+    recipe.json
+    artifacts/
+    eval/report.jsonl
+    eval/assessment.json
+    card.md
+    manifest.json
+main.parquet            submitted candidate only
 recipe.json
 artifacts/
 eval/report.jsonl
 eval/assessment.json
-card.md
+card.md                 review Card with Agent recommendation
 manifest.json
-plots/                 optional and generated only on request
+candidate.json          submitted attempt and Card identity
+approved.json           created only after explicit approval
+plots/                  optional and generated only on request
 ```
 
 Stage-specific research tables remain next to these common artifacts. The
-manifest is the index; the Card is the review entry point; Parquet and JSONL
-hold the complete evidence.
+attempt history remains available after submission. The manifest is the
+index; the Card is the review entry point; Parquet and JSONL hold the complete
+evidence.
 
 ## Contract
 
@@ -603,22 +634,37 @@ reviewed. It is not a live-trading authorization.
 
 ## Review and approval
 
-Every Card has a stable ID derived from its rendered body. Approval records:
+Every submitted Card has a stable ID derived from its rendered body and one
+Agent recommendation: `continue`, `stop`, or `uncertain`. The recommendation
+is a concise handoff to the reviewer, not a transition and not another eval
+verdict.
+
+Approval records:
 
 - stage;
 - Card ID;
 - `human` or `agent` source;
+- decision: `continue` or `stop`;
 - timestamp;
 - review message.
 
 Cards summarize evidence without discarding the full report. A Card separates
-execution status from research disposition: a stage may execute correctly and
-still be incomplete, weak, unstable, costly, or otherwise require review.
+workflow state from eval evidence: a stage can have a valid attempt while its
+research evidence is weak, unstable, costly, or otherwise unsuitable to
+continue. Those findings inform the recommendation and review decision; they
+do not create more workflow states.
 
 Approvals are explicit CLI actions. Research CI never treats file creation or a
-successful process exit as approval. A user may explicitly authorize automatic
-approval for a particular stage or run; that policy belongs to the driver, not
-the Engine's default behavior.
+successful process exit as approval. `approve --decision continue` unlocks the
+next enabled stage. `approve --decision stop` records an intentional no-go and
+ends the workflow. `reject --message ...` returns the current stage to `ready`
+and requires a new attempt; it does not mutate the submitted attempt.
+
+`rci next` is the single recovery and orchestration interface. It identifies
+whether the Agent or reviewer owns the next action and emits a concrete legal
+command. A command that tries to skip approval, run while in review, submit an
+invalid attempt, approve the wrong Card, or reuse a rejected attempt is
+refused before downstream work begins.
 
 Optional visualizations are generated by an external case renderer after a
 stage run. They are review aids, not a fifth eval slot or a pass condition.
@@ -628,6 +674,11 @@ stage run. They are review aids, not a fifth eval slot or a pass condition.
 The MVP currently guarantees:
 
 - Contract stage order and explicit review gates;
+- one small workflow state machine: `locked`, `ready`, `review`, `approved`,
+  `stopped`, and `disabled`;
+- append-only numbered attempts separated from the submitted candidate;
+- invalid attempts cannot be submitted and rejected attempts cannot be reused;
+- structured refusals with the next legal actor, command, and reason;
 - only approved upstream main tables enter downstream stage runners;
 - external builders cannot mutate input DataFrames;
 - stage declarations and exact formal schemas;
@@ -666,6 +717,7 @@ the Contract prematurely:
 8. Multiple-testing, effective sample size, block/bootstrap, and nested
    walk-forward methods in the Sig library.
 
-Research CI remains useful prior art for stronger custody, calibration, null
-worlds, freezes, and ledgers. Research CI should adopt those mechanisms only when
-they fit this stage-table model and can be demonstrated by real cases.
+Earlier designs remain useful prior art for stronger custody, calibration,
+null worlds, freezes, and ledgers. The current implementation should adopt
+those mechanisms only when they fit this stage-table model and can be
+demonstrated by real cases.

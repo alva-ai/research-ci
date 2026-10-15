@@ -47,7 +47,7 @@
 - **完成**：当前已建立 `quality`、`structure`、`association` 三个最小方法族，并为方法声明适用 stage 和输入形状。
 - **完成**：方法库已按方法论扩展为 quality、structure、association、information 和 stability；包含 coverage、dispersion、PCA、VIF、互信息、IC、ICIR、累计 IC、分桶、序列稳定性和分布漂移等可复用诊断。
 - **决定**：`research-ci-lab/lab/<case>/` 由外部 Agent 自由维护 Contract、raw、Data builder、阶段 eval 和探索文件。
-- **决定**：`research-ci-lab/.rci/runs/<run>/` 是运行交接边界，按 `contract/`、`data/`、后续阶段目录保存 Card、主表和 sidecar 证据，并保存 `workflow.json`。
+- **决定**：`research-ci-lab/.rci/runs/<run>/` 是运行交接边界；Data、Feat、Sig、Algo 先把每次自主探索写入 `<stage>/attempts/<id>/`，只有提交的有效 attempt 才发布到阶段根目录，并保存 `workflow.json`。
 - **决定**：Card 是给人和 Agent review 的可读入口，Parquet、JSONL 和 manifest 是可追溯证据；主表和 eval sidecar 分开保存。
 - **完成**：当前最小目录已按上述边界实现，CLI 不要求把外部 case 复制进 Engine。
 
@@ -58,6 +58,19 @@
 - **决定**：Sig = 对未来或相对机会的预测、排序、方向和强度，以及形成这些输出所需的目标相关筛选与组合。
 - **决定**：Algo = 根据 signal 做资金分配、风险约束和执行。
 - **决定**：同一个 feature 可以服务多个 signal；同一个 signal 也可以被多个 algo 消费。阶段产物不能通过原地修改上游主表来隐式耦合。
+
+### 0.3 CLI 驱动与审核状态机
+
+- **完成**：workflow 只使用 `locked`、`ready`、`review`、`approved`、`stopped`、`disabled` 六个状态；attempt 的 `valid`/`invalid` 是执行结果，不再伪装成 workflow 状态。
+- **完成**：Card 将 `workflow_state` 与 `artifact_role` 分开；draft 为 `ready + attempt`，提交后为 `review + candidate`。
+- **完成**：`rci <stage> run` 只允许在 `ready` 执行，每次追加一个编号 attempt，运行结束后仍保持 `ready`，Agent 可以自行检查、修改并继续运行。
+- **完成**：只有已登记且 `valid` 的 attempt 可以 `submit`；提交后才把正式产物发布到阶段根目录并进入 `review`，`invalid` 或已被 reject 的 attempt 会被 CLI 拒绝。
+- **完成**：提交时 Agent 必须给出 `continue`、`stop` 或 `uncertain` recommendation；它只进入 Card 供审核，不直接改变 workflow。
+- **完成**：reviewer 可以 `approve --decision continue`、`approve --decision stop` 或带原因 `reject`；continue 解锁下一阶段，stop 形成明确 no-go，reject 返回 `ready` 并要求新 attempt。
+- **完成**：只有 human 可以显式 `reopen` 已批准或已停止的阶段；reopen 会把该阶段恢复为 `ready` 并重新锁住全部下游阶段。
+- **完成**：CLI 对跳过审批、顺序错误、review 中重跑、错误 Card、无效提交和复用被拒 attempt 给出稳定 refusal code，并返回 next legal actor、command 和 reason；`rci next --json` 可供外部 Agent/编排器直接消费。
+- **完成**：`rci guide --stage <stage>` 提供该阶段的目标、正式输入输出、可选 Kit 和不可跨越的职责边界，减少 Agent 把 Feat、Sig、Algo 方法放错阶段。
+- **完成**：attempt 编号同时检查 workflow 记录和已有磁盘目录；builder 中断留下的半成品目录不会被下一次运行覆盖。
 
 ## 1. Contract
 
@@ -159,7 +172,7 @@
 ### 3.3 Eval 生命周期
 
 - **决定**：Eval 结果至少区分 `passed`、`failed`、`error` 和显式 `not_applicable`；不能用没有列或空值表示没有执行。
-- **待讨论**：声明、执行、失败、处理、重跑和冻结的状态机。
+- **完成**：阶段 workflow 与 eval 执行状态已经分离；阶段 run/submit/review/reject/reopen 使用统一状态机，单条 eval 继续使用 `passed`、`failed`、`error`、`not_applicable`。
 - **待讨论**：`output_kind` 如何覆盖 `none`、`summary`、`metric`、`findings` 和完整证据。
 - **待讨论**：case eval 的输入是否只能来自当前阶段产物。
 - **待讨论**：eval 变更后如何使下游产物失效。
@@ -171,13 +184,13 @@
 ## 4. Data 阶段
 
 - **完成**：Agent builder 提供 `build_main_table()`（兼容 `build()`），可在 DataLoop 中执行。
-- **完成**：DataLoop 输出 `main.parquet`、`exploration.json`、`recipe.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`。
+- **完成**：DataLoop 先在编号 attempt 中输出 `main.parquet`、`exploration.json`、`recipe.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`；提交有效 attempt 后才发布为正式 Data candidate。
 - **决定**：Engine 在 Data 主表上运行外部 `EvalPlan`，不向 Data 主表加入 eval 列。
 - **完成**：当前 case 已经实际运行 baseline、library、case、case_eval 四个插槽。
 - **完成**：当前 case 将 candle close time 作为 OHLCV 的 `event_time`，保留 bar start；funding 只做 backward as-of join 并记录 age，避免把整根 K 线或未来 funding 提前可用。
 - **完成**：当前 Data case rules 验证 OHLC 包络、正价格、非负成交量/笔数、symbol、派生价差公式和 funding 可用时间；每条规则都有独立反例。
-- **完成**：Contract 和 Data 都会生成带稳定 `card_id` 的 Markdown Card；当前阶段必须由 human 或 agent 显式 approve，下一阶段才会解锁。
-- **完成**：每个 run 保存 `workflow.json`，记录阶段状态、Card、审批来源、时间和消息；重新生成上游 Card 会锁住下游阶段。
+- **完成**：Contract 和已提交的 Data candidate 都会生成带稳定 `card_id` 的 Markdown Card；当前阶段必须显式 approve continue，下一阶段才会解锁。
+- **完成**：每个 run 保存 `workflow.json`，记录阶段状态、attempt、candidate、recommendation、Card、审批/拒绝来源、决定、时间和消息；显式 reopen 上游阶段会锁住下游阶段。
 - **待讨论**：审批是否需要身份凭证、签名或外部 review 系统链接。
 - **待讨论**：数据问题的处理方式：标记、屏蔽、删除、拆分或要求人工处理。
 - **决定**：任何处理都生成新表版本，不原地修改冻结数据。
@@ -192,8 +205,8 @@
 - **决定**：Feat 的职责是生成可复用的 point-in-time feature，并完成与研究目标无关的结构筛选；它不负责决定某个 feature 对某个 target 是否有预测力。
 - **决定**：Feat 的 Engine baseline 只判断特征产物是否正确、可复现、可因果计算和可被下游读取；不因为某个特征的 IC 高低改变 correctness verdict。
 - **完成**：最小 Feat builder 接口为 `build_features(data_table)`（兼容 `build(data_table)`）返回一张 Polars 宽表，并通过 `FEATURE_KEYS` 声明 key；后续再扩展显式 evaluation context。
-- **完成**：FeatLoop 只读取当前 run 已批准的 `data/main.parquet`，输出 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json`。
-- **完成**：Feat 产物进入 `review` 后停止，必须明确 approve 才解锁 Sig；Agent 可以在 review 状态修改 builder/eval 并重跑。
+- **完成**：FeatLoop 只读取当前 run 已批准的 `data/main.parquet`，先把 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json` 写入编号 attempt；提交后才成为正式 candidate。
+- **完成**：Feat 在 `ready` 可以由 Agent 多次运行；提交一个有效 attempt 后进入 `review` 并禁止重跑，必须由 reviewer reject 回 `ready` 或 approve continue 解锁 Sig。
 - **完成**：当前 SK Hynix case 生成 88 个候选特征：五组基础状态、1h/6h/24h 变化、24h/72h/168h rolling mean/std/z-score、24h/168h median/IQR robust scale、tanh 有界变换，以及价差波动率和波动率缩放变化。
 - **决定**：Feat normalization 只使用截至当前行的因果滚动窗口，并要求完整 warm-up；不在全样本上 fit、不填充 warm-up null、不加隐藏 epsilon。需要 fitted scaler/PCA 时由 Sig 在时间隔离的 train/validation/test 或 walk-forward 内拟合。
 - **完成**：当前 case 用历史截断重算验证 Feat prefix 不受未来行影响；Data 行数 2321，Feat 保持同一 key grid 和 2321 行，不再因 `shift` 或 `drop_nulls` 缩成样例行数。
@@ -262,13 +275,13 @@
 6. 在统一 target 和评价口径下比较 candidate，再显式物化少量 final signal；Engine 不按单一分数自动晋升。
 7. 对 signal 做方向统一、归一化和必要的校准。
 8. 任何 fitted transform、PCA、权重或模型都使用时间隔离的 train/validation/test 或 walk-forward；选择与拟合只读取训练段，验证和测试只生成样本外证据。
-9. 运行 Sig 四槽，生成 Sig Card，冻结 recipe、selection、artifact 和 signal table，等待明确批准。
+9. 运行 Sig 四槽，把 recipe、selection、artifact、signal table 和 draft Card 写入编号 attempt；选定有效 attempt 提交后再等待明确审核。
 
 ### 6.2 Sig 产物
 
 - **完成**：`SignalSet` 显式声明 keys、完整 features、candidate columns、final signal columns、targets/horizons 或 targetless hypothesis 和 fit policy；targetless Sig 若没有 hypothesis 会被拒绝。
 - **完成**：最小 Sig Kit 已提供显式 forward target、简单 signal 组合、时间切分、`FeatureDisposition`、`SignalLineage` 和 `SignalBundle`；它不等同于 SigLoop，也不替 Agent 选择 target、feature 或模型。
-- **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划，生成 review 状态并锁住 Algo。
+- **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划并保存 attempt；`rci sig submit` 才发布正式 candidate、进入 `review` 并继续锁住 Algo。
 - **完成**：`sig/main.parquet` 只包含 key 和下游需要的 signal columns；已实现的未来值叫 label，保存在 `sig/context/label.parquet`；target/horizon 只表达研究要预测哪个 label。
 - **完成**：固定标的 case 由 `build_main_table(data, signals)` 直接生成 `sig/main.parquet`；当前 SK Hynix case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal，Algo 只读取这张正式阶段表。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
 - **决定**：同一 Sig 表可以保存多个独立策略候选 signal；signal 是价差预测值，不是单腿仓位。当前 fast/slow 各自进入一个 Algo 策略候选，每个 Algo 再把标量 signal 映射为两腿对冲仓位。若要合并，组合规则和组合后的 signal 必须先回到 Sig 中评价。
@@ -306,7 +319,7 @@
 - **决定**：Algo 只读取已批准的 signal 产物，把 signal value 转成 entry/exit、rebalance、position sizing、资产/资本权重和订单。
 - **决定**：止损、止盈、杠杆、gross/net exposure、风险预算、组合约束、成本、滑点、容量、执行和 PnL 属于 Algo。
 - **决定**：Sig 的组合权重用于形成预测分数；Algo 的组合权重用于分配资本。两者分别记录，不能共用一个含义不清的 `weight`。
-- **完成**：`rci algo run` 只读取已批准的 `sig/main.parquet`，执行外部 `AlgoBundle` builder、显式 `--backtester` 和 Algo 四槽，保存 `algo/main.parquet`、backtest timeseries/summary、Card、manifest 与 eval sidecar，并停在 review。
+- **完成**：`rci algo run` 只读取已批准的 `sig/main.parquet`，执行外部 `AlgoBundle` builder、显式 `--backtester` 和 Algo 四槽，并把主表、backtest、Card、manifest 与 eval sidecar 保存为 attempt；`rci algo submit` 才发布正式 candidate 并进入 review。
 - **完成**：Algo Engine baseline 验证 source price/signal 保真、key grid、价格正且有限、仓位有限、max absolute position、每策略 gross exposure、回测 key grid、return/equity/turnover 路径和 summary strategy coverage。
 - **完成**：Algo 通用库第一项 `library.economic.backtest_summary` 从外部回测时序重新计算 total return、annualized volatility、Sharpe、max drawdown 和 average turnover；它不负责产生 PnL。
 - **完成**：当前 SK Hynix Lab 将 fast/slow signal 各自映射成一套美元中性双腿权重；`tanh(signal / 2)` 限幅，总 gross 上限 1，回测延迟一根小时 bar，按双腿总换手收取 5 bps 成本。
@@ -314,7 +327,7 @@
 - **决定**：Algo 主表由 `AlgoSet.representation` 选择 `weights` 或 `trades`；当前 case 使用每个 `event_time` 一行的宽表 weights。逐笔 contract 可使用 trade keys 和独立 backtest keys。
 - **待实现**：Engine 默认回测器、默认交易成本/滑点模型和默认撮合器；在至少两个外部 backtester 验证接口前不固化默认经济语义。
 - **待实现**：资金费率、借券/融资、容量、market impact、停牌/交易时段和代理标的 basis 风险的通用接口；当前 case metadata 明确记录 funding 与 capacity 未纳入。
-- **后置**：Seal、Forward、重新打开阶段和最终证据规则。
+- **后置**：Seal、Forward 和最终证据规则。
 
 ## 8. Freeze、血缘和审计
 

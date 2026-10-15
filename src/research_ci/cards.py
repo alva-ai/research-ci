@@ -39,7 +39,10 @@ def contract_card(
             "Approve this card before the Data stage can run.",
             "",
             "`rci approve --stage contract --out <run> --by human|agent "
-            "--card <card_id>`",
+            "--decision continue|stop --card <card_id>`",
+            "",
+            "Or reject it with `rci reject --stage contract --out <run> "
+            "--by human|agent --message <reason> --card <card_id>`.",
         )
     )
     return render_card("\n".join(lines))
@@ -52,11 +55,13 @@ def data_card(
     *,
     result_status: str,
     workflow_state: str = "review",
+    artifact_role: str = "candidate",
 ) -> tuple[str, str]:
     """Render a Data card and return ``(markdown, card_id)``."""
 
     lines = ["# Data Card", "", f"- workflow_state: {workflow_state}"]
-    lines.append(f"- result: {result_status}")
+    lines.append(f"- artifact_role: {artifact_role}")
+    lines.append(f"- checks: {result_status}")
     lines.append(f"- rows: {table.height}")
     lines.append(f"- columns: {', '.join(table.columns)}")
     if "event_time" in table.columns and table.height:
@@ -81,19 +86,20 @@ def data_card(
             )
     lines.extend(("", "## Exploration", "", "```json"))
     lines.append(json.dumps(exploration, indent=2, sort_keys=True, default=str))
+    review_message, review_command = _review_prompt("data", artifact_role)
     lines.extend(
         (
             "```",
             "",
             "## Review",
             "",
-            "The main table and eval report are ready for review.",
+            review_message,
             "",
-            "`rci approve --stage data --out <run> --by human|agent --card <card_id>`",
+            review_command,
             "",
-            "main table: `data/main.parquet`",
-            "construction recipe: `data/recipe.json`",
-            "eval report: `data/eval/report.jsonl`",
+            "main table: `main.parquet` (relative to this Card)",
+            "construction recipe: `recipe.json`",
+            "eval report: `eval/report.jsonl`",
         )
     )
     return render_card("\n".join(lines))
@@ -108,12 +114,14 @@ def feat_card(
     keys: tuple[str, ...],
     result_status: str,
     workflow_state: str = "review",
+    artifact_role: str = "candidate",
 ) -> tuple[str, str]:
     """Render a Feat card and return ``(markdown, card_id)``."""
 
     feature_columns = [column for column in table.columns if column not in keys]
     lines = ["# Feat Card", "", f"- workflow_state: {workflow_state}"]
-    lines.append(f"- result: {result_status}")
+    lines.append(f"- artifact_role: {artifact_role}")
+    lines.append(f"- checks: {result_status}")
     lines.append(f"- input_rows: {input_rows}")
     lines.append(f"- output_rows: {table.height}")
     lines.append(f"- keys: {', '.join(keys) or '-'}")
@@ -138,19 +146,20 @@ def feat_card(
             )
     lines.extend(("", "## Exploration", "", "```json"))
     lines.append(json.dumps(exploration, indent=2, sort_keys=True, default=str))
+    review_message, review_command = _review_prompt("feat", artifact_role)
     lines.extend(
         (
             "```",
             "",
             "## Review",
             "",
-            "The feature table and eval report are ready for review.",
+            review_message,
             "",
-            "`rci approve --stage feat --out <run> --by human|agent --card <card_id>`",
+            review_command,
             "",
-            "feature table: `feat/main.parquet`",
-            "construction recipe: `feat/recipe.json`",
-            "eval report: `feat/eval/report.jsonl`",
+            "feature table: `main.parquet` (relative to this Card)",
+            "construction recipe: `recipe.json`",
+            "eval report: `eval/report.jsonl`",
         )
     )
     return render_card("\n".join(lines))
@@ -170,6 +179,7 @@ def sig_card(
     dispositions: pl.DataFrame,
     result_status: str,
     workflow_state: str = "review",
+    artifact_role: str = "candidate",
 ) -> tuple[str, str]:
     """Render a Sig card while keeping targets in named sidecars."""
 
@@ -178,7 +188,8 @@ def sig_card(
         column for column in table.columns if column not in {*keys, *signals}
     ]
     lines = ["# Sig Card", "", f"- workflow_state: {workflow_state}"]
-    lines.append(f"- result: {result_status}")
+    lines.append(f"- artifact_role: {artifact_role}")
+    lines.append(f"- checks: {result_status}")
     lines.append(f"- input_rows: {input_rows}")
     lines.append(f"- output_rows: {table.height}")
     lines.append(f"- keys: {', '.join(keys) or '-'}")
@@ -230,25 +241,25 @@ def sig_card(
     _append_compact_eval_summary(lines, result.records)
     lines.extend(("", "## Signal recipe metadata", "", "```json"))
     lines.append(json.dumps(metadata, indent=2, sort_keys=True, default=str))
+    review_message, review_command = _review_prompt("sig", artifact_role)
     lines.extend(
         (
             "```",
             "",
             "## Review",
             "",
-            "The signal table, label sidecars, selection, and eval evidence are "
-            "ready for review.",
+            review_message,
             "",
-            "`rci approve --stage sig --out <run> --by human|agent --card <card_id>`",
+            review_command,
             "",
-            "signal table: `sig/main.parquet`",
-            "candidate and screening tables: `sig/research/`",
-            "feature decisions: `sig/research/disposition.parquet`",
-            "signal lineage: `sig/research/lineage.json`",
-            "label sidecars: `sig/context/`",
-            "selection: `sig/selection.json`",
-            "construction recipe: `sig/recipe.json`",
-            "eval report: `sig/eval/report.jsonl`",
+            "signal table: `main.parquet` (relative to this Card)",
+            "candidate and screening tables: `research/`",
+            "feature decisions: `research/disposition.parquet`",
+            "signal lineage: `research/lineage.json`",
+            "label sidecars: `context/`",
+            "selection: `selection.json`",
+            "construction recipe: `recipe.json`",
+            "eval report: `eval/report.jsonl`",
         )
     )
     return render_card("\n".join(lines))
@@ -267,11 +278,13 @@ def algo_card(
     strategies: tuple[str, ...],
     result_status: str,
     workflow_state: str = "review",
+    artifact_role: str = "candidate",
 ) -> tuple[str, str]:
     """Render an Algo review card with external backtest evidence."""
 
     lines = ["# Algo Card", "", f"- workflow_state: {workflow_state}"]
-    lines.append(f"- result: {result_status}")
+    lines.append(f"- artifact_role: {artifact_role}")
+    lines.append(f"- checks: {result_status}")
     lines.append(f"- input_rows: {input_rows}")
     lines.append(f"- output_rows: {table.height}")
     lines.append(f"- representation: {representation}")
@@ -296,22 +309,22 @@ def algo_card(
     _append_compact_eval_summary(lines, result.records, stage="algo")
     lines.extend(("", "## Algo recipe metadata", "", "```json"))
     lines.append(json.dumps(metadata, indent=2, sort_keys=True, default=str))
+    review_message, review_command = _review_prompt("algo", artifact_role)
     lines.extend(
         (
             "```",
             "",
             "## Review",
             "",
-            "The positions, external backtest, and four-slot evidence are ready "
-            "for review.",
+            review_message,
             "",
-            "`rci approve --stage algo --out <run> --by human|agent --card <card_id>`",
+            review_command,
             "",
-            "position table: `algo/main.parquet`",
-            "backtest timeseries: `algo/backtest/timeseries.parquet`",
-            "backtest summary: `algo/backtest/summary.parquet`",
-            "construction recipe: `algo/recipe.json`",
-            "eval report: `algo/eval/report.jsonl`",
+            "position table: `main.parquet` (relative to this Card)",
+            "backtest timeseries: `backtest/timeseries.parquet`",
+            "backtest summary: `backtest/summary.parquet`",
+            "construction recipe: `recipe.json`",
+            "eval report: `eval/report.jsonl`",
         )
     )
     return render_card("\n".join(lines))
@@ -456,8 +469,8 @@ def _append_assessment(lines: list[str], result: Any) -> None:
             "",
             "## Assessment",
             "",
-            f"- execution_status: {assessment['execution_status']}",
-            f"- research_disposition: {assessment['research_disposition']}",
+            f"- eval_execution: {assessment['execution_status']}",
+            f"- evidence_summary: {assessment['research_disposition']}",
             f"- metric_count: {assessment['metric_count']}",
             "- reason_codes: " + (", ".join(assessment["reason_codes"]) or "-"),
             "- interpretation: execution describes whether the plan ran; "
@@ -467,6 +480,21 @@ def _append_assessment(lines: list[str], result: Any) -> None:
     for reason in assessment["reasons"]:
         affected = ", ".join(reason["records"])
         lines.append(f"- reason `{reason['code']}`: {affected}")
+
+
+def _review_prompt(stage: str, artifact_role: str) -> tuple[str, str]:
+    if artifact_role == "attempt":
+        return (
+            "This is an Agent attempt. Inspect it, run another attempt, or submit it "
+            "for review.",
+            f"`rci {stage} submit --out <run> --attempt <id> "
+            "--recommendation continue|stop|uncertain`",
+        )
+    return (
+        "The submitted artifact and eval evidence are ready for human review.",
+        f"`rci approve --stage {stage} --out <run> --by human|agent "
+        "--decision continue|stop --card <card_id>`",
+    )
 
 
 def _append_slot_contract(lines: list[str]) -> None:

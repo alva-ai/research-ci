@@ -29,7 +29,12 @@ def test_sig_cli_writes_clean_main_label_sidecar_and_review_card(tmp_path) -> No
 
     state = new_workflow(("data", "feat", "sig", "algo"), "contract-card")
     state["stages"].update(
-        {"contract": "passed", "data": "passed", "feat": "passed", "sig": "ready"}
+        {
+            "contract": "approved",
+            "data": "approved",
+            "feat": "approved",
+            "sig": "ready",
+        }
     )
     write_workflow(out, state)
 
@@ -171,6 +176,24 @@ def make_plan(table, stage="sig", context=None):
     )
 
     assert exit_code == 0
+    assert read_workflow(out)["stages"]["sig"] == "ready"
+    assert (out / "sig" / "attempts" / "0001" / "main.parquet").exists()
+    assert not (out / "sig" / "main.parquet").exists()
+
+    submit_exit = main(
+        [
+            "sig",
+            "submit",
+            "--out",
+            str(out),
+            "--attempt",
+            "0001",
+            "--recommendation",
+            "continue",
+        ]
+    )
+
+    assert submit_exit == 0
     main_table = pl.read_parquet(out / "sig" / "main.parquet")
     label = pl.read_parquet(out / "sig" / "context" / "label.parquet")
     assert main_table.columns == [
@@ -198,6 +221,8 @@ def make_plan(table, stage="sig", context=None):
     assert manifest["main_table"] == str(out / "sig" / "main.parquet")
     assert manifest["main_layout"] == "wide"
     assert manifest["columns"] == main_table.columns
+    assert manifest["workflow_state"] == "review"
+    assert manifest["recommendation"] == "continue"
     assert manifest["input_tables"] == {
         "data": str(out / "data" / "main.parquet"),
         "feat": str(out / "feat" / "main.parquet"),
