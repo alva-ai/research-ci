@@ -85,7 +85,7 @@ def new_workflow(
         else:
             stages[stage] = "disabled"
     return {
-        "version": 2,
+        "version": 3,
         "stages": stages,
         "cards": {"contract": contract_card},
         "recommendations": {"contract": "continue"},
@@ -94,6 +94,7 @@ def new_workflow(
         "approvals": [],
         "rejections": [],
         "reopenings": [],
+        "holdouts": [],
         "commands": commands or {},
     }
 
@@ -215,6 +216,8 @@ def record_attempt(
     valid: bool,
     card: str,
     checks: str,
+    confirmation_required: bool = False,
+    evidence_scope: str = "development_only",
 ) -> dict[str, Any]:
     """Record a completed Agent attempt while leaving the stage ready."""
 
@@ -236,6 +239,12 @@ def record_attempt(
             "card": card,
             "rejected": False,
             "submitted": False,
+            "confirmation_required": confirmation_required,
+            "confirmation_status": (
+                "pending" if confirmation_required else "not_declared"
+            ),
+            "evidence_scope": evidence_scope,
+            "frozen": False,
             "at": _now(),
         }
     )
@@ -246,6 +255,109 @@ def record_attempt(
 def latest_attempt(state: dict[str, Any], stage: str) -> dict[str, Any] | None:
     attempts = state.get("attempts", {}).get(stage, [])
     return attempts[-1] if attempts else None
+
+
+def begin_confirmation(
+    out: str | Path,
+    *,
+    attempt: str,
+    holdout_id: str,
+    holdout_hash: str,
+    sealed_hash: str,
+) -> dict[str, Any]:
+    """Consume one Sig holdout before any external confirmation code sees it."""
+
+    state = read_workflow(out)
+    require_stage_ready(state, "sig")
+    selected = _find_attempt(state, "sig", attempt)
+    if not selected.get("valid"):
+        raise _refusal(
+            state,
+            f"Cannot confirm invalid Sig attempt {attempt!r}.",
+            code="RCI-ATTEMPT-INVALID",
+        )
+    if not selected.get("confirmation_required"):
+        raise _refusal(
+            state,
+            f"Sig attempt {attempt!r} does not declare a confirmation holdout.",
+            code="RCI-SIG-CONFIRMATION-NOT-DECLARED",
+        )
+    if selected.get("confirmation_status") != "pending":
+        raise _refusal(
+            state,
+            f"Sig attempt {attempt!r} already consumed its confirmation holdout.",
+            code="RCI-SIG-CONFIRMATION-CONSUMED",
+        )
+    consumed = state.setdefault("holdouts", [])
+    if any(
+        item.get("holdout_id") == holdout_id or item.get("holdout_hash") == holdout_hash
+        for item in consumed
+    ):
+        raise _refusal(
+            state,
+            f"Confirmation holdout {holdout_id!r} was already revealed in this run.",
+            code="RCI-SIG-HOLDOUT-CONSUMED",
+        )
+    at = _now()
+    confirmation = {
+        "holdout_id": holdout_id,
+        "holdout_hash": holdout_hash,
+        "sealed_hash": sealed_hash,
+        "evidence": "",
+        "valid": False,
+        "status": "revealing",
+        "at": at,
+    }
+    selected.update(
+        {
+            "confirmation": confirmation,
+            "confirmation_status": "revealing",
+            "evidence_scope": "confirmation_revealing",
+            "frozen": False,
+        }
+    )
+    consumed.append({"attempt": attempt, **confirmation})
+    write_workflow(out, state)
+    return state
+
+
+def finish_confirmation(
+    out: str | Path,
+    *,
+    attempt: str,
+    evidence: str,
+    valid: bool,
+    card: str,
+) -> dict[str, Any]:
+    """Finish a consumed confirmation and freeze a valid Sig attempt."""
+
+    state = read_workflow(out)
+    selected = _find_attempt(state, "sig", attempt)
+    confirmation = selected.get("confirmation")
+    if not isinstance(confirmation, dict) or confirmation.get("status") != "revealing":
+        raise _refusal(
+            state,
+            f"Sig attempt {attempt!r} has no confirmation in progress.",
+            code="RCI-SIG-CONFIRMATION-NOT-RUNNING",
+        )
+    status = "revealed_valid" if valid else "revealed_invalid"
+    confirmation.update({"evidence": evidence, "valid": valid, "status": status})
+    selected.update(
+        {
+            "card": card,
+            "confirmation_status": status,
+            "evidence_scope": "confirmed_holdout" if valid else "confirmation_invalid",
+            "frozen": valid,
+        }
+    )
+    for item in state.setdefault("holdouts", []):
+        if item.get("attempt") == attempt and item.get(
+            "holdout_hash"
+        ) == confirmation.get("holdout_hash"):
+            item.update(confirmation)
+            break
+    write_workflow(out, state)
+    return state
 
 
 def submit_for_review(
@@ -287,6 +399,13 @@ def submit_for_review(
             f"Attempt {attempt!r} was already submitted; create a new attempt "
             "after reopening the stage.",
             code="RCI-ATTEMPT-SUBMITTED",
+        )
+    if selected.get("confirmation_required") and not selected.get("frozen"):
+        raise _refusal(
+            state,
+            f"Sig attempt {attempt!r} declares confirmation and must complete "
+            "`rci sig freeze` before submission.",
+            code="RCI-SIG-CONFIRMATION-REQUIRED",
         )
 
     selected["submitted"] = True
@@ -489,10 +608,11 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
             if not command:
                 command = (
                     f"rci approve --stage {stage} --decision continue "
-                    f"--card {card or '<card_id>'} --out <run> --by human"
+                    f"--card {card or '<card_id>'} --out <run> --by agent"
                 )
             return {
-                "actor": "human",
+                "actor": "reviewer",
+                "allowed_actors": ["human", "agent"],
                 "stage": stage,
                 "state": status,
                 "action": "review",
@@ -503,13 +623,21 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
             }
         if status == "ready":
             attempt = latest_attempt(state, stage)
+            needs_confirmation = bool(
+                stage == "sig"
+                and attempt
+                and attempt.get("valid")
+                and attempt.get("confirmation_required")
+                and attempt.get("confirmation_status") == "pending"
+            )
             can_submit = bool(
                 attempt
                 and attempt.get("valid")
                 and not attempt.get("rejected")
                 and not attempt.get("submitted")
+                and (not attempt.get("confirmation_required") or attempt.get("frozen"))
             )
-            kind = "submit" if can_submit else "run"
+            kind = "freeze" if needs_confirmation else "submit" if can_submit else "run"
             command = _command(state, stage, kind)
             if not command:
                 command = (
@@ -519,8 +647,11 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
                     else f"rci {stage} run --out <run> ..."
                 )
             reason = (
-                f"attempt {attempt['id']} passed the mandatory checks; submit it "
-                "or run another attempt"
+                f"attempt {attempt['id']} passed development checks; freeze its "
+                "recipe before the one-time confirmation reveal"
+                if needs_confirmation
+                else f"attempt {attempt['id']} passed the mandatory checks; submit "
+                "it or run another attempt"
                 if can_submit
                 else "run or revise this stage; only a valid submitted attempt "
                 "can enter review"
@@ -557,7 +688,7 @@ def _upgrade_workflow(raw: dict[str, Any]) -> dict[str, Any]:
             stage: "approved" if status == "passed" else status
             for stage, status in state.get("stages", {}).items()
         }
-    state["version"] = 2
+    state["version"] = 3
     state.setdefault("cards", {})
     state.setdefault("recommendations", {})
     state.setdefault("attempts", {})
@@ -565,6 +696,7 @@ def _upgrade_workflow(raw: dict[str, Any]) -> dict[str, Any]:
     state.setdefault("approvals", [])
     state.setdefault("rejections", [])
     state.setdefault("reopenings", [])
+    state.setdefault("holdouts", [])
     state.setdefault("commands", {})
     return state
 

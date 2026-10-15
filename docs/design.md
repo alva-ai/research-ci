@@ -2,9 +2,10 @@
 
 > **Status, 2026-10-15:** the MVP path from Contract through Algo is
 > implemented and has been exercised on the SK Hynix/SKHY proxy-spread case.
-> Seal, forward validation, a tamper-evident ledger, and a built-in backtester
-> are planned. This document states the product requirements and stage
-> boundaries. [README.md](../README.md) is the quickstart,
+> Optional Sig procedure freeze and one-time confirmation are implemented.
+> Secure holdout custody, a tamper-evident ledger, forward evaluation, and a
+> built-in backtester are planned. This document states the product requirements
+> and stage boundaries. [README.md](../README.md) is the quickstart,
 > [TODO.md](../TODO.md) is the implementation ledger, and
 > [research-ci-viz-en.html](research-ci-viz-en.html) is the visual version.
 
@@ -12,8 +13,9 @@ Research CI keeps its strongest product idea: an external research agent may
 explore freely, while a small deterministic engine owns stage order, output
 contracts, reusable checks, evidence records, and review gates. This
 implementation deliberately starts with a smaller contract and no universal
-statistical verdict. The research target, labels, feature selection, signal recipe, and
-portfolio logic become explicit at the stage where they can be understood.
+statistical verdict. The research target, labels, feature selection, signal
+recipe, and portfolio logic become explicit at the stage where they can be
+understood.
 
 ## Contents
 
@@ -198,8 +200,10 @@ flowchart LR
 ```
 
 Feat, Sig, and Algo use the same `ready -> attempts -> review` protocol shown
-for Data. The short arrows between those stages mean that the submitted Card
-was approved with `continue`, not that a stage run approved itself.
+for Data. Sig inserts `freeze -> one-time confirmation` before submit when its
+plan declares a confirmation holdout. The short arrows between stages mean
+that the submitted Card was approved with `continue`, not that a stage run
+approved itself.
 
 Every enabled stage is in one of these states:
 
@@ -244,9 +248,11 @@ Each stage after Contract follows the same outer protocol:
 7. Save an immutable numbered attempt containing the main table, research
    artifacts, eval report, assessment, Card, and manifest.
 8. Record the attempt as `valid` or `invalid` while the stage remains `ready`.
-9. Submit one valid attempt to publish it as the formal candidate and enter
-   `review`.
-10. Wait for explicit approval or rejection before any downstream work.
+9. For a Sig attempt with a declared confirmation holdout, freeze the selected
+   procedure and run that holdout once before submission.
+10. Submit one valid eligible attempt to publish it as the formal candidate and
+    enter `review`.
+11. Wait for explicit approval or rejection before any downstream work.
 
 ### The four slots
 
@@ -437,20 +443,38 @@ weights, entries, stops, execution, or PnL.
 - `cross_section_by` or `evaluation_by` when aggregation needs it;
 - `fit_policy`: `none`, `train_validation_test`, or `walk_forward`.
 
+`ValidationPlan` declares the development design separately from the signal
+schema:
+
+- an open list of `ValidationMethod(name, purpose, parameters)` records;
+- the deterministic rule used to select and materialize final signals;
+- an optional `ConfirmationPlan` naming one holdout, its context table, and a
+  predeclared confirmation-plan function.
+
+The method name is not an Engine enum. A case may use rolling K-fold, purged
+walk-forward, PBO, clustering stability, nested fitting, or a new case-specific
+procedure. The Engine records and freezes that design instead of pretending
+one validation method fits every signal problem.
+
 Declaring only the features an Agent already plans to use is invalid. Sig must
 start from the whole approved feature universe, so skipped features remain a
 reviewable decision.
 
 ### Labels, targets, and horizons
 
-A realized future value is called a **label**. Labels live only in an explicit
-sidecar such as `sig/context/label.parquet`. A **target** is the research role
+A realized future value is called a **label**. Development labels live only in
+an explicit sidecar such as `sig/context/label.parquet`. A **target** is the
+research role
 assigned to a label column for a named horizon. Neither is appended to
 `feat/main.parquet` or `sig/main.parquet`.
 
 This separation prevents accidental downstream use and keeps the handoff
 table honest. It also permits targetless rules when the Lab states a concrete
 hypothesis and selects methods that do not require labels.
+
+When confirmation is declared, the development label sidecar is a non-empty
+subset of approved Feat keys. The held-out context is supplied only to
+`rci sig freeze`; its keys must not appear in that development sidecar.
 
 ### Required Sig research loop
 
@@ -462,8 +486,11 @@ flowchart TD
     P --> C[Construct independent candidates]
     C --> E[Compare candidates on time-isolated evidence]
     E --> M[Materialize a small set of final signals]
-    M --> V[Run four slots and create Sig Card]
-    V --> H[Build direct wide Algo handoff]
+    M --> V[Run four slots and create development Card]
+    V --> Q{Confirmation declared?}
+    Q -->|no| H[Submit development-only evidence]
+    Q -->|yes| Z[Freeze recipe and reveal holdout once]
+    Z --> H2[Confirm final signals, then submit]
 ```
 
 1. **Declare the research question.** Name the label/horizon mapping or a
@@ -493,7 +520,13 @@ flowchart TD
    scale, null policy, and lineage. Multiple independent final signals are
    allowed. They remain separate strategy candidates unless Sig explicitly
    constructs and evaluates a combined signal.
-8. **Build the Algo handoff.** For fixed instruments, the formal Sig main table
+8. **Freeze and confirm when declared.** The Engine verifies direct source
+   hashes, hashes the saved attempt products, marks the holdout consumed, then
+   gives the predeclared confirmation function approved features and final
+   signals only. Candidate columns stay hidden. Confirmation keys must be
+   disjoint from development keys. A changed frozen product cannot be
+   submitted.
+9. **Build the Algo handoff.** For fixed instruments, the formal Sig main table
    is wide: one row per event time, instrument and price context, and final
    signal columns. A true cross-sectional research problem may declare a long
    grain instead.
@@ -512,9 +545,14 @@ sig/research/disposition.parquet    one decision per approved feature
 sig/research/lineage.json           every candidate and final signal
 sig/selection.json                  explicit promotion decision
 sig/recipe.json                     builder semantics
+sig/validation_plan.json            development methods and selection rule
+sig/provenance.json                 direct builder and plan source hashes
 sig/artifacts/                       fitted scaler/model/component parameters
 sig/eval/report.jsonl               complete four-slot records
 sig/eval/assessment.json            triage and reason codes
+sig/confirmation/context/           consumed confirmation sidecars
+sig/confirmation/eval/report.jsonl  final-signal confirmation evidence
+sig/confirmation/holdout.json       holdout ID/hash, scope, and result
 sig/card.md                          review entry point
 sig/manifest.json                    schema and artifact index
 ```
@@ -544,6 +582,12 @@ The Engine must verify:
 General point-in-time replay, fitted-artifact reproduction, and universal
 walk-forward enforcement remain planned Engine checks. Until then the Lab
 must expose its split, purge, artifacts, and case tests.
+
+For a declared confirmation, the additional Engine floor requires a valid
+development attempt, unchanged direct plan and builder sources, a holdout ID
+and content hash unused in the run, non-overlapping development and holdout
+keys, approved Feat keys, and a confirmation table containing final signals but
+no candidates.
 
 #### Library
 
@@ -590,6 +634,19 @@ Slot 4 must demonstrate that Slot 3 can detect relevant errors. Examples:
 Sig approval means the signal definitions, full-feature accounting, fit
 policy, and evidence are clear enough for Algo research. It does not mean the
 signals are profitable, tradable, or ready for capital.
+
+A Card distinguishes three evidence scopes:
+
+- `development_only`: no confirmation was declared, so all evidence remains
+  part of the adaptive research loop;
+- `confirmation_pending`: the attempt is valid but cannot be submitted until
+  its predeclared confirmation runs;
+- `confirmed_holdout`: the frozen final signals passed that one-time run.
+
+A failed reveal is recorded as `confirmation_invalid`, consumes the holdout,
+and requires a new attempt and a new holdout. The Engine hashes direct source
+files and attempt products. It does not claim transitive dependency capture or
+OS-level isolation from a Lab process that deliberately reads protected files.
 
 The reviewer must be able to see:
 
@@ -691,9 +748,14 @@ The MVP currently guarantees:
 - direct Sig-to-Algo handoff with price context;
 - weights and trade-shaped Algo contracts;
 - standardized external backtest evidence;
-- Polars-first Engine execution with explicit matrix backends.
+- Polars-first Engine execution with explicit matrix backends;
+- open-ended Sig validation declarations without a fixed method enum;
+- optional Sig product/source freeze and one-time holdout confirmation;
+- final-signal-only confirmation tables with disjoint development keys;
+- consumed-holdout tracking by declared ID and byte-content hash.
 
-It does not yet guarantee sealed holdouts, an append-only cryptographic ledger,
+It does not yet guarantee secure holdout custody outside the Lab filesystem,
+transitive source-dependency capture, an append-only cryptographic ledger,
 process isolation from a malicious Lab, or a universal statistical threshold
 for alpha quality.
 
@@ -703,9 +765,10 @@ The next design work should preserve the MVP boundaries rather than enlarge
 the Contract prematurely:
 
 1. General point-in-time replay and fitted-artifact reproduction.
-2. Validation-only selection followed by a one-time test reveal or seal.
-3. Content hashes, immutable stage freezes, and downstream invalidation based
-   on artifact lineage.
+2. Transitive source and data lineage, immutable upstream freezes, and automatic
+   downstream invalidation.
+3. Secure holdout custody outside the external Lab process when the execution
+   environment can enforce it.
 4. A built-in reference backtester only after at least two external
    backtesters validate the interface.
 5. Standard cost, slippage, funding, borrow, capacity, market-impact, trading

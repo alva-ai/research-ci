@@ -274,8 +274,9 @@
 5. 用规则、quantile、分组组合、PCA、模型或 ensemble 构造独立 candidate，并记录输入、参数、fit policy、artifact 和血缘。
 6. 在统一 target 和评价口径下比较 candidate，再显式物化少量 final signal；Engine 不按单一分数自动晋升。
 7. 对 signal 做方向统一、归一化和必要的校准。
-8. 任何 fitted transform、PCA、权重或模型都使用时间隔离的 train/validation/test 或 walk-forward；选择与拟合只读取训练段，验证和测试只生成样本外证据。
-9. 运行 Sig 四槽，把 recipe、selection、artifact、signal table 和 draft Card 写入编号 attempt；选定有效 attempt 提交后再等待明确审核。
+8. 外部 Agent 用 `ValidationPlan` 明确本 case 的开发方法和选型规则；可以是 rolling K-fold、purged walk-forward、PBO、聚类稳定性、nested fitting 或其他 case 方法，不固化为单一枚举。任何 fitted transform、PCA、权重或模型都必须遵守该计划声明的时间隔离。
+9. 运行 Sig 四槽，把 recipe、selection、artifact、signal table、validation plan 和 draft Card 写入编号 attempt。
+10. 若声明 `ConfirmationPlan`，先冻结直接源码哈希和 attempt 产物，再一次性揭示未参与开发的 context；确认函数只能拿到 approved feature 与 final signal，不能拿到 candidate。确认通过后才能 submit；未声明确认集时 Card 必须标记为 `development_only`。
 
 ### 6.2 Sig 产物
 
@@ -288,6 +289,10 @@
 - **完成**：`sig/research/candidates.parquet` 保存全部 candidate；`screening.parquet` 保存分 sample 的 feature-target 证据；`disposition.parquet` 覆盖每个 feature；`lineage.json` 覆盖每个 candidate 和 final signal；其他 research 表保存相关簇和冗余证据。
 - **完成**：`sig/selection.json` 保存本轮候选、物化 signal、horizon、决策原则和是否自动筛选。
 - **完成**：`sig/recipe.json` 保存 builder 声明的规则、组合和 target 生成语义。
+- **完成**：`sig/validation_plan.json` 使用开放的 `ValidationMethod` 列表记录 case 自选的开发方法与确定性选型规则；Engine 不要求所有 Sig 共用同一种 rolling split、PBO 或聚类方法。
+- **完成**：可选 `ConfirmationPlan`、`rci sig freeze` 和 workflow holdout ledger 已实现。CLI 在调用外部确认函数前消费 holdout，检查 development/holdout key 不重叠，只暴露 final signal，并保存 source/attempt hash、confirmation context、四槽报告和结果。
+- **完成**：声明 confirmation 的 attempt 在 freeze 前不能 submit；freeze 后修改 recipe、selection、research、artifact 或 eval 产物会被拒绝。同一 run 中相同 holdout ID 或相同字节内容 hash 不能再次使用；失败的确认也会消费 holdout。
+- **边界**：当前是合作式 CLI 协议约束，不是操作系统级保密。Engine 只哈希直接 builder/plan 源文件，没有捕获完整 import 依赖；恶意 Lab 进程仍可能自行读取外部文件。
 - **完成**：`sig/artifacts/` 支持保存 JSON 或 bytes artifact；当前 case 已保存 split、PCA scaler/component、Ridge 参数和 KMeans scaler/centers/cluster target means。
 - **完成**：`sig/eval/report.jsonl`、`sig/eval/assessment.json`、`sig/card.md` 和 `sig/manifest.json` 已实际生成。
 - **完成**：`FeatureSet` 已移除 target 能力；`SignalSet` 配合 `EvalContext` 显式连接 label sidecar，目标相关方法不会修改 `feat/main.parquet`。
@@ -312,7 +317,7 @@
 - **决定**：Card 根据四槽 evidence 说明候选是 invalid、incomplete、redundant、unstable、target-weak、overfit-risk 或 candidate_for_review；Engine 不用单一分数自动选“最佳 signal”。
 - **决定**：Sig 的批准表示 signal 定义和证据足以交给 Algo 研究，不表示策略已经盈利或可交易。
 - **完成**：Sig Card 分开展示 final 与 10 个 candidate 的 Pearson IC、Rank IC、bucket spread、前后样本稳定性、block ICIR、累计 IC、正 IC block 比例和回撤；同时展示 feature 排名、88 列处置计数和 research 路径，完整明细保留在 JSONL/Parquet。
-- **待讨论**：当前 test evidence 会在 review Card 中显示；若 Agent 需要多轮调参，需增加 validation-only 选型和一次性 test reveal/freeze 协议，避免反复查看 test 后继续修改 recipe。
+- **完成**：Sig Card 显示 `development_only`、`confirmation_pending`、`confirmed_holdout` 或 `confirmation_invalid`。一次性确认集揭示后不能回到同一个 attempt 调参；失败时必须创建新 attempt 并使用新 holdout。
 
 ## 7. Algo、Seal 和 Forward
 

@@ -223,6 +223,8 @@ def make_plan(table, stage="sig", context=None):
     assert manifest["columns"] == main_table.columns
     assert manifest["workflow_state"] == "review"
     assert manifest["recommendation"] == "continue"
+    assert manifest["evidence_scope"] == "development_only"
+    assert manifest["confirmation_status"] == "not_declared"
     assert manifest["input_tables"] == {
         "data": str(out / "data" / "main.parquet"),
         "feat": str(out / "feat" / "main.parquet"),

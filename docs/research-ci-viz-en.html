@@ -205,7 +205,7 @@ p { margin: 0; }
 .step-no { color: var(--agent); font-size: 12px; font-weight: 800; letter-spacing: .05em; }
 .sig-detail { margin-top: 13px; border-left: 4px solid var(--agent); background: var(--surface-soft); padding: 14px 16px; min-height: 92px; }
 .sig-detail p { color: var(--secondary); font-size: 14px; margin-top: 4px; }
-.artifact-lanes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+.artifact-lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
 .lane { padding: 14px; border-radius: 11px; background: var(--surface-soft); }
 .lane h3 { color: var(--evidence); }
 .lane ul { margin: 7px 0 0; padding-left: 18px; color: var(--secondary); font-size: 13px; }
@@ -257,6 +257,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
       <span class="badge">Polars-first</span>
       <span class="badge">External Lab builders</span>
       <span class="badge">One main Parquet per stage</span>
+      <span class="badge">Optional one-time Sig confirmation</span>
       <span class="badge">2026-10-15</span>
     </div>
   </header>
@@ -313,7 +314,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="sig" aria-pressed="true">
-            <span class="stage-name">Sig</span><span class="stage-sub">Screen the full feature universe and materialize predictions</span><span class="stage-pill">attempts + submit</span>
+            <span class="stage-name">Sig</span><span class="stage-sub">Screen the full feature universe and materialize predictions</span><span class="stage-pill">attempts + optional freeze</span>
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="algo" aria-pressed="false">
@@ -339,6 +340,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <thead><tr><th>Current state</th><th>Actor</th><th>Legal action</th><th>Result</th></tr></thead>
         <tbody>
           <tr><td><code>ready</code></td><td>Agent</td><td><code>run</code> as often as needed</td><td>Append a numbered valid or invalid attempt; remain ready</td></tr>
+          <tr><td><code>ready</code> · Sig confirmation pending</td><td>Agent</td><td><code>sig freeze</code> once</td><td>Freeze the selected procedure, consume the holdout, and record final-signal confirmation</td></tr>
           <tr><td><code>ready</code></td><td>Agent</td><td><code>submit</code> one valid attempt with a recommendation</td><td>Publish the formal candidate and enter review</td></tr>
           <tr><td><code>review</code></td><td>Reviewer</td><td><code>approve --decision continue</code></td><td>Approve this Card and unlock the next enabled stage</td></tr>
           <tr><td><code>review</code></td><td>Reviewer</td><td><code>approve --decision stop</code></td><td>Record an intentional no-go and stop the workflow</td></tr>
@@ -386,7 +388,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <button class="sig-step" type="button" data-step="4" aria-pressed="false"><span class="step-no">05</span><b>Construct</b><span>Rules, quantiles, group means, PCA, regression, regimes, or ensembles.</span></button>
         <button class="sig-step" type="button" data-step="5" aria-pressed="false"><span class="step-no">06</span><b>Compare</b><span>Common OOS evidence; no automatic winner from one metric.</span></button>
         <button class="sig-step" type="button" data-step="6" aria-pressed="false"><span class="step-no">07</span><b>Materialize</b><span>Small final set with direction, scale, null policy, and complete lineage.</span></button>
-        <button class="sig-step" type="button" data-step="7" aria-pressed="false"><span class="step-no">08</span><b>Handoff</b><span>Wide fixed-instrument table with prices + final signals; labels remain sidecars.</span></button>
+        <button class="sig-step" type="button" data-step="7" aria-pressed="false"><span class="step-no">08</span><b>Freeze</b><span>Optional one-time holdout sees the frozen final signals, never research candidates.</span></button>
+        <button class="sig-step" type="button" data-step="8" aria-pressed="false"><span class="step-no">09</span><b>Handoff</b><span>Wide fixed-instrument table with prices + final signals; labels remain sidecars.</span></button>
       </div>
       <div class="sig-detail" id="sigDetail" aria-live="polite">
         <h3 id="sigDetailTitle"></h3>
@@ -395,7 +398,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
       <div class="artifact-lanes">
         <article class="lane"><h3>Formal handoff</h3><ul><li><code>sig/main.parquet</code></li><li>keys + instrument/price context</li><li>final signals only</li><li>direct Algo input</li></ul></article>
         <article class="lane"><h3>Research evidence</h3><ul><li><code>screening.parquet</code></li><li><code>candidates.parquet</code></li><li>redundancy + clusters</li><li>disposition + lineage</li></ul></article>
-        <article class="lane"><h3>Protected context</h3><ul><li><code>context/label.parquet</code></li><li>sample/block metadata</li><li>fitted artifacts</li><li>never appended to main</li></ul></article>
+        <article class="lane"><h3>Development context</h3><ul><li><code>context/label.parquet</code></li><li>sample/block metadata</li><li>fitted artifacts</li><li>never appended to main</li></ul></article>
+        <article class="lane"><h3>Optional confirmation</h3><ul><li><code>validation_plan.json</code></li><li>frozen source + products</li><li>disjoint holdout keys</li><li>final signals only</li></ul></article>
       </div>
     </div>
   </section>
@@ -435,7 +439,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
           <tr><td>Formal outputs</td><td>Typed layer outputs and cards</td><td>One main Parquet per stage plus explicit sidecars, report, Card, and manifest</td></tr>
           <tr><td>Sig</td><td>Planned score/event layer</td><td class="yes">Implemented full-universe screening, dispositions, candidate/final lineage, label sidecars, and direct Algo handoff</td></tr>
           <tr><td>Algo</td><td>Planned consumer plugin and simulator</td><td class="yes">Implemented weights/trades contracts with an injected external backtester</td></tr>
-          <tr><td>Holdout custody, ledger, seal, forward</td><td>Core design, partially implemented</td><td class="planned">Planned; not claimed by the MVP</td></tr>
+          <tr><td>Sig holdout, freeze, and confirmation</td><td>Core design, partially implemented</td><td class="yes">Optional one-time protocol implemented; secure process custody remains planned</td></tr>
           <tr><td>Universal alpha verdict</td><td>Null worlds, calibrated thresholds, trial counts</td><td>Evidence and explicit review; no single automatic alpha verdict</td></tr>
         </tbody>
       </table>
@@ -453,8 +457,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <thead><tr><th>Guarantee</th><th>Status</th><th>Required evidence before adoption</th></tr></thead>
         <tbody>
           <tr><td>General PIT replay and fitted-artifact reproduction</td><td class="planned">Planned</td><td>Works across time-series, cross-sectional, and event cases</td></tr>
-          <tr><td>Validation-only selection and one-time test reveal</td><td class="planned">Planned</td><td>Reruns cannot leak test evidence back into the recipe</td></tr>
-          <tr><td>Content-hashed freezes and artifact lineage</td><td class="planned">Planned</td><td>Upstream changes reliably stale downstream products</td></tr>
+          <tr><td>Transitive source/data lineage and downstream invalidation</td><td class="planned">Planned</td><td>Imported code and changed upstream artifacts reliably stale downstream products</td></tr>
+          <tr><td>Secure holdout custody outside the Lab process</td><td class="planned">Planned</td><td>The execution environment prevents deliberate early reads</td></tr>
           <tr><td>Reference backtester</td><td class="planned">Planned</td><td>At least two external backtesters validate the interface first</td></tr>
           <tr><td>Funding, borrow, capacity, impact, calendars, proxy basis</td><td class="planned">Planned</td><td>Standard contracts proven by real cases</td></tr>
           <tr><td>Seal, forward, and monitor stages</td><td class="planned">Planned</td><td>New workflow guarantees, not labels added to the current MVP</td></tr>
@@ -488,7 +492,7 @@ const stageData = {
   sig: {
     input: 'Approved feat/main.parquet plus explicit label sidecars built inside Sig.',
     output: 'sig/main.parquet: direct Algo handoff with context/prices and a small set of final signals; research remains in sidecars.',
-    approval: 'Full-feature accounting, fit policy, signal definitions, and evidence are clear enough for Algo research—not profitability.'
+    approval: 'Full-feature accounting, fit policy, signal definitions, and evidence scope are clear enough for Algo research—not profitability.'
   },
   algo: {
     input: 'Approved sig/main.parquet.',
@@ -519,6 +523,7 @@ const sigData = [
   ['Build auditable candidates', 'Rules, quantiles, family means, PCA, Ridge, clustering, and ensembles are allowed. SignalLineage records inputs, method, parameters, fit policy, and evidence for every candidate.'],
   ['Compare without a hidden scalar', 'Candidates use common labels and sample conventions. The reviewer sees predictive strength, stability, information overlap, turnover proxy, complexity, and failure reasons rather than an automatic one-number winner.'],
   ['Materialize only explicit finals', 'A final signal has direction, scale, null policy, and lineage. Independent fast and slow signals stay separate; combining them requires a new combined signal that is evaluated in Sig.'],
+  ['Freeze before optional confirmation', 'ValidationPlan may name rolling folds, PBO, clustering stability, or any case method. If ConfirmationPlan is present, the Engine freezes direct source hashes and attempt products before consuming a disjoint holdout. The confirmation function receives final signals, not candidate columns.'],
   ['Hand off a clean formal table', 'For a fixed pair, one row is one event time and includes each instrument, its price, and final signal columns. Labels, candidates, screening, rejected features, and models remain sidecars and artifacts.']
 ];
 const sigButtons = [...document.querySelectorAll('[data-step]')];

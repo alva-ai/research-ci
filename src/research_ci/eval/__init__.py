@@ -10,11 +10,14 @@ from .baseline import (
 )
 from .declarations import (
     AlgoSet,
+    ConfirmationPlan,
     DataSet,
     FeatureSet,
     LibrarySelection,
     SelectedMethod,
     SignalSet,
+    ValidationMethod,
+    ValidationPlan,
 )
 from .menu import (
     MethodMenuEntry,
@@ -54,6 +57,7 @@ __all__ = [
     "algo_backtest_summary_shape",
     "algo_main_output_shape",
     "CaseEvalTest",
+    "ConfirmationPlan",
     "DataSet",
     "FeatureSet",
     "LibrarySelection",
@@ -62,6 +66,8 @@ __all__ = [
     "SelectedMethod",
     "SignalSet",
     "StageMenu",
+    "ValidationMethod",
+    "ValidationPlan",
     "assess_records",
     "assess_features",
     "assess_signal_evidence",

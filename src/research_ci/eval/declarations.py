@@ -142,6 +142,116 @@ class FeatureSet:
 
 
 @dataclass(frozen=True, slots=True)
+class ValidationMethod:
+    """Describe one case-selected development method without constraining it.
+
+    The Engine records these declarations as research design.  Method
+    implementations remain in the Lab or in the selected eval library, so a
+    case may name rolling validation, purged folds, PBO, clustering, or a
+    method that the Engine has never seen before.
+    """
+
+    name: str
+    purpose: str
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("ValidationMethod.name must not be empty")
+        if not self.purpose.strip():
+            raise ValueError("ValidationMethod.purpose must not be empty")
+        object.__setattr__(self, "parameters", dict(self.parameters))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "purpose": self.purpose,
+            "parameters": dict(self.parameters),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationPlan:
+    """Declare one named confirmation sample revealed after a Sig freeze."""
+
+    holdout_id: str
+    context_table: str = "label"
+    description: str = ""
+    plan_function: str = "make_confirmation_plan"
+
+    def __post_init__(self) -> None:
+        if not self.holdout_id.strip():
+            raise ValueError("ConfirmationPlan.holdout_id must not be empty")
+        if not self.context_table.strip():
+            raise ValueError("ConfirmationPlan.context_table must not be empty")
+        if not self.description.strip():
+            raise ValueError("ConfirmationPlan.description must not be empty")
+        if not self.plan_function.isidentifier():
+            raise ValueError("ConfirmationPlan.plan_function must be an identifier")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "holdout_id": self.holdout_id,
+            "context_table": self.context_table,
+            "description": self.description,
+            "plan_function": self.plan_function,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationPlan:
+    """Declare open-ended Sig development and an optional one-time confirmation.
+
+    ``development`` is intentionally descriptive rather than an enum.  The
+    Engine freezes the resulting procedure and artifacts; it does not force
+    every case into one split or statistical methodology.
+    """
+
+    development: tuple[ValidationMethod, ...]
+    selection_rule: str
+    confirmation: ConfirmationPlan | None = None
+
+    def __post_init__(self) -> None:
+        development = tuple(self.development)
+        if not development:
+            raise ValueError("ValidationPlan.development must not be empty")
+        if any(not isinstance(item, ValidationMethod) for item in development):
+            raise TypeError(
+                "ValidationPlan.development must contain ValidationMethod values"
+            )
+        names = [item.name for item in development]
+        if len(names) != len(set(names)):
+            raise ValueError("ValidationPlan.development contains duplicate methods")
+        if not self.selection_rule.strip():
+            raise ValueError("ValidationPlan.selection_rule must not be empty")
+        if self.confirmation is not None and not isinstance(
+            self.confirmation, ConfirmationPlan
+        ):
+            raise TypeError(
+                "ValidationPlan.confirmation must be a ConfirmationPlan or None"
+            )
+        object.__setattr__(self, "development", development)
+
+    @property
+    def evidence_scope(self) -> str:
+        return (
+            "confirmation_pending"
+            if self.confirmation is not None
+            else "development_only"
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "development": [item.as_dict() for item in self.development],
+            "selection_rule": self.selection_rule,
+            "confirmation": (
+                self.confirmation.as_dict() if self.confirmation is not None else None
+            ),
+            "evidence_scope": self.evidence_scope,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SignalSet:
     """Describe the Sig feature universe, candidates, finals, and prediction targets.
 
@@ -474,10 +584,13 @@ StageDeclaration = DataSet | FeatureSet | SignalSet | AlgoSet
 
 __all__ = [
     "AlgoSet",
+    "ConfirmationPlan",
     "DataSet",
     "FeatureSet",
     "LibrarySelection",
     "SelectedMethod",
     "SignalSet",
     "StageDeclaration",
+    "ValidationMethod",
+    "ValidationPlan",
 ]
