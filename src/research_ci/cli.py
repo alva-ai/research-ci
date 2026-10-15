@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -26,6 +27,7 @@ from .eval import (
     FeatureSet,
     LibrarySelection,
     SignalSet,
+    ValidationPlan,
     assess_features,
     assess_records,
     assess_signal_evidence,
@@ -50,6 +52,8 @@ from .kit import AlgoBundle, BacktestResult, BuildInfo, SignalBundle
 from .workflow import (
     STAGE_ORDER,
     WorkflowError,
+    begin_confirmation,
+    finish_confirmation,
     latest_attempt,
     next_action,
     read_workflow,
@@ -108,10 +112,12 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "rules, ranks, quantiles, composites, PCA, fitted models, or ensembles",
             "time splits and forward labels from research_ci.kit.sig",
             "target-aware methods selected from the Sig eval menu",
+            "open-ended ValidationPlan methods with optional one-time confirmation",
         ],
         "required": [
             "every approved feature has one evidenced disposition",
             "candidate and final signal lineage is complete",
+            "confirmation, when declared, freezes development before holdout reveal",
             "all four eval slots are populated",
         ],
     },
@@ -174,6 +180,12 @@ def main(argv: list[str] | None = None) -> int:
     sig_run.add_argument("--plan", required=True, type=Path)
     sig_run.add_argument("--out", required=True, type=Path)
     sig_run.add_argument("--context", type=Path)
+    sig_freeze = sig_commands.add_parser(
+        "freeze", help="freeze a Sig recipe and reveal one confirmation holdout"
+    )
+    sig_freeze.add_argument("--out", required=True, type=Path)
+    sig_freeze.add_argument("--attempt")
+    sig_freeze.add_argument("--context", required=True, type=Path)
     _add_submit_parser(sig_commands)
 
     algo = commands.add_parser("algo", help="run an external portfolio builder")
@@ -266,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             return _stage_submit("feat", args.out, args.recommendation, args.attempt)
         return _feat_run(args.builder, args.plan, args.out, args.context)
     if args.command == "sig":
+        if args.sig_command == "freeze":
+            return _sig_freeze(args.out, args.attempt, args.context)
         if args.sig_command == "submit":
             return _stage_submit("sig", args.out, args.recommendation, args.attempt)
         return _sig_run(args.builder, args.plan, args.out, args.context)
@@ -366,18 +380,18 @@ def _contract_derive(path: Path, out: Path) -> int:
     print(card)
     print(f"contract card: {out / 'contract' / 'card.md'}")
     print(
-        "next: rci approve "
-        f"--stage contract --out {out} --by human --decision continue "
-        f"--card {card_identifier}"
-    )
-    print(
-        "   or: rci approve "
+        "next (agent reviewer): rci approve "
         f"--stage contract --out {out} --by agent --decision continue "
         f"--card {card_identifier}"
     )
     print(
+        "   or (human reviewer): rci approve "
+        f"--stage contract --out {out} --by human --decision continue "
+        f"--card {card_identifier}"
+    )
+    print(
         "   or: rci reject "
-        f"--stage contract --out {out} --by human --message <reason> "
+        f"--stage contract --out {out} --by agent --message <reason> "
         f"--card {card_identifier}"
     )
     return 0
@@ -795,6 +809,13 @@ def _sig_run(
 
         plan_module = _load_module(plan_path)
         declaration = _signal_declaration(plan_module)
+        validation_plan = _signal_validation_plan(plan_module)
+        validation_payload = (
+            validation_plan.as_dict() if validation_plan is not None else None
+        )
+        confirmation_required = bool(
+            validation_plan is not None and validation_plan.confirmation is not None
+        )
         library_selection = getattr(plan_module, "LIBRARY_SELECTION", None)
         if not isinstance(library_selection, LibrarySelection):
             raise TypeError(
@@ -960,6 +981,7 @@ def _sig_run(
                         feature_table,
                         declaration,
                         active_context,
+                        allow_subset=confirmation_required,
                     ),
                     failure_policy="stop",
                     description="preserve keys and declared labels in the sidecar",
@@ -1034,6 +1056,30 @@ def _sig_run(
             json.dumps(selection, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
         )
+        (out_sig / "validation_plan.json").write_text(
+            json.dumps(
+                validation_payload
+                or {
+                    "development": [],
+                    "selection_rule": "legacy_unspecified",
+                    "confirmation": None,
+                    "evidence_scope": "development_only",
+                },
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        source_manifest = {
+            "builder": _source_identity(builder_path),
+            "plan": _source_identity(plan_path),
+        }
+        (out_sig / "provenance.json").write_text(
+            json.dumps(source_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         artifact_manifest = _write_signal_artifacts(out_sig, bundle.artifacts)
 
         result.write_report(out_sig / "eval" / "report.jsonl")
@@ -1076,6 +1122,10 @@ def _sig_run(
             candidates=declaration.candidates,
             dispositions=disposition_table,
             result_status=checks_status,
+            validation_plan=validation_payload,
+            confirmation_status=(
+                "pending" if confirmation_required else "not_declared"
+            ),
             workflow_state="ready",
             artifact_role="attempt",
         )
@@ -1096,6 +1146,16 @@ def _sig_run(
                     "main_layout": "wide",
                     "recipe": str(out_sig / "recipe.json"),
                     "selection": str(out_sig / "selection.json"),
+                    "validation_plan": str(out_sig / "validation_plan.json"),
+                    "evidence_scope": (
+                        validation_plan.evidence_scope
+                        if validation_plan is not None
+                        else "development_only"
+                    ),
+                    "confirmation_status": (
+                        "pending" if confirmation_required else "not_declared"
+                    ),
+                    "sources": source_manifest,
                     "eval_report": str(out_sig / "eval" / "report.jsonl"),
                     "assessment": str(out_sig / "eval" / "assessment.json"),
                     "context_tables": sorted(context.tables),
@@ -1123,6 +1183,12 @@ def _sig_run(
             valid=result.passed,
             card=card_identifier,
             checks=checks_status,
+            confirmation_required=confirmation_required,
+            evidence_scope=(
+                validation_plan.evidence_scope
+                if validation_plan is not None
+                else "development_only"
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"sig run failed: {exc}")
@@ -1130,14 +1196,243 @@ def _sig_run(
     print(f"sig attempt {attempt}: {checks_status}")
     print(f"attempt report: {out_sig / 'card.md'}")
     if result.passed:
-        print(
-            "next: inspect the attempt, run another, or submit it with "
-            f"`rci sig submit --out {out} --attempt {attempt} "
-            "--recommendation <continue|stop|uncertain>`"
-        )
+        if confirmation_required:
+            print(
+                "next: inspect the development evidence, run another attempt, or "
+                "freeze this recipe with "
+                f"`rci sig freeze --out {out} --attempt {attempt} "
+                "--context <confirmation-context>`"
+            )
+        else:
+            print(
+                "next: inspect the attempt, run another, or submit it with "
+                f"`rci sig submit --out {out} --attempt {attempt} "
+                "--recommendation <continue|stop|uncertain>`"
+            )
     else:
         print("next: fix the reported mandatory checks and run sig again")
     return 0 if result.passed else 1
+
+
+def _sig_freeze(
+    out: Path,
+    requested_attempt: str | None,
+    context_path: Path,
+) -> int:
+    """Freeze one Sig procedure, then reveal and evaluate one holdout."""
+
+    started = False
+    selected: dict[str, Any] | None = None
+    attempt_dir: Path | None = None
+    evidence_path: Path | None = None
+    try:
+        state = read_workflow(out)
+        require_stage_ready(state, "sig")
+        selected = _select_attempt(state, "sig", requested_attempt)
+        if not selected.get("valid"):
+            raise WorkflowError(
+                f"Sig attempt {selected['id']} is invalid and cannot be frozen.",
+                code="RCI-ATTEMPT-INVALID",
+                action=next_action(state),
+            )
+        if selected.get("rejected") or selected.get("submitted"):
+            raise WorkflowError(
+                f"Sig attempt {selected['id']} is no longer eligible for freezing.",
+                code="RCI-SIG-FREEZE-NOT-ALLOWED",
+                action=next_action(state),
+            )
+        if selected.get("confirmation_status") != "pending":
+            raise WorkflowError(
+                f"Sig attempt {selected['id']} has confirmation status "
+                f"{selected.get('confirmation_status')!r}.",
+                code="RCI-SIG-CONFIRMATION-CONSUMED",
+                action=next_action(state),
+            )
+        attempt_dir = Path(selected["path"])
+        if not attempt_dir.is_dir():
+            raise FileNotFoundError(f"Sig attempt directory is missing: {attempt_dir}")
+
+        validation_payload = json.loads(
+            (attempt_dir / "validation_plan.json").read_text(encoding="utf-8")
+        )
+        provenance = json.loads(
+            (attempt_dir / "provenance.json").read_text(encoding="utf-8")
+        )
+        plan_source = Path(provenance["plan"]["path"])
+        if _source_identity(plan_source) != provenance["plan"]:
+            raise WorkflowError(
+                "The Sig eval plan changed after the attempt was created; run a new "
+                "attempt before confirmation.",
+                code="RCI-SIG-PLAN-CHANGED",
+                action=next_action(state),
+            )
+        builder_source = Path(provenance["builder"]["path"])
+        if _source_identity(builder_source) != provenance["builder"]:
+            raise WorkflowError(
+                "The Sig builder changed after the attempt was created; run a new "
+                "attempt before confirmation.",
+                code="RCI-SIG-BUILDER-CHANGED",
+                action=next_action(state),
+            )
+
+        plan_module = _load_module(plan_source)
+        declaration = _signal_declaration(plan_module)
+        validation_plan = _signal_validation_plan(plan_module)
+        if validation_plan is None or validation_plan.confirmation is None:
+            raise WorkflowError(
+                "This Sig plan does not declare a confirmation holdout.",
+                code="RCI-SIG-CONFIRMATION-NOT-DECLARED",
+                action=next_action(state),
+            )
+        if validation_plan.as_dict() != validation_payload:
+            raise WorkflowError(
+                "The declared ValidationPlan changed after the attempt was created.",
+                code="RCI-SIG-VALIDATION-PLAN-CHANGED",
+                action=next_action(state),
+            )
+
+        confirmation = validation_plan.confirmation
+        holdout_hash = _path_digest(context_path)
+        sealed_hash = _signal_freeze_digest(attempt_dir)
+        begin_confirmation(
+            out,
+            attempt=selected["id"],
+            holdout_id=confirmation.holdout_id,
+            holdout_hash=holdout_hash,
+            sealed_hash=sealed_hash,
+        )
+        started = True
+
+        context = _load_context(context_path)
+        feature_table = pl.read_parquet(out / "feat" / "main.parquet")
+        signal_main = pl.read_parquet(attempt_dir / "main.parquet").select(
+            *declaration.keys,
+            *declaration.signals,
+        )
+        primary = context.table(confirmation.context_table)
+        development_path = (
+            attempt_dir / "context" / f"{confirmation.context_table}.parquet"
+        )
+        development = (
+            pl.read_parquet(development_path) if development_path.exists() else None
+        )
+        scope = _confirmation_scope(
+            feature_table,
+            primary,
+            development,
+            declaration,
+        )
+        holdout_keys = primary.select(*declaration.keys).unique(maintain_order=True)
+        confirmation_table = (
+            feature_table.select(*declaration.keys, *declaration.features)
+            .join(signal_main, on=list(declaration.keys), how="inner")
+            .join(holdout_keys, on=list(declaration.keys), how="inner")
+        )
+        plan = _make_named_plan(
+            plan_module,
+            confirmation.plan_function,
+            confirmation_table,
+            "sig",
+            context,
+        )
+        scope_rule = EvalSpec(
+            "engine.baseline.signal_confirmation_scope",
+            runner=lambda _: EvalObservation.passed_without_output(**scope),
+            failure_policy="stop",
+            description=(
+                "evaluate only final signals on keys disjoint from development"
+            ),
+            execution_mode="polars_join_group",
+        )
+        plan = replace(plan, baseline=(scope_rule, *plan.baseline))
+        result = run_eval_plan(confirmation_table, plan, context)
+
+        confirmation_dir = attempt_dir / "confirmation"
+        confirmation_dir.mkdir(parents=True, exist_ok=False)
+        confirmation_context = confirmation_dir / "context"
+        confirmation_context.mkdir()
+        for name, table in sorted(context.tables.items()):
+            _safe_artifact_name(name)
+            table.write_parquet(confirmation_context / f"{name}.parquet")
+        (confirmation_context / "metadata.json").write_text(
+            json.dumps(dict(context.metadata), indent=2, sort_keys=True, default=str)
+            + "\n",
+            encoding="utf-8",
+        )
+        evidence_path = confirmation_dir / "eval" / "report.jsonl"
+        result.write_report(evidence_path)
+        assessment_path = confirmation_dir / "eval" / "assessment.json"
+        assessment_path.write_text(
+            json.dumps(assess_records(result.records), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        status = "revealed_valid" if result.passed else "revealed_invalid"
+        holdout_record = {
+            "holdout_id": confirmation.holdout_id,
+            "holdout_hash": holdout_hash,
+            "sealed_hash": sealed_hash,
+            "status": status,
+            "valid": result.passed,
+            "scope": scope,
+            "records": len(result.records),
+            "plan_function": confirmation.plan_function,
+            "context_tables": sorted(context.tables),
+            "evidence": str(evidence_path),
+            "assessment": str(assessment_path),
+        }
+        (confirmation_dir / "holdout.json").write_text(
+            json.dumps(holdout_record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        card, card_identifier = _confirmation_card(
+            attempt_dir / "card.md",
+            validation_plan.as_dict(),
+            holdout_record,
+        )
+        (attempt_dir / "card.md").write_text(card + "\n", encoding="utf-8")
+        manifest_path = attempt_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(
+            {
+                "card_id": card_identifier,
+                "confirmation": str(confirmation_dir / "holdout.json"),
+                "confirmation_status": status,
+                "evidence_scope": (
+                    "confirmed_holdout" if result.passed else "confirmation_invalid"
+                ),
+                "frozen": result.passed,
+                "sealed_hash": sealed_hash,
+            }
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        finish_confirmation(
+            out,
+            attempt=selected["id"],
+            evidence=str(evidence_path),
+            valid=result.passed,
+            card=card_identifier,
+        )
+    except Exception as exc:  # noqa: BLE001 - reports external confirmation errors
+        if started and selected is not None and attempt_dir is not None:
+            _record_failed_confirmation(out, selected, attempt_dir, exc)
+        print(f"sig freeze failed: {exc}")
+        return 1
+
+    print(f"frozen: sig attempt {selected['id']}")
+    print(f"confirmation: {status}")
+    print(f"confirmation report: {evidence_path}")
+    if result.passed:
+        print(
+            "next: submit the frozen attempt with "
+            f"`rci sig submit --out {out} --attempt {selected['id']} "
+            "--recommendation <continue|stop|uncertain>`"
+        )
+        return 0
+    print("next: confirmation checks were invalid; use a new attempt and holdout")
+    return 1
 
 
 def _algo_run(
@@ -1388,6 +1683,24 @@ def _stage_submit(
                 code="RCI-ATTEMPT-MISSING",
                 action=next_action(state),
             )
+        if stage == "sig" and selected.get("confirmation_required"):
+            confirmation = selected.get("confirmation") or {}
+            expected_hash = confirmation.get("sealed_hash")
+            if not selected.get("frozen") or not expected_hash:
+                raise WorkflowError(
+                    f"Sig attempt {selected['id']} must complete confirmation before "
+                    "submission.",
+                    code="RCI-SIG-CONFIRMATION-REQUIRED",
+                    action=next_action(state),
+                )
+            actual_hash = _signal_freeze_digest(attempt_dir)
+            if actual_hash != expected_hash:
+                raise WorkflowError(
+                    "The frozen Sig recipe or its evidence changed after the holdout "
+                    "was revealed; create a new attempt.",
+                    code="RCI-SIG-FREEZE-MISMATCH",
+                    action=next_action(state),
+                )
         stage_dir = out / stage
         published_entries = _publish_attempt(attempt_dir, stage_dir)
         card, card_identifier = _submission_card(stage_dir / "card.md", recommendation)
@@ -1429,20 +1742,21 @@ def _stage_submit(
     print(f"recommendation: {recommendation}")
     print(f"card: {stage_dir / 'card.md'} ({card_identifier})")
     print(
-        "next: rci approve "
-        f"--stage {stage} --out {out} --by human --decision continue "
+        "next (agent reviewer): rci approve "
+        f"--stage {stage} --out {out} --by agent --decision continue "
         f"--card {card_identifier}"
     )
     print(
         "   or: rci approve "
-        f"--stage {stage} --out {out} --by human --decision stop "
+        f"--stage {stage} --out {out} --by agent --decision stop "
         f"--card {card_identifier}"
     )
     print(
         "   or: rci reject "
-        f"--stage {stage} --out {out} --by human --message <reason> "
+        f"--stage {stage} --out {out} --by agent --message <reason> "
         f"--card {card_identifier}"
     )
+    print("human reviewers may replace `--by agent` with `--by human`")
     return 0
 
 
@@ -1745,7 +2059,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
             "--out",
             out,
             "--by",
-            "human",
+            "agent",
             "--decision",
             "continue",
             "--card",
@@ -1814,6 +2128,17 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
                 "--out",
                 out,
             ),
+            "freeze": command(
+                "rci",
+                "sig",
+                "freeze",
+                "--out",
+                out,
+                "--attempt",
+                "{attempt}",
+                "--context",
+                "<confirmation-context>",
+            ),
             "submit": submit("sig"),
             "approve": review("sig"),
         },
@@ -1866,7 +2191,7 @@ def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
             result = builder(table)
             if not isinstance(result, SignalBundle):
                 raise TypeError(
-                    "signal builder must return a research_ci.kit.SignalBundle"
+                    "signal builder must return an research_ci.kit.SignalBundle"
                 )
             return result
     raise AttributeError(
@@ -1994,6 +2319,15 @@ def _signal_declaration(module: ModuleType) -> SignalSet:
     raise AttributeError("signal plan must expose SIGNAL_SET or DECLARATION")
 
 
+def _signal_validation_plan(module: ModuleType) -> ValidationPlan | None:
+    value = getattr(module, "VALIDATION_PLAN", None)
+    if value is None:
+        return None
+    if not isinstance(value, ValidationPlan):
+        raise TypeError("signal plan VALIDATION_PLAN must be a ValidationPlan")
+    return value
+
+
 def _algo_declaration(module: ModuleType) -> AlgoSet:
     for name in ("ALGO_SET", "DECLARATION"):
         declaration = getattr(module, name, None)
@@ -2006,6 +2340,8 @@ def _label_sidecar_shape(
     feature_table: pl.DataFrame,
     declaration: SignalSet,
     context: EvalContext,
+    *,
+    allow_subset: bool = False,
 ) -> EvalObservation:
     try:
         label = context.table(declaration.label_table)
@@ -2022,12 +2358,50 @@ def _label_sidecar_shape(
     required = list(declaration.targets.values())
     if declaration.evaluation_by is not None:
         required.append(declaration.evaluation_by)
-    observation = sidecar_output_shape(
-        feature_table,
-        label,
-        declaration.keys,
-        required,
-    )
+    if allow_subset:
+        needed = [*declaration.keys, *required]
+        missing = sorted(set(needed) - set(label.columns))
+        label_keys = label.select(*declaration.keys) if not missing else None
+        duplicate_rows = (
+            label_keys.height - label_keys.unique().height
+            if label_keys is not None
+            else 0
+        )
+        unknown_rows = (
+            label_keys.join(
+                feature_table.select(*declaration.keys).unique(),
+                on=list(declaration.keys),
+                how="anti",
+            ).height
+            if label_keys is not None
+            else 0
+        )
+        status = (
+            "passed"
+            if not missing
+            and not duplicate_rows
+            and not unknown_rows
+            and label.height > 0
+            else "failed"
+        )
+        observation = EvalObservation(
+            status,
+            output_kind="findings",
+            details={
+                "mode": "development_subset",
+                "rows": label.height,
+                "missing_columns": missing,
+                "duplicate_key_rows": duplicate_rows,
+                "unknown_key_rows": unknown_rows,
+            },
+        )
+    else:
+        observation = sidecar_output_shape(
+            feature_table,
+            label,
+            declaration.keys,
+            required,
+        )
     return EvalObservation(
         status=observation.status,
         value=observation.value,
@@ -2039,9 +2413,239 @@ def _label_sidecar_shape(
     )
 
 
+def _confirmation_scope(
+    feature_table: pl.DataFrame,
+    holdout: pl.DataFrame,
+    development: pl.DataFrame | None,
+    declaration: SignalSet,
+) -> dict[str, Any]:
+    keys = list(declaration.keys)
+    required = [*keys, *declaration.targets.values()]
+    if declaration.evaluation_by is not None:
+        required.append(declaration.evaluation_by)
+    missing = sorted(set(required) - set(holdout.columns))
+    if missing:
+        raise ValueError(f"confirmation context is missing columns: {missing}")
+    if holdout.is_empty():
+        raise ValueError("confirmation context contains no rows")
+    holdout_keys = holdout.select(*keys)
+    duplicate_rows = holdout_keys.height - holdout_keys.unique().height
+    if duplicate_rows:
+        raise ValueError(
+            f"confirmation context contains {duplicate_rows} duplicate key rows"
+        )
+    feature_keys = feature_table.select(*keys).unique()
+    unknown_rows = holdout_keys.join(feature_keys, on=keys, how="anti").height
+    if unknown_rows:
+        raise ValueError(
+            f"confirmation context contains {unknown_rows} keys outside approved Feat"
+        )
+    overlap_rows = 0
+    if development is not None:
+        development_missing = sorted(set(keys) - set(development.columns))
+        if development_missing:
+            raise ValueError(
+                "development context is missing confirmation keys: "
+                f"{development_missing}"
+            )
+        overlap_rows = holdout_keys.join(
+            development.select(*keys).unique(), on=keys, how="inner"
+        ).height
+        if overlap_rows:
+            raise ValueError(
+                "confirmation keys overlap development evidence; provide an unseen "
+                f"context ({overlap_rows} overlapping rows)"
+            )
+    return {
+        "holdout_rows": holdout.height,
+        "duplicate_key_rows": duplicate_rows,
+        "unknown_key_rows": unknown_rows,
+        "development_overlap_rows": overlap_rows,
+        "keys": keys,
+        "evaluated_columns": list(declaration.signals),
+        "candidate_columns_exposed": [],
+    }
+
+
+def _confirmation_card(
+    path: Path,
+    validation_plan: dict[str, Any],
+    holdout: dict[str, Any],
+) -> tuple[str, str]:
+    text = path.read_text(encoding="utf-8").rstrip()
+    marker = "\n\n- card_id: `"
+    body = text.rsplit(marker, 1)[0] if marker in text else text
+    status = str(holdout["status"])
+    evidence_scope = (
+        "confirmed_holdout" if holdout.get("valid") else "confirmation_invalid"
+    )
+    body = _replace_card_field(body, "evidence_scope", evidence_scope)
+    body = _replace_card_field(body, "confirmation_status", status)
+    body += "\n\n## Frozen confirmation\n\n"
+    body += "```json\n"
+    body += json.dumps(
+        {
+            "validation_plan": validation_plan,
+            "holdout": holdout,
+        },
+        indent=2,
+        sort_keys=True,
+        default=str,
+    )
+    body += "\n```"
+    return render_card(body)
+
+
+def _replace_card_field(body: str, name: str, value: str) -> str:
+    prefix = f"- {name}: "
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = f"{prefix}{value}"
+            return "\n".join(lines)
+    lines.insert(1, f"{prefix}{value}")
+    return "\n".join(lines)
+
+
+def _record_failed_confirmation(
+    out: Path,
+    selected: dict[str, Any],
+    attempt_dir: Path,
+    error: Exception,
+) -> None:
+    """Keep a failed reveal auditable without hiding the original CLI error."""
+
+    try:
+        state = read_workflow(out)
+        current = next(
+            item
+            for item in state.get("attempts", {}).get("sig", [])
+            if item.get("id") == selected.get("id")
+        )
+        if current.get("confirmation_status") != "revealing":
+            return
+        confirmation = dict(current.get("confirmation") or {})
+        confirmation_dir = attempt_dir / "confirmation"
+        confirmation_dir.mkdir(parents=True, exist_ok=True)
+        error_path = confirmation_dir / "error.json"
+        error_path.write_text(
+            json.dumps(
+                {"error": str(error), "type": type(error).__name__},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        holdout_record = {
+            **confirmation,
+            "status": "revealed_invalid",
+            "valid": False,
+            "evidence": str(error_path),
+            "error": str(error),
+        }
+        (confirmation_dir / "holdout.json").write_text(
+            json.dumps(holdout_record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        validation_plan = json.loads(
+            (attempt_dir / "validation_plan.json").read_text(encoding="utf-8")
+        )
+        card, card_identifier = _confirmation_card(
+            attempt_dir / "card.md", validation_plan, holdout_record
+        )
+        (attempt_dir / "card.md").write_text(card + "\n", encoding="utf-8")
+        manifest_path = attempt_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(
+            {
+                "card_id": card_identifier,
+                "confirmation": str(confirmation_dir / "holdout.json"),
+                "confirmation_status": "revealed_invalid",
+                "evidence_scope": "confirmation_invalid",
+                "frozen": False,
+            }
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        finish_confirmation(
+            out,
+            attempt=str(selected["id"]),
+            evidence=str(error_path),
+            valid=False,
+            card=card_identifier,
+        )
+    except Exception:
+        # The original error remains the user-facing failure. A partially
+        # written "revealing" record still proves that the holdout was used.
+        return
+
+
 def _safe_artifact_name(name: str) -> None:
     if not name.strip() or Path(name).name != name or name in {".", ".."}:
         raise ValueError(f"invalid stage artifact name: {name!r}")
+
+
+def _source_identity(path: Path) -> dict[str, str]:
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"source file does not exist: {resolved}")
+    return {"path": str(resolved), "sha256": _file_digest(resolved)}
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _path_digest(path: Path) -> str:
+    resolved = path.resolve()
+    if resolved.is_file():
+        files = (resolved,)
+        root = resolved.parent
+    elif resolved.is_dir():
+        files = tuple(sorted(item for item in resolved.rglob("*") if item.is_file()))
+        root = resolved
+    else:
+        raise FileNotFoundError(f"confirmation context does not exist: {resolved}")
+    if not files:
+        raise ValueError(f"confirmation context is empty: {resolved}")
+    digest = hashlib.sha256()
+    for item in files:
+        relative = item.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(_file_digest(item)))
+    return digest.hexdigest()
+
+
+def _signal_freeze_digest(attempt_dir: Path) -> str:
+    """Hash immutable Sig research products while excluding review envelopes."""
+
+    excluded_files = {"card.md", "manifest.json"}
+    excluded_directories = {"confirmation", "plots"}
+    files = []
+    for item in attempt_dir.rglob("*"):
+        if not item.is_file():
+            continue
+        relative = item.relative_to(attempt_dir)
+        if relative.name in excluded_files:
+            continue
+        if any(part in excluded_directories for part in relative.parts[:-1]):
+            continue
+        files.append(item)
+    digest = hashlib.sha256()
+    for item in sorted(files):
+        relative = item.relative_to(attempt_dir).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(_file_digest(item)))
+    return digest.hexdigest()
 
 
 def _write_stage_artifacts(
@@ -2145,6 +2749,28 @@ def _make_plan(
     """Call old two-argument plans and new context-aware plans alike."""
 
     maker = getattr(module, "make_plan")
+    parameters = inspect.signature(maker).parameters
+    kwargs: dict[str, Any] = {"stage": stage}
+    if "context" in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        kwargs["context"] = context
+    return maker(table, **kwargs)
+
+
+def _make_named_plan(
+    module: ModuleType,
+    function_name: str,
+    table: pl.DataFrame,
+    stage: str,
+    context: EvalContext,
+) -> Any:
+    maker = getattr(module, function_name, None)
+    if maker is None:
+        raise AttributeError(
+            f"signal plan must define {function_name}(table, stage, context)"
+        )
     parameters = inspect.signature(maker).parameters
     kwargs: dict[str, Any] = {"stage": stage}
     if "context" in parameters or any(

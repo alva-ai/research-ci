@@ -38,11 +38,12 @@ def contract_card(
             "",
             "Approve this card before the Data stage can run.",
             "",
-            "`rci approve --stage contract --out <run> --by human|agent "
+            "`rci approve --stage contract --out <run> --by agent "
             "--decision continue|stop --card <card_id>`",
             "",
             "Or reject it with `rci reject --stage contract --out <run> "
-            "--by human|agent --message <reason> --card <card_id>`.",
+            "--by agent --message <reason> --card <card_id>`. A human reviewer "
+            "uses `--by human` instead.",
         )
     )
     return render_card("\n".join(lines))
@@ -178,6 +179,8 @@ def sig_card(
     candidates: tuple[str, ...],
     dispositions: pl.DataFrame,
     result_status: str,
+    validation_plan: dict[str, Any] | None = None,
+    confirmation_status: str = "not_declared",
     workflow_state: str = "review",
     artifact_role: str = "candidate",
 ) -> tuple[str, str]:
@@ -198,6 +201,13 @@ def sig_card(
     lines.append(f"- candidate_signals: {len(candidates)}")
     lines.append(f"- evaluation_columns: {len(evaluation_columns)}")
     lines.append(f"- sidecars: {', '.join(sidecars) or '-'}")
+    evidence_scope = (
+        validation_plan.get("evidence_scope", "development_only")
+        if validation_plan is not None
+        else "development_only"
+    )
+    lines.append(f"- evidence_scope: {evidence_scope}")
+    lines.append(f"- confirmation_status: {confirmation_status}")
     _append_assessment(lines, result)
     signal_table = table.select(*keys, *signals)
     triage = assess_features(signal_table, keys, result.records)
@@ -239,9 +249,25 @@ def sig_card(
     lines.extend(("", "## Four slots", ""))
     _append_slot_contract(lines)
     _append_compact_eval_summary(lines, result.records)
+    lines.extend(("", "## Validation design", ""))
+    if validation_plan is None:
+        lines.append("- no `VALIDATION_PLAN` declared; evidence is development-only")
+    else:
+        lines.extend(("```json", json.dumps(validation_plan, indent=2, sort_keys=True)))
+        lines.append("```")
     lines.extend(("", "## Signal recipe metadata", "", "```json"))
     lines.append(json.dumps(metadata, indent=2, sort_keys=True, default=str))
-    review_message, review_command = _review_prompt("sig", artifact_role)
+    if artifact_role == "attempt" and confirmation_status == "pending":
+        review_message = (
+            "This development attempt declares a confirmation holdout. Freeze its "
+            "recipe before submission."
+        )
+        review_command = (
+            "`rci sig freeze --out <run> --attempt <id> "
+            "--context <confirmation-context>`"
+        )
+    else:
+        review_message, review_command = _review_prompt("sig", artifact_role)
     lines.extend(
         (
             "```",
@@ -491,9 +517,10 @@ def _review_prompt(stage: str, artifact_role: str) -> tuple[str, str]:
             "--recommendation continue|stop|uncertain`",
         )
     return (
-        "The submitted artifact and eval evidence are ready for human review.",
-        f"`rci approve --stage {stage} --out <run> --by human|agent "
-        "--decision continue|stop --card <card_id>`",
+        "The submitted artifact and eval evidence are ready for reviewer action.",
+        f"`rci approve --stage {stage} --out <run> --by agent "
+        "--decision continue|stop --card <card_id>` (use `--by human` when the "
+        "reviewer is human)",
     )
 
 

@@ -4,6 +4,7 @@ from .contract import Contract, ContractError, validate_contract
 from .eval import (
     AlgoSet,
     CaseEvalTest,
+    ConfirmationPlan,
     DataSet,
     EvalContext,
     EvalObservation,
@@ -23,6 +24,8 @@ from .eval import (
     SignalSet,
     Slot,
     StageMenu,
+    ValidationMethod,
+    ValidationPlan,
     assess_signal_evidence,
     compile_stage_menu,
     expand_library,
@@ -32,6 +35,7 @@ from .eval import (
 __all__ = [
     "AlgoSet",
     "CaseEvalTest",
+    "ConfirmationPlan",
     "DataSet",
     "EvalContext",
     "Contract",
@@ -51,6 +55,8 @@ __all__ = [
     "SelectedMethod",
     "SignalSet",
     "StageMenu",
+    "ValidationMethod",
+    "ValidationPlan",
     "OutputKind",
     "Slot",
     "run_eval_plan",

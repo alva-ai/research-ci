@@ -48,6 +48,14 @@ cannot be selected in Feat. A targetless Sig declaration must state its
 hypothesis explicitly, and the menu keeps target-dependent methods unavailable
 for that declaration.
 
+`ValidationPlan` separately describes how a Sig case develops and selects its
+final recipe. Its `ValidationMethod` entries are deliberately open-ended:
+rolling folds, PBO, cluster stability, or a case-owned method can all be named
+without expanding an Engine enum. An optional `ConfirmationPlan` names a
+one-time context and the already-declared function that evaluates final signals
+after the development attempt is frozen. If confirmation is omitted, the Card
+marks the evidence as development-only.
+
 For target-aware Sig, the Engine floor requires exact feature-universe
 declaration, library screening coverage for every feature-horizon pair, a
 saved screening table, one explained disposition per feature, and acyclic

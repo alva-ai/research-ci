@@ -343,6 +343,8 @@ rci approve --stage feat --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
 rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
   --out .rci/runs/001
+rci sig freeze --out .rci/runs/001 --attempt 0001 \
+  --context path/to/confirmation-context  # when ConfirmationPlan is declared
 rci sig submit --out .rci/runs/001 --attempt 0001 --recommendation uncertain
 rci approve --stage sig --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
@@ -410,16 +412,22 @@ sig/context/*.parquet     explicit labels and other named sidecars
 sig/context/metadata.json sidecar and research metadata
 sig/selection.json        retained, excluded, and clustered features
 sig/recipe.json           rules, weights, normalization, and fit policy
+sig/validation_plan.json  open-ended development methods and selection rule
+sig/provenance.json       direct builder and plan source hashes
 sig/artifacts/            optional fitted model or matrix artifacts
 sig/eval/report.jsonl     four-slot evidence
 sig/eval/assessment.json  review disposition and reason codes
+sig/confirmation/         one-time final-signal holdout evidence, when declared
 sig/card.md               human/agent review entry point
 sig/manifest.json         provenance and hashes
 sig/plots/                optional case-owned review figures
 ```
 
-The Engine checks that candidate scores, final signals, and the declared label
-sidecar preserve the approved Feat key grid. For target-aware Sig it also
+The Engine checks that candidate scores and final signals preserve the approved
+Feat key grid. A normal label sidecar preserves that grid too. When a
+confirmation holdout is declared, the development label sidecar must instead
+contain a non-empty subset of approved keys and omit all holdout keys. For
+target-aware Sig the Engine also
 requires exact declaration of the complete Feat universe, library screening
 coverage for every feature-horizon pair, a complete screening artifact, one
 valid disposition per feature, and acyclic lineage for every candidate and
@@ -430,6 +438,25 @@ include IC, rank IC, ICIR, cumulative IC, target mutual information, bucket
 behavior, split stability, rank persistence, and drift. The case slot defines
 the actual recipe; `case_eval` proves it with valid fixtures and
 counterexamples.
+
+An optional `ValidationPlan` records the case's development procedure without
+forcing every case into one method. Its method names are open-ended, so a Lab
+may declare rolling K-fold, purged walk-forward, PBO, clustering stability, or
+a case-specific procedure. The declaration also records the deterministic
+selection rule. Without a `ConfirmationPlan`, the Card explicitly labels the
+result `development_only`.
+
+With a `ConfirmationPlan`, a valid development attempt cannot be submitted
+directly. `rci sig freeze` verifies the saved plan and builder source hashes,
+hashes the attempt products, consumes the named holdout once, and runs the
+predeclared confirmation function. That function receives approved features
+and final signals only; candidate columns are excluded. The holdout keys must
+be disjoint from the saved development label keys. A successful confirmation
+freezes the attempt for submission, and any later change to its recipe,
+selection, research evidence, fitted artifacts, or eval products is rejected.
+The workflow also refuses another holdout with the same ID or byte-content
+hash. These are protocol guarantees for a cooperating external Lab; the CLI
+does not isolate a malicious process that reads files outside the run.
 
 For a fixed set of instruments, a case exposes `build_main_table(data,
 signals)`. SigLoop writes that result directly to `sig/main.parquet`: one wide

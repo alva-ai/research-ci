@@ -3,7 +3,9 @@ import pytest
 from research_ci.workflow import (
     WorkflowError,
     approve,
+    begin_confirmation,
     card_id,
+    finish_confirmation,
     new_workflow,
     next_action,
     read_workflow,
@@ -85,7 +87,8 @@ def test_only_a_valid_attempt_can_enter_review(tmp_path) -> None:
     state = read_workflow(tmp_path)
     assert state["stages"]["data"] == "review"
     assert state["recommendations"]["data"] == "uncertain"
-    assert next_action(state)["actor"] == "human"
+    assert next_action(state)["actor"] == "reviewer"
+    assert next_action(state)["allowed_actors"] == ["human", "agent"]
     assert card_id("data-card") != card_id("other-card")
 
 
@@ -234,6 +237,80 @@ def test_reopen_requires_a_new_attempt(tmp_path) -> None:
         )
 
 
+def test_sig_confirmation_is_required_and_holdout_is_consumed_once(tmp_path) -> None:
+    state = new_workflow(("sig",), "contract-card")
+    state["stages"].update({"contract": "approved", "sig": "ready"})
+    write_workflow(tmp_path, state)
+    record_attempt(
+        tmp_path,
+        stage="sig",
+        attempt="0001",
+        path="sig/attempts/0001",
+        valid=True,
+        card="development-card",
+        checks="valid",
+        confirmation_required=True,
+        evidence_scope="confirmation_pending",
+    )
+
+    with pytest.raises(WorkflowError, match="RCI-SIG-CONFIRMATION-REQUIRED"):
+        submit_for_review(
+            tmp_path,
+            stage="sig",
+            card="development-card",
+            recommendation="continue",
+            attempt="0001",
+        )
+
+    begin_confirmation(
+        tmp_path,
+        attempt="0001",
+        holdout_id="future-001",
+        holdout_hash="holdout-hash",
+        sealed_hash="sealed-hash",
+    )
+    finish_confirmation(
+        tmp_path,
+        attempt="0001",
+        evidence="sig/attempts/0001/confirmation/eval/report.jsonl",
+        valid=True,
+        card="confirmed-card",
+    )
+    submit_for_review(
+        tmp_path,
+        stage="sig",
+        card="confirmed-card",
+        recommendation="continue",
+        attempt="0001",
+    )
+    state = read_workflow(tmp_path)
+    assert state["attempts"]["sig"][0]["frozen"] is True
+    assert state["holdouts"][0]["status"] == "revealed_valid"
+
+    state["stages"]["sig"] = "ready"
+    state["attempts"]["sig"][0]["submitted"] = True
+    write_workflow(tmp_path, state)
+    record_attempt(
+        tmp_path,
+        stage="sig",
+        attempt="0002",
+        path="sig/attempts/0002",
+        valid=True,
+        card="next-development-card",
+        checks="valid",
+        confirmation_required=True,
+        evidence_scope="confirmation_pending",
+    )
+    with pytest.raises(WorkflowError, match="RCI-SIG-HOLDOUT-CONSUMED"):
+        begin_confirmation(
+            tmp_path,
+            attempt="0002",
+            holdout_id="renamed-future-block",
+            holdout_hash="holdout-hash",
+            sealed_hash="next-sealed-hash",
+        )
+
+
 def test_version_one_passed_state_is_read_as_approved(tmp_path) -> None:
     state = new_workflow(("data",), "contract-card")
     state["version"] = 1
@@ -241,5 +318,5 @@ def test_version_one_passed_state_is_read_as_approved(tmp_path) -> None:
     write_workflow(tmp_path, state)
 
     loaded = read_workflow(tmp_path)
-    assert loaded["version"] == 2
+    assert loaded["version"] == 3
     assert loaded["stages"]["contract"] == "approved"

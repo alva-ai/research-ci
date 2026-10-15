@@ -84,7 +84,7 @@ def make_plan(table, stage="data", context=None):
     assert main(["contract", "derive", str(contract), "--out", str(out)]) == 1
     frozen_contract = capsys.readouterr().out
     assert "REFUSED [RCI-STAGE-FROZEN]" in frozen_contract
-    assert "actor: human" in frozen_contract
+    assert "actor: reviewer" in frozen_contract
 
     refused = main(
         [
@@ -103,7 +103,7 @@ def make_plan(table, stage="data", context=None):
     refusal = capsys.readouterr().out
     assert refused == 1
     assert "REFUSED [RCI-STAGE-NOT-READY]" in refusal
-    assert "actor: human" in refusal
+    assert "actor: reviewer" in refusal
     assert "rci approve --stage contract" in refusal
 
     assert (
@@ -190,6 +190,13 @@ def make_plan(table, stage="data", context=None):
     assert "- workflow_state: review" in submitted_card
     assert "- artifact_role: candidate" in submitted_card
     assert "- recommendation: continue" in submitted_card
+
+    assert main(["next", "--out", str(out), "--json"]) == 0
+    review_action = json.loads(capsys.readouterr().out)
+    assert review_action["actor"] == "reviewer"
+    assert review_action["allowed_actors"] == ["human", "agent"]
+    review_args = shlex.split(review_action["command"])
+    assert review_args[review_args.index("--by") + 1] == "agent"
 
     refused_rerun = main(
         [
