@@ -248,7 +248,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
       <div>
         <div class="eyebrow">Research CI · MVP design</div>
         <h1>Agent freedom inside.<br>Reviewable contracts between stages.</h1>
-        <p class="lead">A deterministic Engine moves one research idea through Contract, Data, Feat, Sig, and Algo. The Lab explores freely; every handoff is a declared table, four-slot evidence, and an explicit approval.</p>
+        <p class="lead">A deterministic Engine moves one research idea through Contract, Data, Feat, Sig, and Algo. The Lab explores through numbered attempts; only a submitted candidate reaches explicit review.</p>
       </div>
       <button class="theme" id="themeToggle" type="button" aria-label="Toggle light and dark theme">Light / dark</button>
     </div>
@@ -257,7 +257,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
       <span class="badge">Polars-first</span>
       <span class="badge">External Lab builders</span>
       <span class="badge">One main Parquet per stage</span>
-      <span class="badge">2026-10-14</span>
+      <span class="badge">2026-10-15</span>
     </div>
   </header>
 
@@ -271,11 +271,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <div class="owner-label">ENGINE · deterministic</div>
         <h3>Protocol, checks, and review gates</h3>
         <ul>
-          <li>Stage order and approved-upstream access</li>
+          <li>Stage order, legal transitions, and approved-upstream access</li>
           <li>DataSet, FeatureSet, SignalSet, AlgoSet</li>
           <li>Fixed baseline and stage-scoped eval menu</li>
           <li>Four-slot runner, reports, Cards, manifests</li>
-          <li>Stable Card ID and approval provenance</li>
+          <li>Actionable refusals, stable Card ID, and review provenance</li>
         </ul>
       </div>
       <div class="owner agent">
@@ -305,19 +305,19 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="data" aria-pressed="false">
-            <span class="stage-name">Data</span><span class="stage-sub">Explore sources and assemble the point-in-time research table</span><span class="stage-pill">4 slots + review</span>
+            <span class="stage-name">Data</span><span class="stage-sub">Explore sources and assemble the point-in-time research table</span><span class="stage-pill">attempts + submit</span>
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="feat" aria-pressed="false">
-            <span class="stage-name">Feat</span><span class="stage-sub">Build causal, target-free feature columns</span><span class="stage-pill">4 slots + review</span>
+            <span class="stage-name">Feat</span><span class="stage-sub">Build causal, target-free feature columns</span><span class="stage-pill">attempts + submit</span>
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="sig" aria-pressed="true">
-            <span class="stage-name">Sig</span><span class="stage-sub">Screen the full feature universe and materialize predictions</span><span class="stage-pill">4 slots + review</span>
+            <span class="stage-name">Sig</span><span class="stage-sub">Screen the full feature universe and materialize predictions</span><span class="stage-pill">attempts + submit</span>
           </button>
           <div class="arrow" aria-hidden="true">→</div>
           <button class="stage" type="button" data-stage="algo" aria-pressed="false">
-            <span class="stage-name">Algo</span><span class="stage-sub">Turn predictions into positions or trades and backtest them</span><span class="stage-pill">4 slots + review</span>
+            <span class="stage-name">Algo</span><span class="stage-sub">Turn predictions into positions or trades and backtest them</span><span class="stage-pill">attempts + submit</span>
           </button>
         </div>
       </div>
@@ -326,6 +326,27 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <div><div class="detail-label">Formal output</div><div class="detail-value" id="detailOutput"></div></div>
         <div><div class="detail-label">Approval means</div><div class="detail-value" id="detailApproval"></div></div>
       </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="workflow-title">
+    <div class="section-head">
+      <div><h2 id="workflow-title">One enforced Agent/reviewer loop</h2></div>
+      <p class="section-copy">Eval pass/fail belongs to an attempt. Workflow state only says who may act next, and the CLI refuses every skipped transition with the exact next legal command.</p>
+    </div>
+    <div class="panel table-wrap">
+      <table>
+        <thead><tr><th>Current state</th><th>Actor</th><th>Legal action</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td><code>ready</code></td><td>Agent</td><td><code>run</code> as often as needed</td><td>Append a numbered valid or invalid attempt; remain ready</td></tr>
+          <tr><td><code>ready</code></td><td>Agent</td><td><code>submit</code> one valid attempt with a recommendation</td><td>Publish the formal candidate and enter review</td></tr>
+          <tr><td><code>review</code></td><td>Reviewer</td><td><code>approve --decision continue</code></td><td>Approve this Card and unlock the next enabled stage</td></tr>
+          <tr><td><code>review</code></td><td>Reviewer</td><td><code>approve --decision stop</code></td><td>Record an intentional no-go and stop the workflow</td></tr>
+          <tr><td><code>review</code></td><td>Reviewer</td><td><code>reject --message ...</code></td><td>Return to ready; the Agent must create a new attempt</td></tr>
+          <tr><td><code>approved</code> / <code>stopped</code></td><td>Human</td><td><code>reopen --message ...</code></td><td>Return to ready and lock all downstream stages</td></tr>
+        </tbody>
+      </table>
+      <div class="callout"><strong>Agent handoff:</strong> each submitted Card carries only <code>continue</code>, <code>stop</code>, or <code>uncertain</code> as its recommendation. The reviewer owns the transition.</div>
     </div>
   </section>
 
@@ -346,7 +367,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
         <div class="arrow" aria-hidden="true">→</div>
         <div class="box agent-box"><strong>External builder + selected plan</strong><span>Research freedom, explicit declaration, selected library methods, case rules.</span></div>
         <div class="arrow" aria-hidden="true">→</div>
-        <div class="box evidence-box"><strong>Main + evidence + Card</strong><span>Parquet, sidecars, JSONL report, assessment, recipe, manifest, review state.</span></div>
+        <div class="box evidence-box"><strong>Numbered attempt</strong><span>Parquet, sidecars, JSONL report, assessment, recipe, and draft Card. A valid attempt still requires submit.</span></div>
       </div>
     </div>
   </section>
@@ -402,12 +423,12 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 
   <section class="section" aria-labelledby="lineage-title">
     <div class="section-head">
-      <div><h2 id="lineage-title">What came from Research CI—and what changed</h2></div>
-      <p class="section-copy">Research CI keeps the inspectable stage discipline while avoiding guarantees the MVP has not implemented.</p>
+      <div><h2 id="lineage-title">Earlier draft and current MVP</h2></div>
+      <p class="section-copy">The current MVP keeps the inspectable stage discipline while avoiding guarantees it has not implemented.</p>
     </div>
     <div class="panel table-wrap">
       <table>
-        <thead><tr><th>Design concern</th><th>Research CI draft</th><th>Research CI MVP</th></tr></thead>
+        <thead><tr><th>Design concern</th><th>Earlier draft</th><th>Current MVP</th></tr></thead>
         <tbody>
           <tr><td>Research boundary</td><td>Large up-front contract with outcomes, horizons, power, alternatives, and holdout tiers</td><td>Small mission/scope/invariants contract; labels and recipes emerge in later stages</td></tr>
           <tr><td>Per-layer structure</td><td>Four slots with a decisive statistical floor and lab vetoes</td><td>Four slots for correctness, selected general evidence, case definitions, and counterexamples</td></tr>
@@ -443,7 +464,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
   </section>
 
   <footer class="footer">
-    <span>Research CI design snapshot · 2026-10-14</span>
+    <span>Research CI design snapshot · 2026-10-15</span>
     <span><a href="design.md">Full design requirements</a> · <a href="../README.md">Quickstart</a> · <a href="../TODO.md">Implementation ledger</a></span>
   </footer>
 </main>

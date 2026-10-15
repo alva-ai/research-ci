@@ -74,10 +74,10 @@ def test_algo_cli_runs_external_backtester_and_writes_review_card(tmp_path) -> N
     state = new_workflow(("data", "feat", "sig", "algo"), "contract-card")
     state["stages"].update(
         {
-            "contract": "passed",
-            "data": "passed",
-            "feat": "passed",
-            "sig": "passed",
+            "contract": "approved",
+            "data": "approved",
+            "feat": "approved",
+            "sig": "approved",
             "algo": "ready",
         }
     )
@@ -225,6 +225,24 @@ def make_plan(table, stage="algo", context=None):
     )
 
     assert exit_code == 0
+    assert read_workflow(out)["stages"]["algo"] == "ready"
+    assert (out / "algo" / "attempts" / "0001" / "main.parquet").exists()
+    assert not (out / "algo" / "main.parquet").exists()
+
+    submit_exit = main(
+        [
+            "algo",
+            "submit",
+            "--out",
+            str(out),
+            "--attempt",
+            "0001",
+            "--recommendation",
+            "stop",
+        ]
+    )
+
+    assert submit_exit == 0
     main_table = pl.read_parquet(out / "algo" / "main.parquet")
     backtest = pl.read_parquet(out / "algo" / "backtest" / "timeseries.parquet")
     summary = pl.read_parquet(out / "algo" / "backtest" / "summary.parquet")
@@ -235,4 +253,6 @@ def make_plan(table, stage="algo", context=None):
     assert manifest["representation"] == "weights"
     assert manifest["strategies"] == ["pair"]
     assert manifest["backtester"] == str(backtester)
+    assert manifest["workflow_state"] == "review"
+    assert manifest["recommendation"] == "stop"
     assert read_workflow(out)["stages"]["algo"] == "review"

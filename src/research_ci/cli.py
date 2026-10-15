@@ -6,6 +6,8 @@ import argparse
 import importlib.util
 import inspect
 import json
+import shlex
+import shutil
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import ModuleType
@@ -48,16 +50,87 @@ from .kit import AlgoBundle, BacktestResult, BuildInfo, SignalBundle
 from .workflow import (
     STAGE_ORDER,
     WorkflowError,
-    new_workflow,
+    latest_attempt,
     next_action,
     read_workflow,
+    record_attempt,
+    render_card,
     require_stage_ready,
+    submit_contract_for_review,
     submit_for_review,
-    write_workflow,
 )
 from .workflow import (
     approve as approve_workflow,
 )
+from .workflow import (
+    reject as reject_workflow,
+)
+from .workflow import (
+    reopen as reopen_workflow,
+)
+
+_STAGE_GUIDES: dict[str, dict[str, Any]] = {
+    "data": {
+        "objective": "assemble point-in-time source facts into one research table",
+        "input": "the approved Contract plus case-owned raw sources",
+        "output": "one Data main table; exploration and provenance stay as sidecars",
+        "tools": [
+            "Polars joins, backward as-of joins, alignment, and resampling",
+            "case-owned downloaders and source reconciliation",
+            "research_ci.kit.data helpers when they match the source shape",
+        ],
+        "required": [
+            "all four eval slots are populated",
+            "mandatory baseline and case rules pass",
+            "no feature, label, signal, position, or PnL semantics enter the table",
+        ],
+    },
+    "feat": {
+        "objective": "build reusable point-in-time, target-free measurements",
+        "input": "only the approved Data main table",
+        "output": "the preserved key grid plus declared feature columns",
+        "tools": [
+            "name-free Polars expressions from research_ci.kit.feat",
+            "rolling, normalization, robust transforms, and structural combinations",
+            "optional matrix diagnostics such as PCA and VIF in eval sidecars",
+        ],
+        "required": [
+            "the approved Data key grid is preserved",
+            "features are causal and target-free",
+            "all four eval slots are populated",
+        ],
+    },
+    "sig": {
+        "objective": "turn the complete approved feature universe into signals",
+        "input": "the approved Feat table and explicit label sidecars",
+        "output": "wide signal handoff plus research evidence and feature dispositions",
+        "tools": [
+            "rules, ranks, quantiles, composites, PCA, fitted models, or ensembles",
+            "time splits and forward labels from research_ci.kit.sig",
+            "target-aware methods selected from the Sig eval menu",
+        ],
+        "required": [
+            "every approved feature has one evidenced disposition",
+            "candidate and final signal lineage is complete",
+            "all four eval slots are populated",
+        ],
+    },
+    "algo": {
+        "objective": "map approved signals into executable positions or trades",
+        "input": "only the approved Sig handoff plus declared execution context",
+        "output": "positions or trades and explicit external backtest evidence",
+        "tools": [
+            "bounded sizing and pair-weight helpers from research_ci.kit.algo",
+            "case-owned risk, execution, cost, and backtest implementations",
+            "optional visualization after a candidate is submitted",
+        ],
+        "required": [
+            "source prices and signals are preserved",
+            "position and backtest accounting satisfy the declared contract",
+            "all four eval slots are populated",
+        ],
+    },
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         data_run.add_argument("--plan", required=True, type=Path)
         data_run.add_argument("--out", required=True, type=Path)
         data_run.add_argument("--context", type=Path)
+        _add_submit_parser(data_commands)
 
     feat = commands.add_parser("feat", help="run an external feature builder")
     feat_commands = feat.add_subparsers(dest="feat_command", required=True)
@@ -91,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     feat_run.add_argument("--plan", required=True, type=Path)
     feat_run.add_argument("--out", required=True, type=Path)
     feat_run.add_argument("--context", type=Path)
+    _add_submit_parser(feat_commands)
 
     sig = commands.add_parser("sig", help="run an external signal builder")
     sig_commands = sig.add_subparsers(dest="sig_command", required=True)
@@ -99,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     sig_run.add_argument("--plan", required=True, type=Path)
     sig_run.add_argument("--out", required=True, type=Path)
     sig_run.add_argument("--context", type=Path)
+    _add_submit_parser(sig_commands)
 
     algo = commands.add_parser("algo", help="run an external portfolio builder")
     algo_commands = algo.add_subparsers(dest="algo_command", required=True)
@@ -108,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     algo_run.add_argument("--backtester", required=True, type=Path)
     algo_run.add_argument("--out", required=True, type=Path)
     algo_run.add_argument("--context", type=Path)
+    _add_submit_parser(algo_commands)
 
     evaluate = commands.add_parser("eval", help="run an external four-slot plan")
     eval_commands = evaluate.add_subparsers(dest="eval_command", required=True)
@@ -140,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
 
     next_command = commands.add_parser("next", help="show the next workflow action")
     next_command.add_argument("--out", required=True, type=Path)
+    next_command.add_argument("--json", action="store_true", dest="as_json")
 
     approve = commands.add_parser("approve", help="approve a reviewed stage card")
     approve.add_argument(
@@ -147,8 +225,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     approve.add_argument("--out", required=True, type=Path)
     approve.add_argument("--by", required=True, choices=("human", "agent"))
+    approve.add_argument("--decision", required=True, choices=("continue", "stop"))
     approve.add_argument("--message", default="")
-    approve.add_argument("--card", dest="expected_card")
+    approve.add_argument("--card", required=True, dest="expected_card")
+
+    reject = commands.add_parser("reject", help="return a reviewed stage to its Agent")
+    reject.add_argument(
+        "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
+    )
+    reject.add_argument("--out", required=True, type=Path)
+    reject.add_argument("--by", required=True, choices=("human", "agent"))
+    reject.add_argument("--message", required=True)
+    reject.add_argument("--card", required=True, dest="expected_card")
+
+    reopen = commands.add_parser("reopen", help="reopen an accepted stage")
+    reopen.add_argument(
+        "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
+    )
+    reopen.add_argument("--out", required=True, type=Path)
+    reopen.add_argument("--by", required=True, choices=("human", "agent"))
+    reopen.add_argument("--message", required=True)
+
+    guide = commands.add_parser("guide", help="show optional stage guidance")
+    guide.add_argument(
+        "--stage", required=True, choices=("data", "feat", "sig", "algo")
+    )
+    guide.add_argument("--json", action="store_true", dest="as_json")
 
     args = parser.parse_args(argv)
     if args.command == "contract":
@@ -156,12 +258,20 @@ def main(argv: list[str] | None = None) -> int:
             return _contract_derive(args.path, args.out)
         return _contract_check(args.path)
     if args.command in {"data", "dataloop"}:
+        if args.data_command == "submit":
+            return _stage_submit("data", args.out, args.recommendation, args.attempt)
         return _data_run(args.contract, args.builder, args.plan, args.out, args.context)
     if args.command == "feat":
+        if args.feat_command == "submit":
+            return _stage_submit("feat", args.out, args.recommendation, args.attempt)
         return _feat_run(args.builder, args.plan, args.out, args.context)
     if args.command == "sig":
+        if args.sig_command == "submit":
+            return _stage_submit("sig", args.out, args.recommendation, args.attempt)
         return _sig_run(args.builder, args.plan, args.out, args.context)
     if args.command == "algo":
+        if args.algo_command == "submit":
+            return _stage_submit("algo", args.out, args.recommendation, args.attempt)
         return _algo_run(
             args.builder,
             args.plan,
@@ -184,16 +294,40 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         return _status(args.out)
     if args.command == "next":
-        return _next(args.out)
+        return _next(args.out, args.as_json)
     if args.command == "approve":
         return _approve(
+            args.stage,
+            args.out,
+            args.by,
+            args.decision,
+            args.message,
+            args.expected_card,
+        )
+    if args.command == "reject":
+        return _reject(
             args.stage,
             args.out,
             args.by,
             args.message,
             args.expected_card,
         )
+    if args.command == "reopen":
+        return _reopen(args.stage, args.out, args.by, args.message)
+    if args.command == "guide":
+        return _guide(args.stage, args.as_json)
     return 2
+
+
+def _add_submit_parser(commands: argparse._SubParsersAction[Any]) -> None:
+    submit = commands.add_parser("submit", help="submit a valid attempt for review")
+    submit.add_argument("--out", required=True, type=Path)
+    submit.add_argument("--attempt")
+    submit.add_argument(
+        "--recommendation",
+        required=True,
+        choices=("continue", "stop", "uncertain"),
+    )
 
 
 def _contract_check(path: Path) -> int:
@@ -215,12 +349,17 @@ def _contract_derive(path: Path, out: Path) -> int:
         payload = asdict(contract)
         name = path.parent.name
         card, card_identifier = contract_card(name, payload)
+        submit_contract_for_review(
+            out,
+            card=card_identifier,
+            enabled_stages=contract.stages,
+            commands=_workflow_commands(path, out),
+        )
         (out / "contract").mkdir(parents=True, exist_ok=True)
         (out / "contract" / "contract.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         (out / "contract" / "card.md").write_text(card + "\n", encoding="utf-8")
-        write_workflow(out, new_workflow(contract.stages, card_identifier))
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"contract derive failed: {exc}")
         return 1
@@ -228,11 +367,18 @@ def _contract_derive(path: Path, out: Path) -> int:
     print(f"contract card: {out / 'contract' / 'card.md'}")
     print(
         "next: rci approve "
-        f"--stage contract --out {out} --by human --card {card_identifier}"
+        f"--stage contract --out {out} --by human --decision continue "
+        f"--card {card_identifier}"
     )
     print(
         "   or: rci approve "
-        f"--stage contract --out {out} --by agent --card {card_identifier}"
+        f"--stage contract --out {out} --by agent --decision continue "
+        f"--card {card_identifier}"
+    )
+    print(
+        "   or: rci reject "
+        f"--stage contract --out {out} --by human --message <reason> "
+        f"--card {card_identifier}"
     )
     return 0
 
@@ -409,14 +555,13 @@ def _data_run(
             raise ValueError("contract does not enable the data stage")
         state = read_workflow(out)
         require_stage_ready(state, "data")
+        attempt, out_data = _allocate_attempt(out, state, "data")
 
         builder = _load_module(builder_path)
         table = _build_table(builder)
         if not isinstance(table, pl.DataFrame):
             raise TypeError("data builder must return a Polars DataFrame")
 
-        out_data = out / "data"
-        out_data.mkdir(parents=True, exist_ok=True)
         table.write_parquet(out_data / "main.parquet")
 
         exploration = {}
@@ -444,26 +589,23 @@ def _data_run(
         (out_data / "eval" / "assessment.json").write_text(
             json.dumps(assessment, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        result_status = _result_status(result)
+        checks_status = _checks_status(result)
         card, card_identifier = data_card(
             table,
             result,
             exploration,
-            result_status=result_status,
+            result_status=checks_status,
+            workflow_state="ready",
+            artifact_role="attempt",
         )
         (out_data / "card.md").write_text(card + "\n", encoding="utf-8")
-        state = submit_for_review(
-            out,
-            stage="data",
-            card=card_identifier,
-            result_status=result_status,
-        )
-        (out / "manifest.json").write_text(
+        (out_data / "manifest.json").write_text(
             json.dumps(
                 {
                     "stage": "data",
-                    "status": result_status,
-                    "workflow_state": state["stages"]["data"],
+                    "attempt": attempt,
+                    "checks": checks_status,
+                    "workflow_state": "ready",
                     "card_id": card_identifier,
                     "rows": table.height,
                     "columns": table.columns,
@@ -480,19 +622,28 @@ def _data_run(
             + "\n",
             encoding="utf-8",
         )
+        record_attempt(
+            out,
+            stage="data",
+            attempt=attempt,
+            path=str(out_data),
+            valid=result.passed,
+            card=card_identifier,
+            checks=checks_status,
+        )
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"data run failed: {exc}")
         return 1
-    print(card)
-    print(f"data card: {out_data / 'card.md'}")
-    print(
-        "next: rci approve "
-        f"--stage data --out {out} --by human --card {card_identifier}"
-    )
-    print(
-        "   or: rci approve "
-        f"--stage data --out {out} --by agent --card {card_identifier}"
-    )
+    print(f"data attempt {attempt}: {checks_status}")
+    print(f"attempt report: {out_data / 'card.md'}")
+    if result.passed:
+        print(
+            "next: inspect the attempt, run another, or submit it with "
+            f"`rci data submit --out {out} --attempt {attempt} "
+            "--recommendation <continue|stop|uncertain>`"
+        )
+    else:
+        print("next: fix the reported mandatory checks and run data again")
     return 0 if result.passed else 1
 
 
@@ -505,6 +656,7 @@ def _feat_run(
     try:
         state = read_workflow(out)
         require_stage_ready(state, "feat")
+        attempt, out_feat = _allocate_attempt(out, state, "feat")
         data_path = out / "data" / "main.parquet"
         data_table = pl.read_parquet(data_path)
         data_before = data_table.clone()
@@ -530,8 +682,6 @@ def _feat_run(
         plan = replace(plan, baseline=(shape_rule, *plan.baseline))
         result = run_eval_plan(feature_table, plan, context)
 
-        out_feat = out / "feat"
-        out_feat.mkdir(parents=True, exist_ok=True)
         feature_table.write_parquet(out_feat / "main.parquet")
 
         exploration = {}
@@ -558,22 +708,18 @@ def _feat_run(
         (out_feat / "eval" / "assessment.json").write_text(
             json.dumps(assessment, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        result_status = _result_status(result)
+        checks_status = _checks_status(result)
         card, card_identifier = feat_card(
             feature_table,
             result,
             exploration,
             input_rows=data_table.height,
             keys=keys,
-            result_status=result_status,
+            result_status=checks_status,
+            workflow_state="ready",
+            artifact_role="attempt",
         )
         (out_feat / "card.md").write_text(card + "\n", encoding="utf-8")
-        state = submit_for_review(
-            out,
-            stage="feat",
-            card=card_identifier,
-            result_status=result_status,
-        )
         feature_columns = [
             column for column in feature_table.columns if column not in keys
         ]
@@ -581,8 +727,9 @@ def _feat_run(
             json.dumps(
                 {
                     "stage": "feat",
-                    "status": result_status,
-                    "workflow_state": state["stages"]["feat"],
+                    "attempt": attempt,
+                    "checks": checks_status,
+                    "workflow_state": "ready",
                     "card_id": card_identifier,
                     "input_table": str(data_path),
                     "main_table": str(out_feat / "main.parquet"),
@@ -602,19 +749,28 @@ def _feat_run(
             + "\n",
             encoding="utf-8",
         )
+        record_attempt(
+            out,
+            stage="feat",
+            attempt=attempt,
+            path=str(out_feat),
+            valid=result.passed,
+            card=card_identifier,
+            checks=checks_status,
+        )
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"feat run failed: {exc}")
         return 1
-    print(card)
-    print(f"feat card: {out_feat / 'card.md'}")
-    print(
-        "next: rci approve "
-        f"--stage feat --out {out} --by human --card {card_identifier}"
-    )
-    print(
-        "   or: rci approve "
-        f"--stage feat --out {out} --by agent --card {card_identifier}"
-    )
+    print(f"feat attempt {attempt}: {checks_status}")
+    print(f"attempt report: {out_feat / 'card.md'}")
+    if result.passed:
+        print(
+            "next: inspect the attempt, run another, or submit it with "
+            f"`rci feat submit --out {out} --attempt {attempt} "
+            "--recommendation <continue|stop|uncertain>`"
+        )
+    else:
+        print("next: fix the reported mandatory checks and run feat again")
     return 0 if result.passed else 1
 
 
@@ -627,6 +783,7 @@ def _sig_run(
     try:
         state = read_workflow(out)
         require_stage_ready(state, "sig")
+        attempt, out_sig = _allocate_attempt(out, state, "sig")
         feature_path = out / "feat" / "main.parquet"
         feature_table = pl.read_parquet(feature_path)
         feature_before = feature_table.clone()
@@ -829,8 +986,6 @@ def _sig_run(
         plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
         result = run_eval_plan(evaluation_table, plan, context)
 
-        out_sig = out / "sig"
-        out_sig.mkdir(parents=True, exist_ok=True)
         main_table.write_parquet(out_sig / "main.parquet")
         (out_sig / "algo_input.parquet").unlink(missing_ok=True)
         research_dir = out_sig / "research"
@@ -908,7 +1063,7 @@ def _sig_run(
             json.dumps(assessment, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        result_status = _result_status(result)
+        checks_status = _checks_status(result)
         card, card_identifier = sig_card(
             main_table,
             result,
@@ -920,21 +1075,18 @@ def _sig_run(
             sidecars=tuple(sorted(context.tables)),
             candidates=declaration.candidates,
             dispositions=disposition_table,
-            result_status=result_status,
+            result_status=checks_status,
+            workflow_state="ready",
+            artifact_role="attempt",
         )
         (out_sig / "card.md").write_text(card + "\n", encoding="utf-8")
-        state = submit_for_review(
-            out,
-            stage="sig",
-            card=card_identifier,
-            result_status=result_status,
-        )
         (out_sig / "manifest.json").write_text(
             json.dumps(
                 {
                     "stage": "sig",
-                    "status": result_status,
-                    "workflow_state": state["stages"]["sig"],
+                    "attempt": attempt,
+                    "checks": checks_status,
+                    "workflow_state": "ready",
                     "card_id": card_identifier,
                     "input_tables": {
                         "data": str(data_path),
@@ -963,18 +1115,28 @@ def _sig_run(
             + "\n",
             encoding="utf-8",
         )
+        record_attempt(
+            out,
+            stage="sig",
+            attempt=attempt,
+            path=str(out_sig),
+            valid=result.passed,
+            card=card_identifier,
+            checks=checks_status,
+        )
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"sig run failed: {exc}")
         return 1
-    print(card)
-    print(f"sig card: {out_sig / 'card.md'}")
-    print(
-        f"next: rci approve --stage sig --out {out} --by human --card {card_identifier}"
-    )
-    print(
-        "   or: rci approve "
-        f"--stage sig --out {out} --by agent --card {card_identifier}"
-    )
+    print(f"sig attempt {attempt}: {checks_status}")
+    print(f"attempt report: {out_sig / 'card.md'}")
+    if result.passed:
+        print(
+            "next: inspect the attempt, run another, or submit it with "
+            f"`rci sig submit --out {out} --attempt {attempt} "
+            "--recommendation <continue|stop|uncertain>`"
+        )
+    else:
+        print("next: fix the reported mandatory checks and run sig again")
     return 0 if result.passed else 1
 
 
@@ -990,6 +1152,7 @@ def _algo_run(
     try:
         state = read_workflow(out)
         require_stage_ready(state, "algo")
+        attempt, out_algo = _allocate_attempt(out, state, "algo")
         signal_path = out / "sig" / "main.parquet"
         signal_table = pl.read_parquet(signal_path)
         signal_before = signal_table.clone()
@@ -1074,8 +1237,6 @@ def _algo_run(
         plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
         eval_result = run_eval_plan(main_table, plan, context)
 
-        out_algo = out / "algo"
-        out_algo.mkdir(parents=True, exist_ok=True)
         main_table.write_parquet(out_algo / "main.parquet")
         backtest_dir = out_algo / "backtest"
         backtest_dir.mkdir(parents=True, exist_ok=True)
@@ -1113,7 +1274,7 @@ def _algo_run(
             json.dumps(assessment, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        result_status = _result_status(eval_result)
+        checks_status = _checks_status(eval_result)
         card, card_identifier = algo_card(
             main_table,
             eval_result,
@@ -1124,21 +1285,18 @@ def _algo_run(
             positions=declaration.positions,
             representation=declaration.representation,
             strategies=tuple(declaration.strategies),
-            result_status=result_status,
+            result_status=checks_status,
+            workflow_state="ready",
+            artifact_role="attempt",
         )
         (out_algo / "card.md").write_text(card + "\n", encoding="utf-8")
-        state = submit_for_review(
-            out,
-            stage="algo",
-            card=card_identifier,
-            result_status=result_status,
-        )
         (out_algo / "manifest.json").write_text(
             json.dumps(
                 {
                     "stage": "algo",
-                    "status": result_status,
-                    "workflow_state": state["stages"]["algo"],
+                    "attempt": attempt,
+                    "checks": checks_status,
+                    "workflow_state": "ready",
                     "card_id": card_identifier,
                     "input_table": str(signal_path),
                     "main_table": str(out_algo / "main.parquet"),
@@ -1169,20 +1327,123 @@ def _algo_run(
             + "\n",
             encoding="utf-8",
         )
+        record_attempt(
+            out,
+            stage="algo",
+            attempt=attempt,
+            path=str(out_algo),
+            valid=eval_result.passed,
+            card=card_identifier,
+            checks=checks_status,
+        )
     except Exception as exc:  # noqa: BLE001 - CLI reports external workspace errors
         print(f"algo run failed: {exc}")
         return 1
-    print(card)
-    print(f"algo card: {out_algo / 'card.md'}")
+    print(f"algo attempt {attempt}: {checks_status}")
+    print(f"attempt report: {out_algo / 'card.md'}")
+    if eval_result.passed:
+        print(
+            "next: inspect the attempt, run another, or submit it with "
+            f"`rci algo submit --out {out} --attempt {attempt} "
+            "--recommendation <continue|stop|uncertain>`"
+        )
+    else:
+        print("next: fix the reported mandatory checks and run algo again")
+    return 0 if eval_result.passed else 1
+
+
+def _stage_submit(
+    stage: str,
+    out: Path,
+    recommendation: str,
+    requested_attempt: str | None,
+) -> int:
+    try:
+        state = read_workflow(out)
+        require_stage_ready(state, stage)
+        selected = _select_attempt(state, stage, requested_attempt)
+        if not selected.get("valid"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} is invalid and cannot be submitted.",
+                code="RCI-ATTEMPT-INVALID",
+                action=next_action(state),
+            )
+        if selected.get("rejected"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} was rejected; run a new attempt.",
+                code="RCI-ATTEMPT-REJECTED",
+                action=next_action(state),
+            )
+        if selected.get("submitted"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} was already submitted; run a new "
+                "attempt after reopening the stage.",
+                code="RCI-ATTEMPT-SUBMITTED",
+                action=next_action(state),
+            )
+        attempt_dir = Path(selected["path"])
+        if not attempt_dir.is_dir():
+            raise WorkflowError(
+                f"Attempt directory does not exist: {attempt_dir}",
+                code="RCI-ATTEMPT-MISSING",
+                action=next_action(state),
+            )
+        stage_dir = out / stage
+        published_entries = _publish_attempt(attempt_dir, stage_dir)
+        card, card_identifier = _submission_card(stage_dir / "card.md", recommendation)
+        (stage_dir / "card.md").write_text(card + "\n", encoding="utf-8")
+        _publish_manifest(
+            stage_dir / "manifest.json",
+            attempt_dir,
+            stage_dir,
+            attempt=selected["id"],
+            recommendation=recommendation,
+            card=card_identifier,
+        )
+        (stage_dir / "candidate.json").write_text(
+            json.dumps(
+                {
+                    "stage": stage,
+                    "attempt": selected["id"],
+                    "recommendation": recommendation,
+                    "card_id": card_identifier,
+                    "published_entries": published_entries,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        submit_for_review(
+            out,
+            stage=stage,
+            card=card_identifier,
+            recommendation=recommendation,
+            attempt=selected["id"],
+        )
+    except Exception as exc:  # noqa: BLE001 - report external workspace errors
+        print(f"{stage} submit failed: {exc}")
+        return 1
+    print(f"submitted: {stage} attempt {selected['id']}")
+    print(f"recommendation: {recommendation}")
+    print(f"card: {stage_dir / 'card.md'} ({card_identifier})")
     print(
-        f"next: rci approve --stage algo --out {out} --by human "
+        "next: rci approve "
+        f"--stage {stage} --out {out} --by human --decision continue "
         f"--card {card_identifier}"
     )
     print(
         "   or: rci approve "
-        f"--stage algo --out {out} --by agent --card {card_identifier}"
+        f"--stage {stage} --out {out} --by human --decision stop "
+        f"--card {card_identifier}"
     )
-    return 0 if eval_result.passed else 1
+    print(
+        "   or: rci reject "
+        f"--stage {stage} --out {out} --by human --message <reason> "
+        f"--card {card_identifier}"
+    )
+    return 0
 
 
 def _status(out: Path) -> int:
@@ -1195,37 +1456,46 @@ def _status(out: Path) -> int:
     for stage in STAGE_ORDER:
         status = state["stages"].get(stage, "disabled")
         card = state.get("cards", {}).get(stage, "-")
-        result = state.get("results", {}).get(stage, "-")
-        print(f"{stage}: {status} (card={card}, result={result})")
+        recommendation = state.get("recommendations", {}).get(stage, "-")
+        attempts = len(state.get("attempts", {}).get(stage, []))
+        print(
+            f"{stage}: {status} "
+            f"(card={card}, recommendation={recommendation}, attempts={attempts})"
+        )
     approvals = state.get("approvals", [])
     print(f"approvals: {len(approvals)}")
     for item in approvals:
-        print(f"- {item['stage']} by {item['by']} ({item['card']})")
+        decision = item.get("decision", "continue")
+        print(f"- {item['stage']} by {item['by']}: {decision} ({item['card']})")
     action = next_action(state)
     if action["stage"] is None:
-        print("next: complete")
+        print(f"next: {action.get('outcome', 'complete')}")
     else:
-        print(
-            f"next: {action['action']} {action['stage']}"
-            f" ({action.get('card') or 'no card'})"
-        )
+        print(f"next: {action['actor']} -> {action['command']}")
     return 0
 
 
-def _next(out: Path) -> int:
+def _next(out: Path, as_json: bool = False) -> int:
     try:
         state = read_workflow(out)
     except WorkflowError as exc:
         print(f"next failed: {exc}")
         return 1
     action = next_action(state)
-    if action["stage"] is None:
-        print("complete: all enabled stages are approved")
-    else:
-        print(f"stage: {action['stage']}")
-        print(f"action: {action['action']}")
-        print(f"card: {action.get('card') or '-'}")
-        print(f"reason: {action['reason']}")
+    if as_json:
+        print(json.dumps(action, indent=2, sort_keys=True))
+        return 0
+    print(f"actor: {action.get('actor') or '-'}")
+    print(f"stage: {action.get('stage') or '-'}")
+    print(f"state: {action.get('state') or '-'}")
+    print(f"action: {action['action']}")
+    print(f"command: {action.get('command') or '-'}")
+    print(f"card: {action.get('card') or '-'}")
+    print(f"reason: {action['reason']}")
+    if action.get("recommendation"):
+        print(f"recommendation: {action['recommendation']}")
+    for item in action.get("optional_help", []):
+        print(f"optional help: {item}")
     return 0
 
 
@@ -1233,25 +1503,342 @@ def _approve(
     stage: str,
     out: Path,
     by: str,
+    decision: str,
     message: str,
     expected_card: str | None,
 ) -> int:
     try:
-        _, next_stage = approve_workflow(
+        state, next_stage = approve_workflow(
             out,
             stage=stage,
             by=by,
+            decision=decision,
             message=message,
             expected_card=expected_card,
         )
     except WorkflowError as exc:
         print(f"approval failed: {exc}")
         return 1
-    if next_stage is None:
-        print(f"approved: {stage} by {by}; workflow complete")
+    if stage != "contract":
+        (out / stage / "approved.json").write_text(
+            json.dumps(
+                {
+                    "stage": stage,
+                    "attempt": state.get("candidates", {}).get(stage),
+                    "card_id": state.get("cards", {}).get(stage),
+                    "decision": decision,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if decision == "stop":
+        print(f"accepted and stopped: {stage} by {by}; workflow completed_no_go")
+    elif next_stage is None:
+        print(f"approved: {stage} by {by}; workflow completed")
     else:
         print(f"approved: {stage} by {by}; next stage ready: {next_stage}")
     return 0
+
+
+def _reject(
+    stage: str,
+    out: Path,
+    by: str,
+    message: str,
+    expected_card: str | None,
+) -> int:
+    try:
+        reject_workflow(
+            out,
+            stage=stage,
+            by=by,
+            message=message,
+            expected_card=expected_card,
+        )
+        candidate_path = out / stage / "candidate.json"
+        if candidate_path.exists():
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            candidate["review"] = "rejected"
+            candidate["message"] = message
+            candidate_path.write_text(
+                json.dumps(candidate, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+    except Exception as exc:  # noqa: BLE001 - report workflow errors
+        print(f"rejection failed: {exc}")
+        return 1
+    print(f"rejected: {stage}; Agent may revise and run a new attempt")
+    return 0
+
+
+def _reopen(stage: str, out: Path, by: str, message: str) -> int:
+    try:
+        state = reopen_workflow(out, stage=stage, by=by, message=message)
+        start = STAGE_ORDER.index(stage)
+        for affected in STAGE_ORDER[start:]:
+            if state["stages"].get(affected) != "disabled":
+                (out / affected / "approved.json").unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - report workflow errors
+        print(f"reopen failed: {exc}")
+        return 1
+    print(f"reopened: {stage}; downstream stages are locked")
+    return 0
+
+
+def _guide(stage: str, as_json: bool) -> int:
+    guide = _STAGE_GUIDES[stage]
+    if as_json:
+        print(json.dumps(guide, indent=2, sort_keys=True))
+        return 0
+    print(f"stage: {stage}")
+    print(f"objective: {guide['objective']}")
+    print(f"formal input: {guide['input']}")
+    print(f"formal output: {guide['output']}")
+    print("optional construction tools:")
+    for item in guide["tools"]:
+        print(f"- {item}")
+    print("required boundary:")
+    for item in guide["required"]:
+        print(f"- {item}")
+    print(f"eval menu: rci eval methods --stage {stage} --available-only")
+    return 0
+
+
+def _allocate_attempt(out: Path, state: dict[str, Any], stage: str) -> tuple[str, Path]:
+    attempts_dir = out / stage / "attempts"
+    used = {
+        int(item["id"])
+        for item in state.get("attempts", {}).get(stage, [])
+        if str(item.get("id", "")).isdigit()
+    }
+    if attempts_dir.exists():
+        used.update(
+            int(path.name)
+            for path in attempts_dir.iterdir()
+            if path.is_dir() and path.name.isdigit()
+        )
+    attempt = f"{max(used, default=0) + 1:04d}"
+    path = attempts_dir / attempt
+    path.mkdir(parents=True)
+    return attempt, path
+
+
+def _select_attempt(
+    state: dict[str, Any], stage: str, requested: str | None
+) -> dict[str, Any]:
+    if requested is None:
+        selected = latest_attempt(state, stage)
+        if selected is None:
+            raise WorkflowError(
+                f"Stage {stage!r} has no attempt to submit.",
+                code="RCI-ATTEMPT-MISSING",
+                action=next_action(state),
+            )
+        return selected
+    for item in state.get("attempts", {}).get(stage, []):
+        if item.get("id") == requested:
+            return item
+    raise WorkflowError(
+        f"Unknown attempt {requested!r} for stage {stage!r}.",
+        code="RCI-ATTEMPT-MISSING",
+        action=next_action(state),
+    )
+
+
+def _publish_attempt(attempt_dir: Path, stage_dir: Path) -> list[str]:
+    """Publish one attempt without touching the attempt history."""
+
+    candidate_path = stage_dir / "candidate.json"
+    if candidate_path.exists():
+        previous = json.loads(candidate_path.read_text(encoding="utf-8"))
+        for name in previous.get("published_entries", []):
+            if name in {"attempts", "candidate.json", "approved.json"}:
+                continue
+            _remove_generated_path(stage_dir / name)
+
+    published: list[str] = []
+    for source in sorted(attempt_dir.iterdir(), key=lambda item: item.name):
+        destination = stage_dir / source.name
+        _remove_generated_path(destination)
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+        published.append(source.name)
+    return published
+
+
+def _remove_generated_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _submission_card(path: Path, recommendation: str) -> tuple[str, str]:
+    text = path.read_text(encoding="utf-8").rstrip()
+    marker = "\n\n- card_id: `"
+    body = text.rsplit(marker, 1)[0] if marker in text else text
+    body = body.replace("- workflow_state: ready", "- workflow_state: review", 1)
+    body = body.replace("- artifact_role: attempt", "- artifact_role: candidate", 1)
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if line == "- workflow_state: review":
+            lines.insert(index + 1, f"- recommendation: {recommendation}")
+            break
+    return render_card("\n".join(lines))
+
+
+def _publish_manifest(
+    path: Path,
+    attempt_dir: Path,
+    stage_dir: Path,
+    *,
+    attempt: str,
+    recommendation: str,
+    card: str,
+) -> None:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _replace_path_prefix(payload, str(attempt_dir), str(stage_dir))
+    payload.update(
+        {
+            "attempt": attempt,
+            "workflow_state": "review",
+            "recommendation": recommendation,
+            "card_id": card,
+        }
+    )
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _replace_path_prefix(value: Any, old: str, new: str) -> Any:
+    if isinstance(value, str):
+        return value.replace(old, new)
+    if isinstance(value, list):
+        return [_replace_path_prefix(item, old, new) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_path_prefix(item, old, new) for key, item in value.items()
+        }
+    return value
+
+
+def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, str]]:
+    lab = contract_path.parent
+
+    def command(*parts: str | Path) -> str:
+        return shlex.join(str(part) for part in parts)
+
+    def review(stage: str) -> str:
+        return command(
+            "rci",
+            "approve",
+            "--stage",
+            stage,
+            "--out",
+            out,
+            "--by",
+            "human",
+            "--decision",
+            "continue",
+            "--card",
+            "{card}",
+        )
+
+    def submit(stage: str) -> str:
+        return command(
+            "rci",
+            stage,
+            "submit",
+            "--out",
+            out,
+            "--attempt",
+            "{attempt}",
+            "--recommendation",
+            "<continue|stop|uncertain>",
+        )
+
+    return {
+        "contract": {
+            "run": command("rci", "contract", "derive", contract_path, "--out", out),
+            "approve": review("contract"),
+        },
+        "data": {
+            "run": command(
+                "rci",
+                "data",
+                "run",
+                "--contract",
+                contract_path,
+                "--builder",
+                lab / "data.py",
+                "--plan",
+                lab / "evals" / "data.py",
+                "--out",
+                out,
+            ),
+            "submit": submit("data"),
+            "approve": review("data"),
+        },
+        "feat": {
+            "run": command(
+                "rci",
+                "feat",
+                "run",
+                "--builder",
+                lab / "feat.py",
+                "--plan",
+                lab / "evals" / "feat.py",
+                "--out",
+                out,
+            ),
+            "submit": submit("feat"),
+            "approve": review("feat"),
+        },
+        "sig": {
+            "run": command(
+                "rci",
+                "sig",
+                "run",
+                "--builder",
+                lab / "sig.py",
+                "--plan",
+                lab / "evals" / "sig.py",
+                "--out",
+                out,
+            ),
+            "submit": submit("sig"),
+            "approve": review("sig"),
+        },
+        "algo": {
+            "run": command(
+                "rci",
+                "algo",
+                "run",
+                "--builder",
+                lab / "algo.py",
+                "--plan",
+                lab / "evals" / "algo.py",
+                "--backtester",
+                lab / "backtest.py",
+                "--out",
+                out,
+            ),
+            "submit": submit("algo"),
+            "approve": review("algo"),
+        },
+    }
+
+
+def _checks_status(result: Any) -> str:
+    return "valid" if result.passed else "invalid"
 
 
 def _build_table(module: ModuleType) -> pl.DataFrame:
@@ -1279,7 +1866,7 @@ def _build_signals(module: ModuleType, table: pl.DataFrame) -> SignalBundle:
             result = builder(table)
             if not isinstance(result, SignalBundle):
                 raise TypeError(
-                    "signal builder must return an research_ci.kit.SignalBundle"
+                    "signal builder must return a research_ci.kit.SignalBundle"
                 )
             return result
     raise AttributeError(
@@ -1541,7 +2128,7 @@ def _result_status(result: Any) -> str:
 
 
 def _load_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("rci_external_module", path)
+    spec = importlib.util.spec_from_file_location("aci_external_module", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load module: {path}")
     module = importlib.util.module_from_spec(spec)
