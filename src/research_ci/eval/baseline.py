@@ -323,6 +323,49 @@ def signal_main_output_shape(
     )
 
 
+def assessment_output_shape(
+    table: pl.DataFrame,
+    keys: Iterable[str],
+    outputs: Iterable[str],
+) -> EvalObservation:
+    """Validate a non-trading, one-row-per-assessment Sig product.
+
+    Thesis assessments do not have instruments or prices and do not need to
+    repeat the approved Feat key grid. They still need a declared key,
+    declared output columns, and one unique row per assessment key.
+    """
+
+    key_names = tuple(dict.fromkeys(keys))
+    output_names = tuple(dict.fromkeys(outputs))
+    required = (*key_names, *output_names)
+    missing = sorted(set(required) - set(table.columns))
+    extra = sorted(set(table.columns) - set(required))
+    duplicate_rows = 0
+    if not missing and key_names:
+        key_table = table.select(key_names)
+        duplicate_rows = key_table.height - key_table.unique().height
+    details: dict[str, object] = {
+        "layout": "assessment",
+        "rows": table.height,
+        "keys": key_names,
+        "outputs": output_names,
+        "missing_columns": missing,
+        "extra_columns": extra,
+        "duplicate_key_rows": duplicate_rows,
+    }
+    valid = bool(key_names and output_names and table.height == 1) and not (
+        missing or extra or duplicate_rows
+    )
+    if not valid:
+        details["reason_code"] = "INVALID_ASSESSMENT_MAIN"
+    return EvalObservation(
+        "passed" if valid else "failed",
+        value=valid,
+        output_kind="summary" if valid else "findings",
+        details=details,
+    )
+
+
 def algo_main_output_shape(
     signal_table: pl.DataFrame,
     main_table: pl.DataFrame,
@@ -870,6 +913,7 @@ def signal_lineage_coverage(
 
 
 __all__ = [
+    "assessment_output_shape",
     "feature_output_shape",
     "general_missing_values",
     "sidecar_output_shape",

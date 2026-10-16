@@ -229,6 +229,34 @@ def make_plan(table, stage="algo", context=None):
     assert (out / "algo" / "attempts" / "0001" / "main.parquet").exists()
     assert not (out / "algo" / "main.parquet").exists()
 
+    brief = tmp_path / "algo-review.json"
+    brief.write_text(
+        json.dumps(
+            {
+                "question": "Does the pair strategy satisfy its sizing contract?",
+                "conclusion": "The positions and external backtest are reviewable.",
+                "evidence": ["The dollar-neutral case rule passed."],
+                "limitations": ["The fixture uses a small synthetic sample."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "algo",
+                "prepare",
+                "--out",
+                str(out),
+                "--attempt",
+                "0001",
+                "--brief",
+                str(brief),
+            ]
+        )
+        == 0
+    )
+
     submit_exit = main(
         [
             "algo",

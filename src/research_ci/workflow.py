@@ -21,6 +21,7 @@ WORKFLOW_STATES = {
 }
 RECOMMENDATIONS = {"continue", "stop", "uncertain"}
 REVIEW_DECISIONS = {"continue", "stop"}
+WORKFLOW_VERSION = 4
 
 
 class WorkflowError(ValueError):
@@ -85,7 +86,7 @@ def new_workflow(
         else:
             stages[stage] = "disabled"
     return {
-        "version": 3,
+        "version": WORKFLOW_VERSION,
         "stages": stages,
         "cards": {"contract": contract_card},
         "recommendations": {"contract": "continue"},
@@ -94,6 +95,7 @@ def new_workflow(
         "approvals": [],
         "rejections": [],
         "reopenings": [],
+        "revisions": [],
         "holdouts": [],
         "commands": commands or {},
     }
@@ -218,6 +220,7 @@ def record_attempt(
     checks: str,
     confirmation_required: bool = False,
     evidence_scope: str = "development_only",
+    research_ready: bool = False,
 ) -> dict[str, Any]:
     """Record a completed Agent attempt while leaving the stage ready."""
 
@@ -245,6 +248,8 @@ def record_attempt(
             ),
             "evidence_scope": evidence_scope,
             "frozen": False,
+            "research_ready": research_ready,
+            "stale": False,
             "at": _now(),
         }
     )
@@ -255,6 +260,56 @@ def record_attempt(
 def latest_attempt(state: dict[str, Any], stage: str) -> dict[str, Any] | None:
     attempts = state.get("attempts", {}).get(stage, [])
     return attempts[-1] if attempts else None
+
+
+def prepare_attempt(
+    out: str | Path,
+    *,
+    stage: str,
+    attempt: str,
+    card: str,
+    brief: dict[str, Any],
+) -> dict[str, Any]:
+    """Declare that one mechanically valid attempt is ready for review."""
+
+    state = read_workflow(out)
+    require_stage_ready(state, stage)
+    selected = _find_attempt(state, stage, attempt)
+    if not selected.get("valid"):
+        raise _refusal(
+            state,
+            f"Cannot prepare invalid attempt {attempt!r} for review.",
+            code="RCI-ATTEMPT-INVALID",
+        )
+    if selected.get("stale"):
+        raise _refusal(
+            state,
+            f"Cannot prepare stale attempt {attempt!r}; run the stage again.",
+            code="RCI-ATTEMPT-STALE",
+        )
+    if selected.get("rejected") or selected.get("submitted"):
+        raise _refusal(
+            state,
+            f"Attempt {attempt!r} cannot be prepared again; run a new attempt.",
+            code="RCI-ATTEMPT-FROZEN",
+        )
+    if selected.get("confirmation_required") and not selected.get("frozen"):
+        raise _refusal(
+            state,
+            f"Sig attempt {attempt!r} must finish confirmation before review "
+            "preparation.",
+            code="RCI-SIG-CONFIRMATION-REQUIRED",
+        )
+    selected.update(
+        {
+            "research_ready": True,
+            "card": card,
+            "brief": brief,
+            "prepared_at": _now(),
+        }
+    )
+    write_workflow(out, state)
+    return state
 
 
 def begin_confirmation(
@@ -393,6 +448,13 @@ def submit_for_review(
             "submitting again.",
             code="RCI-ATTEMPT-REJECTED",
         )
+    if selected.get("stale"):
+        raise _refusal(
+            state,
+            f"Attempt {attempt!r} is stale because an upstream result changed; "
+            "run the stage again.",
+            code="RCI-ATTEMPT-STALE",
+        )
     if selected.get("submitted"):
         raise _refusal(
             state,
@@ -406,6 +468,12 @@ def submit_for_review(
             f"Sig attempt {attempt!r} declares confirmation and must complete "
             "`rci sig freeze` before submission.",
             code="RCI-SIG-CONFIRMATION-REQUIRED",
+        )
+    if not selected.get("research_ready"):
+        raise _refusal(
+            state,
+            f"Attempt {attempt!r} passed checks but has not been prepared for review.",
+            code="RCI-ATTEMPT-NOT-RESEARCH-READY",
         )
 
     selected["submitted"] = True
@@ -580,6 +648,68 @@ def reopen(
     state.get("cards", {}).pop(stage, None)
     state.get("recommendations", {}).pop(stage, None)
     state.get("candidates", {}).pop(stage, None)
+    _stale_attempts(state, stage, f"human reopened {stage!r}: {message}")
+    _lock_downstream(state, stage)
+    write_workflow(out, state)
+    return state
+
+
+def revise(
+    out: str | Path,
+    *,
+    stage: str,
+    message: str,
+) -> dict[str, Any]:
+    """Let the active internal Agent replace an approved upstream product."""
+
+    if stage == "contract":
+        raise WorkflowError(
+            "The internal research loop cannot revise Contract.",
+            code="RCI-REVISION-CONTRACT-FORBIDDEN",
+        )
+    if not message.strip():
+        raise WorkflowError(
+            "An upstream revision requires a reason.",
+            code="RCI-REVISION-MESSAGE-MISSING",
+        )
+    state = read_workflow(out)
+    _require_known_stage(stage)
+    if state["stages"].get(stage) != "approved":
+        raise _refusal(
+            state,
+            f"Cannot revise stage {stage!r}: only an approved upstream stage can "
+            "be replaced from an active research loop.",
+            code="RCI-REVISION-TARGET-NOT-APPROVED",
+        )
+    active = next(
+        (
+            candidate
+            for candidate in STAGE_ORDER
+            if state["stages"].get(candidate) == "ready"
+        ),
+        None,
+    )
+    if active is None or STAGE_ORDER.index(active) <= STAGE_ORDER.index(stage):
+        raise _refusal(
+            state,
+            f"Stage {stage!r} can only be revised while a downstream stage is "
+            "actively ready.",
+            code="RCI-REVISION-NO-ACTIVE-DOWNSTREAM",
+        )
+    state["stages"][stage] = "ready"
+    state.setdefault("revisions", []).append(
+        {
+            "stage": stage,
+            "from_stage": active,
+            "by": "agent",
+            "message": message,
+            "at": _now(),
+        }
+    )
+    state.get("cards", {}).pop(stage, None)
+    state.get("recommendations", {}).pop(stage, None)
+    state.get("candidates", {}).pop(stage, None)
+    _stale_attempts(state, stage, f"agent revised {stage!r}: {message}")
     _lock_downstream(state, stage)
     write_workflow(out, state)
     return state
@@ -622,7 +752,7 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
                 "recommendation": state.get("recommendations", {}).get(stage),
             }
         if status == "ready":
-            attempt = latest_attempt(state, stage)
+            attempt = _latest_current_attempt(state, stage)
             needs_confirmation = bool(
                 stage == "sig"
                 and attempt
@@ -633,15 +763,35 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
             can_submit = bool(
                 attempt
                 and attempt.get("valid")
+                and attempt.get("research_ready")
                 and not attempt.get("rejected")
                 and not attempt.get("submitted")
                 and (not attempt.get("confirmation_required") or attempt.get("frozen"))
             )
-            kind = "freeze" if needs_confirmation else "submit" if can_submit else "run"
+            needs_preparation = bool(
+                attempt
+                and attempt.get("valid")
+                and not attempt.get("research_ready")
+                and not needs_confirmation
+                and not attempt.get("rejected")
+                and not attempt.get("submitted")
+            )
+            kind = (
+                "freeze"
+                if needs_confirmation
+                else "prepare"
+                if needs_preparation
+                else "submit"
+                if can_submit
+                else "run"
+            )
             command = _command(state, stage, kind)
             if not command:
                 command = (
-                    f"rci {stage} submit --out <run> --recommendation "
+                    f"rci {stage} prepare --out <run> --attempt "
+                    f"{attempt['id']} --brief <review-brief.json>"
+                    if needs_preparation
+                    else f"rci {stage} submit --out <run> --recommendation "
                     "<continue|stop|uncertain>"
                     if can_submit
                     else f"rci {stage} run --out <run> ..."
@@ -650,6 +800,10 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
                 f"attempt {attempt['id']} passed development checks; freeze its "
                 "recipe before the one-time confirmation reveal"
                 if needs_confirmation
+                else f"attempt {attempt['id']} passed mechanical checks; summarize "
+                "the result, evidence, counterevidence, limitations, and iteration "
+                "delta before submission"
+                if needs_preparation
                 else f"attempt {attempt['id']} passed the mandatory checks; submit "
                 "it or run another attempt"
                 if can_submit
@@ -683,12 +837,15 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
 
 def _upgrade_workflow(raw: dict[str, Any]) -> dict[str, Any]:
     state = deepcopy(raw)
-    if state.get("version") == 1:
-        state["stages"] = {
-            stage: "approved" if status == "passed" else status
-            for stage, status in state.get("stages", {}).items()
-        }
-    state["version"] = 3
+    original_version = int(state.get("version", 1))
+    # Version 1 and an older lab wheel used ``passed`` for a reviewed stage.
+    # Normalize that legacy spelling on every read so a run can continue under
+    # the current protocol without rewriting its approval history by hand.
+    state["stages"] = {
+        stage: "approved" if status == "passed" else status
+        for stage, status in state.get("stages", {}).items()
+    }
+    state["version"] = WORKFLOW_VERSION
     state.setdefault("cards", {})
     state.setdefault("recommendations", {})
     state.setdefault("attempts", {})
@@ -696,8 +853,13 @@ def _upgrade_workflow(raw: dict[str, Any]) -> dict[str, Any]:
     state.setdefault("approvals", [])
     state.setdefault("rejections", [])
     state.setdefault("reopenings", [])
+    state.setdefault("revisions", [])
     state.setdefault("holdouts", [])
     state.setdefault("commands", {})
+    for attempts in state["attempts"].values():
+        for attempt in attempts:
+            attempt.setdefault("stale", False)
+            attempt.setdefault("research_ready", original_version < WORKFLOW_VERSION)
     return state
 
 
@@ -733,7 +895,7 @@ def _command(state: dict[str, Any], stage: str, kind: str) -> str:
     template = str(state.get("commands", {}).get(stage, {}).get(kind, ""))
     if not template:
         return ""
-    attempt = latest_attempt(state, stage) or {}
+    attempt = _latest_current_attempt(state, stage) or {}
     return template.format(
         card=state.get("cards", {}).get(stage, "<card_id>"),
         attempt=attempt.get("id", "<attempt>"),
@@ -746,6 +908,21 @@ def _lock_downstream(state: dict[str, Any], stage: str) -> None:
         state.get("cards", {}).pop(downstream, None)
         state.get("recommendations", {}).pop(downstream, None)
         state.get("candidates", {}).pop(downstream, None)
+
+
+def _stale_attempts(state: dict[str, Any], stage: str, reason: str) -> None:
+    affected = (stage, *_downstream_enabled_stages(state, stage))
+    at = _now()
+    for affected_stage in affected:
+        for attempt in state.get("attempts", {}).get(affected_stage, []):
+            attempt["stale"] = True
+            attempt["stale_at"] = at
+            attempt["stale_reason"] = reason
+
+
+def _latest_current_attempt(state: dict[str, Any], stage: str) -> dict[str, Any] | None:
+    attempts = state.get("attempts", {}).get(stage, [])
+    return next((item for item in reversed(attempts) if not item.get("stale")), None)
 
 
 def _previous_enabled_stage(state: dict[str, Any], stage: str) -> str | None:

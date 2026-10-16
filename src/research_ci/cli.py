@@ -16,7 +16,8 @@ from typing import Any
 
 import polars as pl
 
-from .cards import algo_card, contract_card, data_card, feat_card, sig_card
+from .artifacts import DataBundle, ReviewBrief
+from .cards import algo_card, contract_card, data_card, feat_card, review_card, sig_card
 from .contract import ContractError, validate_contract
 from .eval import (
     AlgoSet,
@@ -37,6 +38,7 @@ from .eval.baseline import (
     algo_backtest_output_shape,
     algo_backtest_summary_shape,
     algo_main_output_shape,
+    assessment_output_shape,
     feature_output_shape,
     sidecar_output_shape,
     signal_disposition_coverage,
@@ -56,6 +58,7 @@ from .workflow import (
     finish_confirmation,
     latest_attempt,
     next_action,
+    prepare_attempt,
     read_workflow,
     record_attempt,
     render_card,
@@ -72,12 +75,21 @@ from .workflow import (
 from .workflow import (
     reopen as reopen_workflow,
 )
+from .workflow import (
+    revise as revise_workflow,
+)
+
+_INTERNAL_FEATURE_TABLE = "__rci_feature_table"
+_INTERNAL_CONTEXT_PREFIX = "__rci_"
 
 _STAGE_GUIDES: dict[str, dict[str, Any]] = {
     "data": {
-        "objective": "assemble point-in-time source facts into one research table",
+        "objective": "assemble point-in-time source facts into a formal DataBundle",
         "input": "the approved Contract plus case-owned raw sources",
-        "output": "one Data main table; exploration and provenance stay as sidecars",
+        "output": (
+            "one aligned main table, normalized native-frequency tables, catalog, "
+            "coverage, request log, and audit-only raw snapshots"
+        ),
         "tools": [
             "Polars joins, backward as-of joins, alignment, and resampling",
             "case-owned downloaders and source reconciliation",
@@ -86,12 +98,16 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
         "required": [
             "all four eval slots are populated",
             "mandatory baseline and case rules pass",
+            "catalog metadata covers main and every native-frequency table",
             "no feature, label, signal, position, or PnL semantics enter the table",
         ],
     },
     "feat": {
         "objective": "build reusable point-in-time, target-free measurements",
-        "input": "only the approved Data main table",
+        "input": (
+            "the approved Data main table and normalized native-frequency tables; "
+            "raw snapshots are inspection-only"
+        ),
         "output": "the preserved key grid plus declared feature columns",
         "tools": [
             "name-free Polars expressions from research_ci.kit.feat",
@@ -100,6 +116,7 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
         ],
         "required": [
             "the approved Data key grid is preserved",
+            "any raw field used by Feat was first promoted through Data validation",
             "features are causal and target-free",
             "all four eval slots are populated",
         ],
@@ -258,6 +275,13 @@ def main(argv: list[str] | None = None) -> int:
     reopen.add_argument("--by", required=True, choices=("human", "agent"))
     reopen.add_argument("--message", required=True)
 
+    revise = commands.add_parser(
+        "revise", help="return to an approved upstream stage from an active loop"
+    )
+    revise.add_argument("--stage", required=True, choices=("data", "feat", "sig"))
+    revise.add_argument("--out", required=True, type=Path)
+    revise.add_argument("--message", required=True)
+
     guide = commands.add_parser("guide", help="show optional stage guidance")
     guide.add_argument(
         "--stage", required=True, choices=("data", "feat", "sig", "algo")
@@ -270,10 +294,14 @@ def main(argv: list[str] | None = None) -> int:
             return _contract_derive(args.path, args.out)
         return _contract_check(args.path)
     if args.command in {"data", "dataloop"}:
+        if args.data_command == "prepare":
+            return _stage_prepare("data", args.out, args.attempt, args.brief)
         if args.data_command == "submit":
             return _stage_submit("data", args.out, args.recommendation, args.attempt)
         return _data_run(args.contract, args.builder, args.plan, args.out, args.context)
     if args.command == "feat":
+        if args.feat_command == "prepare":
+            return _stage_prepare("feat", args.out, args.attempt, args.brief)
         if args.feat_command == "submit":
             return _stage_submit("feat", args.out, args.recommendation, args.attempt)
         return _feat_run(args.builder, args.plan, args.out, args.context)
@@ -282,8 +310,12 @@ def main(argv: list[str] | None = None) -> int:
             return _sig_freeze(args.out, args.attempt, args.context)
         if args.sig_command == "submit":
             return _stage_submit("sig", args.out, args.recommendation, args.attempt)
+        if args.sig_command == "prepare":
+            return _stage_prepare("sig", args.out, args.attempt, args.brief)
         return _sig_run(args.builder, args.plan, args.out, args.context)
     if args.command == "algo":
+        if args.algo_command == "prepare":
+            return _stage_prepare("algo", args.out, args.attempt, args.brief)
         if args.algo_command == "submit":
             return _stage_submit("algo", args.out, args.recommendation, args.attempt)
         return _algo_run(
@@ -328,12 +360,20 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "reopen":
         return _reopen(args.stage, args.out, args.by, args.message)
+    if args.command == "revise":
+        return _revise(args.stage, args.out, args.message)
     if args.command == "guide":
         return _guide(args.stage, args.as_json)
     return 2
 
 
 def _add_submit_parser(commands: argparse._SubParsersAction[Any]) -> None:
+    prepare = commands.add_parser(
+        "prepare", help="declare a valid attempt ready for external review"
+    )
+    prepare.add_argument("--out", required=True, type=Path)
+    prepare.add_argument("--attempt")
+    prepare.add_argument("--brief", required=True, type=Path)
     submit = commands.add_parser("submit", help="submit a valid attempt for review")
     submit.add_argument("--out", required=True, type=Path)
     submit.add_argument("--attempt")
@@ -572,11 +612,17 @@ def _data_run(
         attempt, out_data = _allocate_attempt(out, state, "data")
 
         builder = _load_module(builder_path)
-        table = _build_table(builder)
-        if not isinstance(table, pl.DataFrame):
-            raise TypeError("data builder must return a Polars DataFrame")
-
-        table.write_parquet(out_data / "main.parquet")
+        built = _build_table(builder)
+        if isinstance(built, pl.DataFrame):
+            bundle = DataBundle.from_main(built)
+        elif isinstance(built, DataBundle):
+            bundle = built
+        else:
+            raise TypeError(
+                "data builder must return a Polars DataFrame or research_ci.DataBundle"
+            )
+        table = bundle.main
+        bundle_manifest = bundle.write(out_data)
 
         exploration = {}
         explore = getattr(builder, "explore", None)
@@ -595,8 +641,18 @@ def _data_run(
         )
 
         plan_module = _load_module(plan_path)
-        context = _load_context(context_path)
+        context = _with_data_bundle_context(_load_context(context_path), bundle)
         plan = _make_plan(plan_module, table, "data", context)
+        bundle_rule = EvalSpec(
+            "engine.baseline.data_bundle_shape",
+            runner=lambda _: _data_bundle_shape(bundle),
+            failure_policy="stop",
+            description=(
+                "validate catalog coverage and unique keys for main and native tables"
+            ),
+            execution_mode="polars_select",
+        )
+        plan = replace(plan, baseline=(bundle_rule, *plan.baseline))
         result = run_eval_plan(table, plan, context)
         result.write_report(out_data / "eval" / "report.jsonl")
         assessment = assess_records(result.records)
@@ -624,6 +680,7 @@ def _data_run(
                     "rows": table.height,
                     "columns": table.columns,
                     "records": len(result.records),
+                    "data_bundle": bundle_manifest,
                     "main_table": str(out_data / "main.parquet"),
                     "recipe": str(out_data / "recipe.json"),
                     "eval_report": str(out_data / "eval" / "report.jsonl"),
@@ -652,9 +709,9 @@ def _data_run(
     print(f"attempt report: {out_data / 'card.md'}")
     if result.passed:
         print(
-            "next: inspect the attempt, run another, or submit it with "
-            f"`rci data submit --out {out} --attempt {attempt} "
-            "--recommendation <continue|stop|uncertain>`"
+            "next: inspect the evidence, run another attempt, or prepare this "
+            f"result with `rci data prepare --out {out} --attempt {attempt} "
+            "--brief <review-brief.json>`"
         )
     else:
         print("next: fix the reported mandatory checks and run data again")
@@ -671,20 +728,40 @@ def _feat_run(
         state = read_workflow(out)
         require_stage_ready(state, "feat")
         attempt, out_feat = _allocate_attempt(out, state, "feat")
-        data_path = out / "data" / "main.parquet"
-        data_table = pl.read_parquet(data_path)
-        data_before = data_table.clone()
+        data_dir = out / "data"
+        data_path = data_dir / "main.parquet"
+        data_bundle = _read_data_bundle(data_dir)
+        data_table = data_bundle.main
+        data_before = {
+            name: table.clone() for name, table in data_bundle.tables().items()
+        }
+        catalog_before = data_bundle.as_catalog()
+        metadata_before = dict(data_bundle.metadata)
+        coverage_before = data_bundle.coverage().clone()
 
         builder = _load_module(builder_path)
-        feature_table = _build_features(builder, data_table)
+        feature_table = _build_features(builder, data_bundle)
         if not isinstance(feature_table, pl.DataFrame):
             raise TypeError("feature builder must return a Polars DataFrame")
-        if not data_table.equals(data_before):
-            raise ValueError("feature builder modified the input DataFrame")
+        data_after = data_bundle.tables()
+        changed = sorted(set(data_before) ^ set(data_after))
+        changed.extend(
+            name
+            for name in sorted(set(data_before) & set(data_after))
+            if not data_after[name].equals(data_before[name])
+        )
+        if data_bundle.as_catalog() != catalog_before:
+            changed.append("catalog")
+        if dict(data_bundle.metadata) != metadata_before:
+            changed.append("metadata")
+        if not data_bundle.coverage().equals(coverage_before):
+            changed.append("source_coverage")
+        if changed:
+            raise ValueError(f"feature builder modified DataBundle tables: {changed}")
 
         keys = _feature_keys(builder, data_table, feature_table)
         plan_module = _load_module(plan_path)
-        context = _load_context(context_path)
+        context = _with_data_bundle_context(_load_context(context_path), data_bundle)
         plan = _make_plan(plan_module, feature_table, "feat", context)
         shape_rule = EvalSpec(
             "engine.baseline.feature_output_shape",
@@ -746,6 +823,10 @@ def _feat_run(
                     "workflow_state": "ready",
                     "card_id": card_identifier,
                     "input_table": str(data_path),
+                    "input_data_bundle": {
+                        "catalog": data_bundle.as_catalog(),
+                        "native_tables": sorted(data_bundle.native),
+                    },
                     "main_table": str(out_feat / "main.parquet"),
                     "recipe": str(out_feat / "recipe.json"),
                     "eval_report": str(out_feat / "eval" / "report.jsonl"),
@@ -779,9 +860,9 @@ def _feat_run(
     print(f"attempt report: {out_feat / 'card.md'}")
     if result.passed:
         print(
-            "next: inspect the attempt, run another, or submit it with "
-            f"`rci feat submit --out {out} --attempt {attempt} "
-            "--recommendation <continue|stop|uncertain>`"
+            "next: inspect the evidence, run another attempt, or prepare this "
+            f"result with `rci feat prepare --out {out} --attempt {attempt} "
+            "--brief <review-brief.json>`"
         )
     else:
         print("next: fix the reported mandatory checks and run feat again")
@@ -821,7 +902,33 @@ def _sig_run(
             raise TypeError(
                 "signal plan must expose a LibrarySelection as LIBRARY_SELECTION"
             )
+        assessment_mode = bool(dict(bundle.metadata).get("assessment", False))
         keys = declaration.keys
+        assessment_metadata = dict(bundle.metadata)
+        frozen_assessment_keys = ("thesis_id", "author_version_id", "as_of")
+        if assessment_mode and all(
+            field in assessment_metadata for field in frozen_assessment_keys
+        ):
+            # A frozen Thesis Assessment is keyed by its immutable research
+            # identity.  Keeping event_time or an instrument key here would
+            # make a one-row verdict look like a daily signal and breaks the
+            # separation between research sidecars and the final assessment.
+            if tuple(keys) != frozen_assessment_keys:
+                raise ValueError(
+                    "assessment mode with thesis/version/as-of metadata requires "
+                    "SignalSet.keys=('thesis_id', 'author_version_id', 'as_of'); "
+                    f"got {tuple(keys)!r}"
+                )
+        # An assessment output has its own immutable identifier (for example
+        # thesis/version/as-of), while its research inputs still come from the
+        # approved Feat table's native key grid.  Keep those two key spaces
+        # separate so timestamp columns are not mistaken for undeclared
+        # research features.
+        feature_keys = (
+            _feature_keys(builder, feature_table, feature_table)
+            if assessment_mode
+            else keys
+        )
         expected_signal_columns = (*keys, *declaration.signals)
         missing_main = sorted(set(expected_signal_columns) - set(bundle.main.columns))
         extra_main = sorted(set(bundle.main.columns) - set(expected_signal_columns))
@@ -844,19 +951,28 @@ def _sig_run(
                 f"candidates; missing={missing_candidates}, extra={extra_candidates}"
             )
         candidate_table = bundle.candidates.select(expected_candidates)
+        required_feature_columns = (
+            declaration.features if assessment_mode else (*keys, *declaration.features)
+        )
         missing_features = sorted(
-            set((*keys, *declaration.features)) - set(feature_table.columns)
+            set(required_feature_columns) - set(feature_table.columns)
         )
         if missing_features:
             raise ValueError(
                 f"approved Feat table is missing Sig inputs: {missing_features}"
             )
         data_path = out / "data" / "main.parquet"
-        main_table = _build_signal_main(
-            builder,
-            data_path,
-            signal_table,
-        )
+        if assessment_mode:
+            # A Thesis Assessment is a Sig research product, not an Algo input.
+            # Preserve the declared output exactly and avoid inventing an
+            # instrument or price column merely to satisfy trading semantics.
+            main_table = signal_table
+        else:
+            main_table = _build_signal_main(
+                builder,
+                data_path,
+                signal_table,
+            )
 
         external_context = _load_context(context_path)
         duplicate_sidecars = sorted(set(external_context.tables) & set(bundle.sidecars))
@@ -864,37 +980,79 @@ def _sig_run(
             raise ValueError(
                 f"signal sidecars collide with external context: {duplicate_sidecars}"
             )
+        if assessment_mode and (
+            _INTERNAL_FEATURE_TABLE in external_context.tables
+            or _INTERNAL_FEATURE_TABLE in bundle.sidecars
+        ):
+            raise ValueError(
+                f"{_INTERNAL_FEATURE_TABLE!r} is reserved for the assessment "
+                "Engine context"
+            )
+        context_tables = {**external_context.tables, **bundle.sidecars}
+        if assessment_mode:
+            internal_feature_columns = tuple(
+                dict.fromkeys((*feature_keys, *declaration.features))
+            )
+            context_tables[_INTERNAL_FEATURE_TABLE] = feature_table.select(
+                *internal_feature_columns
+            )
         context = EvalContext(
-            tables={**external_context.tables, **bundle.sidecars},
+            tables=context_tables,
             metadata={**external_context.metadata, **bundle.metadata},
         )
-        evaluation_table = feature_table.select(
-            *keys,
-            *declaration.features,
+        public_context_tables = tuple(
+            sorted(
+                name
+                for name in context.tables
+                if not name.startswith(_INTERNAL_CONTEXT_PREFIX)
+            )
         )
-        if declaration.candidates:
+        if assessment_mode:
+            evaluation_table = signal_table
+            if declaration.candidates:
+                evaluation_table = evaluation_table.join(
+                    candidate_table,
+                    on=list(keys),
+                    how="left",
+                )
+        else:
+            evaluation_table = feature_table.select(
+                *keys,
+                *declaration.features,
+            )
+            if declaration.candidates:
+                evaluation_table = evaluation_table.join(
+                    candidate_table,
+                    on=list(keys),
+                    how="left",
+                )
             evaluation_table = evaluation_table.join(
-                candidate_table,
+                signal_table,
                 on=list(keys),
                 how="left",
             )
-        evaluation_table = evaluation_table.join(
-            signal_table,
-            on=list(keys),
-            how="left",
-        )
 
         plan = _make_plan(plan_module, evaluation_table, "sig", context)
         shape_rule = EvalSpec(
-            "engine.baseline.signal_output_shape",
-            runner=lambda _: feature_output_shape(
-                feature_table,
-                signal_table,
-                keys,
+            "engine.baseline.assessment_output_shape"
+            if assessment_mode
+            else "engine.baseline.signal_output_shape",
+            runner=(
+                (
+                    lambda _: assessment_output_shape(
+                        signal_table, keys, declaration.signals
+                    )
+                )
+                if assessment_mode
+                else (lambda _: feature_output_shape(feature_table, signal_table, keys))
             ),
             failure_policy="stop",
-            description="preserve the approved Feat key grid in the signal output",
-            execution_mode="polars_join_group",
+            description=(
+                "validate one unique row per declared Thesis Assessment key"
+                if assessment_mode
+                else "preserve the approved Feat key grid in the signal output"
+            ),
+            execution_mode="polars_select" if assessment_mode else "polars_join_group",
         )
         all_outputs = (*declaration.candidates, *declaration.signals)
         baseline_rules = [
@@ -902,7 +1060,7 @@ def _sig_run(
                 "engine.baseline.signal_feature_universe",
                 runner=lambda _: signal_feature_universe(
                     feature_table,
-                    keys,
+                    feature_keys,
                     declaration.features,
                 ),
                 failure_policy="stop",
@@ -936,7 +1094,7 @@ def _sig_run(
                 "engine.baseline.signal_feature_disposition_coverage",
                 runner=lambda _: signal_disposition_coverage(
                     feature_table,
-                    keys,
+                    feature_keys,
                     bundle.dispositions,
                     all_outputs,
                 ),
@@ -958,7 +1116,7 @@ def _sig_run(
             ),
             shape_rule,
         ]
-        if declaration.candidates:
+        if declaration.candidates and not assessment_mode:
             baseline_rules.insert(
                 -1,
                 EvalSpec(
@@ -981,6 +1139,7 @@ def _sig_run(
                         feature_table,
                         declaration,
                         active_context,
+                        key_columns=feature_keys if assessment_mode else None,
                         allow_subset=confirmation_required,
                     ),
                     failure_policy="stop",
@@ -988,23 +1147,24 @@ def _sig_run(
                     execution_mode="polars_join_group",
                 )
             )
-        baseline_rules.append(
-            EvalSpec(
-                "engine.baseline.signal_main_output_shape",
-                runner=lambda _: signal_main_output_shape(
-                    signal_table,
-                    main_table,
-                    keys,
-                    declaration.signals,
-                ),
-                failure_policy="stop",
-                description=(
-                    "write the direct Algo input as one wide row per signal key "
-                    "with named instrument and price columns"
-                ),
-                execution_mode="polars_join_group",
+        if not assessment_mode:
+            baseline_rules.append(
+                EvalSpec(
+                    "engine.baseline.signal_main_output_shape",
+                    runner=lambda _: signal_main_output_shape(
+                        signal_table,
+                        main_table,
+                        keys,
+                        declaration.signals,
+                    ),
+                    failure_policy="stop",
+                    description=(
+                        "write the direct Algo input as one wide row per signal key "
+                        "with named instrument and price columns"
+                    ),
+                    execution_mode="polars_join_group",
+                )
             )
-        )
         plan = replace(plan, baseline=(*baseline_rules, *plan.baseline))
         result = run_eval_plan(evaluation_table, plan, context)
 
@@ -1037,7 +1197,8 @@ def _sig_run(
             research_manifest[name] = str(path)
         context_dir = out_sig / "context"
         context_dir.mkdir(parents=True, exist_ok=True)
-        for name, sidecar in sorted(context.tables.items()):
+        for name in public_context_tables:
+            sidecar = context.tables[name]
             _safe_artifact_name(name)
             sidecar.write_parquet(context_dir / f"{name}.parquet")
         (context_dir / "metadata.json").write_text(
@@ -1084,20 +1245,32 @@ def _sig_run(
 
         result.write_report(out_sig / "eval" / "report.jsonl")
         assessment = assess_records(result.records)
-        assessment["signal_triage"] = assess_features(
-            signal_table,
-            keys,
-            result.records,
-        )
-        assessment["signal_evidence"] = assess_signal_evidence(
-            result.records,
-            declaration.signals,
-            declaration.features,
-        )
-        assessment["candidate_signal_evidence"] = assess_signal_evidence(
-            result.records,
-            declaration.candidates,
-        )
+        if assessment_mode:
+            # Assessment output is a research verdict keyed by thesis/version/as-of.
+            # Do not attach the trading-oriented signal triage fields to it.
+            assessment["assessment_mode"] = True
+            assessment["assessment_status"] = dict(bundle.metadata).get(
+                "assessment_status", "undeclared"
+            )
+            assessment["premise_statuses"] = dict(bundle.metadata).get(
+                "premise_statuses", {}
+            )
+            assessment["research_tables"] = sorted(bundle.research)
+        else:
+            assessment["signal_triage"] = assess_features(
+                signal_table,
+                keys,
+                result.records,
+            )
+            assessment["signal_evidence"] = assess_signal_evidence(
+                result.records,
+                declaration.signals,
+                declaration.features,
+            )
+            assessment["candidate_signal_evidence"] = assess_signal_evidence(
+                result.records,
+                declaration.candidates,
+            )
         assessment["feature_disposition"] = {
             "features": disposition_table.height,
             "actions": disposition_table.group_by("action")
@@ -1118,11 +1291,12 @@ def _sig_run(
             evaluation_columns=tuple(evaluation_table.columns),
             keys=keys,
             signals=declaration.signals,
-            sidecars=tuple(sorted(context.tables)),
+            sidecars=public_context_tables,
             candidates=declaration.candidates,
             dispositions=disposition_table,
             result_status=checks_status,
             validation_plan=validation_payload,
+            assessment_research=bundle.research if assessment_mode else None,
             confirmation_status=(
                 "pending" if confirmation_required else "not_declared"
             ),
@@ -1143,7 +1317,8 @@ def _sig_run(
                         "feat": str(feature_path),
                     },
                     "main_table": str(out_sig / "main.parquet"),
-                    "main_layout": "wide",
+                    "main_layout": "assessment" if assessment_mode else "wide",
+                    "assessment_mode": assessment_mode,
                     "recipe": str(out_sig / "recipe.json"),
                     "selection": str(out_sig / "selection.json"),
                     "validation_plan": str(out_sig / "validation_plan.json"),
@@ -1158,7 +1333,7 @@ def _sig_run(
                     "sources": source_manifest,
                     "eval_report": str(out_sig / "eval" / "report.jsonl"),
                     "assessment": str(out_sig / "eval" / "assessment.json"),
-                    "context_tables": sorted(context.tables),
+                    "context_tables": list(public_context_tables),
                     "research": research_manifest,
                     "artifacts": artifact_manifest,
                     "rows": main_table.height,
@@ -1205,9 +1380,9 @@ def _sig_run(
             )
         else:
             print(
-                "next: inspect the attempt, run another, or submit it with "
-                f"`rci sig submit --out {out} --attempt {attempt} "
-                "--recommendation <continue|stop|uncertain>`"
+                "next: inspect the evidence, run another attempt, or prepare this "
+                f"result with `rci sig prepare --out {out} --attempt {attempt} "
+                "--brief <review-brief.json>`"
             )
     else:
         print("next: fix the reported mandatory checks and run sig again")
@@ -1426,9 +1601,9 @@ def _sig_freeze(
     print(f"confirmation report: {evidence_path}")
     if result.passed:
         print(
-            "next: submit the frozen attempt with "
-            f"`rci sig submit --out {out} --attempt {selected['id']} "
-            "--recommendation <continue|stop|uncertain>`"
+            "next: prepare the frozen result for review with "
+            f"`rci sig prepare --out {out} --attempt {selected['id']} "
+            "--brief <review-brief.json>`"
         )
         return 0
     print("next: confirmation checks were invalid; use a new attempt and holdout")
@@ -1638,13 +1813,121 @@ def _algo_run(
     print(f"attempt report: {out_algo / 'card.md'}")
     if eval_result.passed:
         print(
-            "next: inspect the attempt, run another, or submit it with "
-            f"`rci algo submit --out {out} --attempt {attempt} "
-            "--recommendation <continue|stop|uncertain>`"
+            "next: inspect the evidence, run another attempt, or prepare this "
+            f"result with `rci algo prepare --out {out} --attempt {attempt} "
+            "--brief <review-brief.json>`"
         )
     else:
         print("next: fix the reported mandatory checks and run algo again")
     return 0 if eval_result.passed else 1
+
+
+def _stage_prepare(
+    stage: str,
+    out: Path,
+    requested_attempt: str | None,
+    brief_path: Path,
+) -> int:
+    """Turn internal evidence into the concise Card an external reviewer sees."""
+
+    try:
+        state = read_workflow(out)
+        require_stage_ready(state, stage)
+        selected = _select_attempt(state, stage, requested_attempt)
+        if not selected.get("valid"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} is invalid and cannot be prepared.",
+                code="RCI-ATTEMPT-INVALID",
+                action=next_action(state),
+            )
+        if selected.get("stale"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} is stale and cannot be prepared.",
+                code="RCI-ATTEMPT-STALE",
+                action=next_action(state),
+            )
+        if selected.get("confirmation_required") and not selected.get("frozen"):
+            raise WorkflowError(
+                f"Sig attempt {selected['id']} must finish confirmation first.",
+                code="RCI-SIG-CONFIRMATION-REQUIRED",
+                action=next_action(state),
+            )
+        payload = json.loads(brief_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise TypeError("review brief must be a JSON object")
+        brief = ReviewBrief.from_dict(payload)
+        attempt_dir = Path(selected["path"])
+        root = attempt_dir.resolve()
+        for relative in brief.key_plots:
+            plot = (attempt_dir / relative).resolve()
+            if not plot.is_relative_to(root) or not plot.is_file():
+                raise FileNotFoundError(
+                    f"review brief key plot is missing from the attempt: {relative}"
+                )
+        manifest_path = attempt_dir / "manifest.json"
+        assessment_path = attempt_dir / "eval" / "assessment.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        stage_attempts = state.get("attempts", {}).get(stage, [])
+        selected_index = next(
+            index
+            for index, item in enumerate(stage_attempts)
+            if item.get("id") == selected["id"]
+        )
+        previous = next(
+            (
+                item["id"]
+                for item in reversed(stage_attempts[:selected_index])
+                if not item.get("stale")
+            ),
+            None,
+        )
+        if previous is not None and not brief.changes:
+            raise ValueError(
+                "review brief must declare changes from the previous attempt"
+            )
+        card, card_identifier = review_card(
+            stage,
+            brief,
+            manifest,
+            assessment,
+            attempt=selected["id"],
+            previous_attempt=previous,
+        )
+        (attempt_dir / "review.json").write_text(
+            json.dumps(brief.as_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (attempt_dir / "card.md").write_text(card + "\n", encoding="utf-8")
+        manifest.update(
+            {
+                "card_id": card_identifier,
+                "research_ready": True,
+                "review_brief": str(attempt_dir / "review.json"),
+                "previous_attempt": previous,
+            }
+        )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        prepare_attempt(
+            out,
+            stage=stage,
+            attempt=selected["id"],
+            card=card_identifier,
+            brief=brief.as_dict(),
+        )
+    except Exception as exc:  # noqa: BLE001 - report external workspace errors
+        print(f"{stage} prepare failed: {exc}")
+        return 1
+    print(f"prepared: {stage} attempt {selected['id']}")
+    print(f"review card: {attempt_dir / 'card.md'} ({card_identifier})")
+    print(
+        f"next: rci {stage} submit --out {out} --attempt {selected['id']} "
+        "--recommendation <continue|stop|uncertain>"
+    )
+    return 0
 
 
 def _stage_submit(
@@ -1667,6 +1950,12 @@ def _stage_submit(
             raise WorkflowError(
                 f"Attempt {selected['id']} was rejected; run a new attempt.",
                 code="RCI-ATTEMPT-REJECTED",
+                action=next_action(state),
+            )
+        if selected.get("stale"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} is stale; run a new attempt.",
+                code="RCI-ATTEMPT-STALE",
                 action=next_action(state),
             )
         if selected.get("submitted"):
@@ -1701,6 +1990,13 @@ def _stage_submit(
                     code="RCI-SIG-FREEZE-MISMATCH",
                     action=next_action(state),
                 )
+        if not selected.get("research_ready"):
+            raise WorkflowError(
+                f"Attempt {selected['id']} passed checks but has not been prepared "
+                "for external review.",
+                code="RCI-ATTEMPT-NOT-RESEARCH-READY",
+                action=next_action(state),
+            )
         stage_dir = out / stage
         published_entries = _publish_attempt(attempt_dir, stage_dir)
         card, card_identifier = _submission_card(stage_dir / "card.md", recommendation)
@@ -1772,15 +2068,26 @@ def _status(out: Path) -> int:
         card = state.get("cards", {}).get(stage, "-")
         recommendation = state.get("recommendations", {}).get(stage, "-")
         attempts = len(state.get("attempts", {}).get(stage, []))
+        current = latest_attempt(state, stage)
+        current_summary = (
+            f", latest={current['id']}:valid={bool(current.get('valid'))}"
+            f":ready={bool(current.get('research_ready'))}"
+            f":stale={bool(current.get('stale'))}"
+            if current is not None
+            else ""
+        )
         print(
             f"{stage}: {status} "
-            f"(card={card}, recommendation={recommendation}, attempts={attempts})"
+            f"(card={card}, recommendation={recommendation}, attempts={attempts}"
+            f"{current_summary})"
         )
     approvals = state.get("approvals", [])
     print(f"approvals: {len(approvals)}")
     for item in approvals:
         decision = item.get("decision", "continue")
         print(f"- {item['stage']} by {item['by']}: {decision} ({item['card']})")
+    revisions = state.get("revisions", [])
+    print(f"revisions: {len(revisions)}")
     action = next_action(state)
     if action["stage"] is None:
         print(f"next: {action.get('outcome', 'complete')}")
@@ -1899,6 +2206,20 @@ def _reopen(stage: str, out: Path, by: str, message: str) -> int:
         print(f"reopen failed: {exc}")
         return 1
     print(f"reopened: {stage}; downstream stages are locked")
+    return 0
+
+
+def _revise(stage: str, out: Path, message: str) -> int:
+    try:
+        state = revise_workflow(out, stage=stage, message=message)
+        start = STAGE_ORDER.index(stage)
+        for affected in STAGE_ORDER[start:]:
+            if state["stages"].get(affected) != "disabled":
+                (out / affected / "approved.json").unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001 - report workflow errors
+        print(f"revision failed: {exc}")
+        return 1
+    print(f"revision opened: {stage}; downstream products are stale and locked")
     return 0
 
 
@@ -2079,6 +2400,19 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
             "<continue|stop|uncertain>",
         )
 
+    def prepare(stage: str) -> str:
+        return command(
+            "rci",
+            stage,
+            "prepare",
+            "--out",
+            out,
+            "--attempt",
+            "{attempt}",
+            "--brief",
+            f"<review-brief-{stage}.json>",
+        )
+
     return {
         "contract": {
             "run": command("rci", "contract", "derive", contract_path, "--out", out),
@@ -2098,6 +2432,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
                 "--out",
                 out,
             ),
+            "prepare": prepare("data"),
             "submit": submit("data"),
             "approve": review("data"),
         },
@@ -2113,6 +2448,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
                 "--out",
                 out,
             ),
+            "prepare": prepare("feat"),
             "submit": submit("feat"),
             "approve": review("feat"),
         },
@@ -2128,6 +2464,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
                 "--out",
                 out,
             ),
+            "prepare": prepare("sig"),
             "freeze": command(
                 "rci",
                 "sig",
@@ -2156,6 +2493,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
                 "--out",
                 out,
             ),
+            "prepare": prepare("algo"),
             "submit": submit("algo"),
             "approve": review("algo"),
         },
@@ -2166,21 +2504,27 @@ def _checks_status(result: Any) -> str:
     return "valid" if result.passed else "invalid"
 
 
-def _build_table(module: ModuleType) -> pl.DataFrame:
-    for name in ("build_main_table", "build"):
+def _build_table(module: ModuleType) -> pl.DataFrame | DataBundle:
+    for name in ("build_data_bundle", "build_main_table", "build"):
         builder = getattr(module, name, None)
         if builder is not None:
             return builder()
-    raise AttributeError("data builder must define build_main_table() or build()")
+    raise AttributeError(
+        "data builder must define build_data_bundle(), build_main_table(), or build()"
+    )
 
 
-def _build_features(module: ModuleType, table: pl.DataFrame) -> pl.DataFrame:
+def _build_features(module: ModuleType, bundle: DataBundle) -> pl.DataFrame:
+    bundle_builder = getattr(module, "build_features_from_bundle", None)
+    if bundle_builder is not None:
+        return bundle_builder(bundle)
     for name in ("build_features", "build"):
         builder = getattr(module, name, None)
         if builder is not None:
-            return builder(table)
+            return builder(bundle.main)
     raise AttributeError(
-        "feature builder must define build_features(table) or build(table)"
+        "feature builder must define build_features_from_bundle(bundle), "
+        "build_features(table), or build(table)"
     )
 
 
@@ -2341,6 +2685,7 @@ def _label_sidecar_shape(
     declaration: SignalSet,
     context: EvalContext,
     *,
+    key_columns: tuple[str, ...] | None = None,
     allow_subset: bool = False,
 ) -> EvalObservation:
     try:
@@ -2355,13 +2700,14 @@ def _label_sidecar_shape(
                 "context_table": declaration.label_table,
             },
         )
+    keys = tuple(key_columns or declaration.keys)
     required = list(declaration.targets.values())
     if declaration.evaluation_by is not None:
         required.append(declaration.evaluation_by)
     if allow_subset:
-        needed = [*declaration.keys, *required]
+        needed = [*keys, *required]
         missing = sorted(set(needed) - set(label.columns))
-        label_keys = label.select(*declaration.keys) if not missing else None
+        label_keys = label.select(*keys) if not missing else None
         duplicate_rows = (
             label_keys.height - label_keys.unique().height
             if label_keys is not None
@@ -2369,8 +2715,8 @@ def _label_sidecar_shape(
         )
         unknown_rows = (
             label_keys.join(
-                feature_table.select(*declaration.keys).unique(),
-                on=list(declaration.keys),
+                feature_table.select(*keys).unique(),
+                on=list(keys),
                 how="anti",
             ).height
             if label_keys is not None
@@ -2399,7 +2745,7 @@ def _label_sidecar_shape(
         observation = sidecar_output_shape(
             feature_table,
             label,
-            declaration.keys,
+            keys,
             required,
         )
     return EvalObservation(
@@ -2627,7 +2973,7 @@ def _path_digest(path: Path) -> str:
 def _signal_freeze_digest(attempt_dir: Path) -> str:
     """Hash immutable Sig research products while excluding review envelopes."""
 
-    excluded_files = {"card.md", "manifest.json"}
+    excluded_files = {"card.md", "manifest.json", "review.json"}
     excluded_directories = {"confirmation", "plots"}
     files = []
     for item in attempt_dir.rglob("*"):
@@ -2809,3 +3155,79 @@ def _load_context(path: Path | None) -> EvalContext:
             "context must be a Parquet file, a directory, or a JSON metadata file"
         )
     return EvalContext(tables=tables, metadata=metadata)
+
+
+def _read_data_bundle(path: Path) -> DataBundle:
+    """Read the new bundle layout while accepting an older single-table run."""
+
+    if (path / "catalog.json").exists():
+        return DataBundle.read(path)
+    return DataBundle.from_main(pl.read_parquet(path / "main.parquet"))
+
+
+def _with_data_bundle_context(context: EvalContext, bundle: DataBundle) -> EvalContext:
+    """Expose native-frequency tables to evals without joining them into main."""
+
+    native = bundle.eval_tables()
+    collisions = sorted(set(context.tables) & set(native))
+    if collisions:
+        raise ValueError(
+            f"DataBundle native tables collide with external context: {collisions}"
+        )
+    return EvalContext(
+        tables={**context.tables, **native},
+        metadata={
+            **context.metadata,
+            "data_bundle": {
+                "catalog": bundle.as_catalog(),
+                "native_tables": sorted(bundle.native),
+            },
+        },
+    )
+
+
+def _data_bundle_shape(bundle: DataBundle) -> EvalObservation:
+    findings: dict[str, Any] = {"tables": {}}
+    failed = False
+    for name, table in bundle.tables().items():
+        spec = bundle.catalog[name]
+        keys = list(spec.keys)
+        duplicate_rows = table.select(keys).height - table.select(keys).unique().height
+        null_key_rows = int(
+            table.select(pl.any_horizontal(pl.col(keys).is_null()).sum()).item()
+        )
+        findings["tables"][name] = {
+            "rows": table.height,
+            "columns": table.width,
+            "keys": keys,
+            "duplicate_key_rows": duplicate_rows,
+            "null_key_rows": null_key_rows,
+            "frequency": spec.frequency,
+            "source": spec.source,
+        }
+        failed = failed or bool(duplicate_rows or null_key_rows or table.is_empty())
+    coverage = bundle.coverage()
+    coverage_names = (
+        coverage.get_column("table").cast(pl.String)
+        if "table" in coverage.columns
+        else None
+    )
+    coverage_tables = (
+        set(coverage_names.to_list()) if coverage_names is not None else set()
+    )
+    missing_coverage = sorted(set(bundle.tables()) - coverage_tables)
+    unknown_coverage = sorted(coverage_tables - set(bundle.tables()))
+    duplicate_coverage = (
+        coverage_names.len() - coverage_names.n_unique()
+        if coverage_names is not None
+        else 0
+    )
+    findings["missing_coverage_tables"] = missing_coverage
+    findings["unknown_coverage_tables"] = unknown_coverage
+    findings["duplicate_coverage_rows"] = duplicate_coverage
+    failed = failed or bool(missing_coverage or unknown_coverage or duplicate_coverage)
+    return EvalObservation(
+        "failed" if failed else "passed",
+        output_kind="findings",
+        details=findings,
+    )

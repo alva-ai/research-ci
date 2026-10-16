@@ -2,6 +2,7 @@ import polars as pl
 
 from research_ci import LibrarySelection, SelectedMethod, SignalSet
 from research_ci.eval.baseline import (
+    assessment_output_shape,
     feature_output_shape,
     sidecar_output_shape,
     signal_disposition_coverage,
@@ -40,6 +41,53 @@ def test_signal_main_output_shape_requires_one_wide_row_per_time() -> None:
     assert passed.details["inst_columns"] == ("skhx_inst", "skhy_inst")
     assert invalid.status == "failed"
     assert invalid.details["unmatched_inst_prefixes"] == ["skhy"]
+
+
+def test_assessment_output_shape_accepts_unique_declared_rows_without_prices() -> None:
+    assessment = pl.DataFrame(
+        {
+            "assessment_id": ["1001:2001:2026-10-15"],
+            "overall_status": ["narrow"],
+            "premise_count": [4],
+        }
+    )
+
+    passed = assessment_output_shape(
+        assessment,
+        ("assessment_id",),
+        ("overall_status", "premise_count"),
+    )
+    duplicate = assessment_output_shape(
+        pl.concat((assessment, assessment)),
+        ("assessment_id",),
+        ("overall_status", "premise_count"),
+    )
+    multiple_assessments = assessment_output_shape(
+        pl.concat(
+            (
+                assessment,
+                assessment.with_columns(
+                    pl.lit("1001:2001:2026-10-16").alias("assessment_id")
+                ),
+            )
+        ),
+        ("assessment_id",),
+        ("overall_status", "premise_count"),
+    )
+    extra = assessment_output_shape(
+        assessment.with_columns(pl.lit("GOOGL").alias("fake_inst")),
+        ("assessment_id",),
+        ("overall_status", "premise_count"),
+    )
+
+    assert passed.status == "passed"
+    assert passed.details["layout"] == "assessment"
+    assert duplicate.status == "failed"
+    assert duplicate.details["duplicate_key_rows"] == 1
+    assert multiple_assessments.status == "failed"
+    assert multiple_assessments.details["rows"] == 2
+    assert extra.status == "failed"
+    assert extra.details["extra_columns"] == ["fake_inst"]
 
 
 def test_feature_output_shape_preserves_keys_and_allows_warmup_nulls() -> None:

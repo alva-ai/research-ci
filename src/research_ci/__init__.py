@@ -1,5 +1,6 @@
 """The first protocol layer of the Research CI research engine."""
 
+from .artifacts import DataBundle, DataTableSpec, ReviewBrief
 from .contract import Contract, ContractError, validate_contract
 from .eval import (
     AlgoSet,
@@ -37,6 +38,8 @@ __all__ = [
     "CaseEvalTest",
     "ConfirmationPlan",
     "DataSet",
+    "DataBundle",
+    "DataTableSpec",
     "EvalContext",
     "Contract",
     "ContractError",
@@ -58,6 +61,7 @@ __all__ = [
     "ValidationMethod",
     "ValidationPlan",
     "OutputKind",
+    "ReviewBrief",
     "Slot",
     "run_eval_plan",
     "compile_stage_menu",

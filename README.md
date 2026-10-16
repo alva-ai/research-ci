@@ -30,7 +30,7 @@ The project uses `uv` for environments and dependency locking.
 
 | stage | owns |
 | --- | --- |
-| Data | source facts, alignment, and the research-ready data table |
+| Data | source facts, native-frequency formal tables, alignment, and the research-ready wide table |
 | Feat | reusable point-in-time measurements and structural screening |
 | Sig | target-aware selection and a forecast, ranking, direction, or strength |
 | Algo | capital allocation, positions, orders, risk, costs, and execution |
@@ -62,6 +62,7 @@ the Feat table and jump to one convenient rule.
 research-ci/
   src/research_ci/
     contract.py   Engine Contract protocol and validation
+    artifacts.py  DataBundle, table catalog, and external-review summary contracts
     eval/         four-slot protocol, runner, baseline, and library
       protocol.py four-slot plan model
       runner.py   Polars eval execution and sidecar records
@@ -112,6 +113,21 @@ research-ci-lab/
     card.md        submitted review Card
     candidate.json selected attempt and recommendation
                   plus stage-specific sidecar evidence
+```
+
+Data has a richer formal product than the other stages. Its downstream handoff
+is still `data/main.parquet`, but the approved Data product also contains
+normalized source tables and their semantics:
+
+```text
+data/
+  main.parquet             aligned wide table used by most Feat builders
+  native/*.parquet         normalized tables at each source's native cadence
+  catalog.json             keys, event/availability time, units, source, frequency
+  source_coverage.parquet  coverage and freshness evidence
+  request_log.jsonl        acquisition attempts and outcomes
+  metadata.json
+  raw/                     optional audit snapshots; never a formal Feat input
 ```
 
 The Engine library is organized by methodology rather than by stage. For
@@ -184,10 +200,38 @@ feature_table = apply_layers(data_table, FEATURE_LAYERS)
 
 The run directory is the handoff boundary. `rci <stage> run` writes a numbered
 attempt and leaves the stage `ready`, so an Agent can diagnose, revise, and run
-again without interrupting a person. `rci <stage> submit` selects one valid
-attempt, publishes its formal artifacts, records the Agent's recommendation,
-and moves the stage to `review`. The next stage remains locked until a reviewer
-accepts the Card with a `continue` decision.
+again without interrupting a person. Passing mandatory checks establishes only
+mechanical validity. `rci <stage> prepare --brief ...` separately declares that
+the internal research loop is ready to show a result and replaces the internal
+attempt Card with a concise result Card. `rci <stage> submit` can select only a
+valid, prepared attempt; it publishes the formal artifacts, records the Agent's
+recommendation, and moves the stage to `review`. The next stage remains locked
+until a reviewer accepts the Card with a `continue` decision.
+
+While a downstream stage is `ready`, the internal Agent may discover that an
+approved Data, Feat, or Sig product needs revision. `rci revise --stage <stage>`
+opens that upstream loop without asking a reviewer to approve the intent. The
+Engine marks old attempts at that stage and below as stale and locks the
+downstream stages. The replacement result must still be prepared, submitted,
+and approved through a new Card before downstream work resumes.
+
+The preparation brief is deliberately result-focused:
+
+```json
+{
+  "question": "Did the additional source resolve the coverage gap?",
+  "conclusion": "Coverage improved; the remaining gap is outside market hours.",
+  "evidence": ["Valid observations increased from 81% to 98%."],
+  "counterevidence": ["The first two release dates remain unavailable."],
+  "limitations": ["The proxy has only three years of history."],
+  "changes": ["Added a native release table and bounded forward fill."],
+  "key_plots": ["plots/coverage.png", "plots/alignment.png"]
+}
+```
+
+The final Card shows these fields, compact Engine facts, and links to key
+figures. Full eval rows, recipes, manifests, and research tables remain audit
+artifacts rather than material the external reviewer must read.
 
 The Engine always contributes the general baseline floor. A lab may add
 stage-specific baseline rules, but an empty external `baseline` tuple is valid;
@@ -224,10 +268,12 @@ recommendation:
   `disabled`;
 - recommendation: `continue`, `stop`, or `uncertain`.
 
-Attempts separately report whether mandatory checks are `valid` or `invalid`.
-Draft Cards therefore use `workflow_state: ready` with
-`artifact_role: attempt`; submitted Cards use `workflow_state: review` with
-`artifact_role: candidate`. An invalid attempt cannot be submitted. Detailed
+Attempts separately report whether mandatory checks are `valid` or `invalid`
+and whether the internal Agent has declared them `research_ready`. Internal
+attempt Cards therefore use `workflow_state: ready` with
+`artifact_role: attempt`; prepared Cards add `research_ready: true`; submitted
+Cards use `workflow_state: review` with `artifact_role: candidate`. An invalid,
+unprepared, rejected, or stale attempt cannot be submitted. Detailed
 assessments still separate
 two evidence questions:
 
@@ -333,11 +379,13 @@ rci approve --stage contract --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
 rci dataloop run --contract path/to/contract.py --builder path/to/data.py \
   --plan path/to/evals/data.py --out .rci/runs/001
+rci data prepare --out .rci/runs/001 --attempt 0001 --brief data-review.json
 rci data submit --out .rci/runs/001 --attempt 0001 --recommendation continue
 rci approve --stage data --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
 rci feat run --builder path/to/feat.py --plan path/to/evals/feat.py \
   --out .rci/runs/001
+rci feat prepare --out .rci/runs/001 --attempt 0001 --brief feat-review.json
 rci feat submit --out .rci/runs/001 --attempt 0001 --recommendation continue
 rci approve --stage feat --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
@@ -345,15 +393,19 @@ rci sig run --builder path/to/sig.py --plan path/to/evals/sig.py \
   --out .rci/runs/001
 rci sig freeze --out .rci/runs/001 --attempt 0001 \
   --context path/to/confirmation-context  # when ConfirmationPlan is declared
+rci sig prepare --out .rci/runs/001 --attempt 0001 --brief sig-review.json
 rci sig submit --out .rci/runs/001 --attempt 0001 --recommendation uncertain
 rci approve --stage sig --out .rci/runs/001 --by human \
   --decision continue --card <card_id>
 rci algo run --builder path/to/algo.py --plan path/to/evals/algo.py \
   --backtester path/to/backtest.py --out .rci/runs/001
+rci algo prepare --out .rci/runs/001 --attempt 0001 --brief algo-review.json
 rci algo submit --out .rci/runs/001 --attempt 0001 --recommendation stop
 rci approve --stage algo --out .rci/runs/001 --by human \
   --decision stop --card <card_id>
 rci next --out .rci/runs/001 --json
+rci revise --stage data --out .rci/runs/001 \
+  --message "Feat needs a newly normalized source field"
 rci guide --stage sig
 rci visualize --stage sig --renderer path/to/visualize.py --out .rci/runs/001
 rci status --out .rci/runs/001
@@ -361,14 +413,20 @@ rci eval run --stage data --table data.parquet --plan evals/data.py --out .rci/r
 ```
 
 `rci contract derive` writes the Contract Card. After approval,
-`rci dataloop run` writes the Data table, exploration summary, recipe,
-four-slot report, and
-draft Card under `data/attempts/<id>/`. A hard-check failure remains an invalid
-attempt in `ready`; it cannot reach review. A valid attempt becomes the formal
-Data candidate only through `rci data submit`.
+`rci dataloop run` accepts a `build_data_bundle()` result or wraps the legacy
+`build_main_table()` DataFrame. It writes the aligned main table, normalized
+native-frequency tables, catalog, coverage, acquisition log, exploration,
+recipe, four-slot report, and internal Card under `data/attempts/<id>/`. A hard
+check failure remains invalid. A valid result must be summarized with a
+`ReviewBrief` before it can become the formal Data candidate.
 
-`rci feat run` reads only the approved `data/main.parquet`, calls the external
-`build_features(table)` or `build(table)`, and first writes:
+`rci feat run` loads the approved DataBundle. A legacy builder still receives
+`data/main.parquet` through `build_features(table)` or `build(table)`. A
+bundle-aware builder defines `build_features_from_bundle(bundle)` and may read
+approved `bundle.native` tables. Raw snapshots can be inspected during
+research, but any raw field that affects a formal feature must first return to
+Data, be normalized, validated, and published in `main` or `native`. Feat first
+writes:
 
 ```text
 feat/attempts/<id>/main.parquet
@@ -384,8 +442,9 @@ that the builder did not modify its input. Warm-up nulls remain visible to the
 general missing-value baseline and can be reviewed without being written back
 as eval columns. Feat evaluates correctness, coverage, structure, redundancy,
 and stability. It leaves target-aware screening to Sig. Feat remains `ready`
-while the Agent edits and reruns its builder or plan. Submission moves one
-valid attempt to `review`; the stage cannot run again until the reviewer either
+while the Agent edits and reruns its builder or plan. Preparation turns one
+valid result into the external Card; submission then moves that prepared
+attempt to `review`. The stage cannot run again until the reviewer either
 rejects it back to `ready` or accepts it.
 
 ## Sig handoff

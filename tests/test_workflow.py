@@ -8,11 +8,13 @@ from research_ci.workflow import (
     finish_confirmation,
     new_workflow,
     next_action,
+    prepare_attempt,
     read_workflow,
     record_attempt,
     reject,
     reopen,
     require_stage_ready,
+    revise,
     submit_for_review,
     write_workflow,
 )
@@ -76,6 +78,22 @@ def test_only_a_valid_attempt_can_enter_review(tmp_path) -> None:
         card="draft-card",
         checks="valid",
     )
+    assert next_action(read_workflow(tmp_path))["action"] == "prepare"
+    with pytest.raises(WorkflowError, match="RCI-ATTEMPT-NOT-RESEARCH-READY"):
+        submit_for_review(
+            tmp_path,
+            stage="data",
+            card="data-card",
+            recommendation="uncertain",
+            attempt="0002",
+        )
+    prepare_attempt(
+        tmp_path,
+        stage="data",
+        attempt="0002",
+        card="prepared-card",
+        brief={"question": "q", "conclusion": "c", "evidence": ["e"]},
+    )
     submit_for_review(
         tmp_path,
         stage="data",
@@ -127,6 +145,7 @@ def test_rejection_requires_a_new_attempt(tmp_path) -> None:
         valid=True,
         card="draft-card",
         checks="valid",
+        research_ready=True,
     )
     submit_for_review(
         tmp_path,
@@ -205,6 +224,7 @@ def test_reopen_requires_a_new_attempt(tmp_path) -> None:
         valid=True,
         card="draft-card",
         checks="valid",
+        research_ready=True,
     )
     submit_for_review(
         tmp_path,
@@ -227,7 +247,7 @@ def test_reopen_requires_a_new_attempt(tmp_path) -> None:
         message="rebuild with the revised source",
     )
 
-    with pytest.raises(WorkflowError, match="RCI-ATTEMPT-SUBMITTED"):
+    with pytest.raises(WorkflowError, match="RCI-ATTEMPT-STALE"):
         submit_for_review(
             tmp_path,
             stage="data",
@@ -251,6 +271,7 @@ def test_sig_confirmation_is_required_and_holdout_is_consumed_once(tmp_path) -> 
         checks="valid",
         confirmation_required=True,
         evidence_scope="confirmation_pending",
+        research_ready=True,
     )
 
     with pytest.raises(WorkflowError, match="RCI-SIG-CONFIRMATION-REQUIRED"):
@@ -318,5 +339,39 @@ def test_version_one_passed_state_is_read_as_approved(tmp_path) -> None:
     write_workflow(tmp_path, state)
 
     loaded = read_workflow(tmp_path)
-    assert loaded["version"] == 3
+    assert loaded["version"] == 4
     assert loaded["stages"]["contract"] == "approved"
+
+
+def test_active_agent_can_revise_approved_upstream_and_stale_attempts(tmp_path) -> None:
+    state = new_workflow(("data", "feat", "sig"), "contract-card")
+    state["stages"].update(
+        {
+            "contract": "approved",
+            "data": "approved",
+            "feat": "approved",
+            "sig": "ready",
+        }
+    )
+    state["attempts"] = {
+        "data": [{"id": "0001", "stale": False}],
+        "feat": [{"id": "0001", "stale": False}],
+        "sig": [{"id": "0001", "stale": False}],
+    }
+    write_workflow(tmp_path, state)
+
+    revised = revise(
+        tmp_path,
+        stage="data",
+        message="the feature loop found that a native source needs promotion",
+    )
+
+    assert revised["stages"]["data"] == "ready"
+    assert revised["stages"]["feat"] == "locked"
+    assert revised["stages"]["sig"] == "locked"
+    assert revised["revisions"][-1]["from_stage"] == "sig"
+    assert all(
+        attempt["stale"]
+        for attempts in revised["attempts"].values()
+        for attempt in attempts
+    )

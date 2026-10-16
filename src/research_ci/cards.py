@@ -4,16 +4,122 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import polars as pl
 
+from .artifacts import ReviewBrief
 from .eval.assessment import (
     assess_features,
     assess_records,
     assess_signal_evidence,
 )
 from .workflow import render_card
+
+
+def review_card(
+    stage: str,
+    brief: ReviewBrief,
+    manifest: dict[str, Any],
+    assessment: dict[str, Any],
+    *,
+    attempt: str,
+    previous_attempt: str | None,
+) -> tuple[str, str]:
+    """Render the concise result page shown to an external reviewer."""
+
+    lines = [
+        f"# {stage.title()} Review Card",
+        "",
+        "- workflow_state: ready",
+        "- artifact_role: attempt",
+        "- checks: valid",
+        "- research_ready: true",
+        f"- attempt: {attempt}",
+        f"- previous_attempt: {previous_attempt or '-'}",
+        "",
+        "## Result",
+        "",
+        f"**Question:** {brief.question}",
+        "",
+        brief.conclusion,
+        "",
+        "## Evidence",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in brief.evidence)
+    lines.extend(("", "## Counterevidence and limits", ""))
+    if brief.counterevidence:
+        lines.extend(f"- Counterevidence: {item}" for item in brief.counterevidence)
+    if brief.limitations:
+        lines.extend(f"- Limitation: {item}" for item in brief.limitations)
+    if not brief.counterevidence and not brief.limitations:
+        lines.append("- None declared.")
+
+    lines.extend(("", "## Iteration delta", ""))
+    if brief.changes:
+        lines.extend(f"- {item}" for item in brief.changes)
+    elif previous_attempt is None:
+        lines.append("- First completed attempt.")
+    else:
+        lines.append("- No material change was declared from the previous attempt.")
+
+    lines.extend(("", "## Engine facts", ""))
+    lines.append(f"- rows: {manifest.get('rows', '-')}")
+    columns = manifest.get("columns", ())
+    lines.append(
+        f"- columns: {len(columns) if isinstance(columns, list) else columns or '-'}"
+    )
+    data_bundle = manifest.get("data_bundle")
+    if isinstance(data_bundle, dict):
+        native = data_bundle.get("native", {})
+        lines.append(f"- native source tables: {len(native)}")
+        for name, summary in native.items():
+            lines.append(
+                f"  - `{name}`: {summary.get('rows', '-')} rows, "
+                f"{summary.get('frequency', 'unspecified')}"
+            )
+    execution = assessment.get("execution_status", manifest.get("checks", "-"))
+    lines.append(f"- eval execution: {execution}")
+    if assessment.get("research_disposition"):
+        lines.append(f"- evidence triage: {assessment['research_disposition']}")
+    reason_codes = assessment.get("reason_codes", ())
+    lines.append(f"- reason codes: {', '.join(reason_codes) if reason_codes else '-'}")
+
+    lines.extend(("", "## Key figures", ""))
+    if brief.key_plots:
+        lines.extend(f"- [{Path(path).stem}]({path})" for path in brief.key_plots)
+    else:
+        lines.append("- No key figure was selected for this review.")
+
+    lines.extend(
+        (
+            "",
+            "## Review",
+            "",
+            "Review the result, evidence, counterevidence, limitations, and key "
+            "figures. Detailed methods remain available for audit but are not "
+            "required for this decision.",
+            "",
+            f"- Approve and continue: `rci approve --stage {stage} --out <run> "
+            "--by human --decision continue --card <card_id>`",
+            f"- Approve and stop: `rci approve --stage {stage} --out <run> "
+            "--by human --decision stop --card <card_id>`",
+            f"- Reject with feedback: `rci reject --stage {stage} --out <run> "
+            "--by human --message <reason> --card <card_id>`",
+            "- A designated external review Agent uses `--by agent` for the same "
+            "three decisions.",
+            "",
+            "## Audit trail",
+            "",
+            "- complete eval records: `eval/report.jsonl`",
+            "- eval assessment: `eval/assessment.json`",
+            "- construction recipe: `recipe.json`",
+            "- artifact index: `manifest.json`",
+        )
+    )
+    return render_card("\n".join(lines))
 
 
 def contract_card(
@@ -180,6 +286,7 @@ def sig_card(
     dispositions: pl.DataFrame,
     result_status: str,
     validation_plan: dict[str, Any] | None = None,
+    assessment_research: dict[str, pl.DataFrame] | None = None,
     confirmation_status: str = "not_declared",
     workflow_state: str = "review",
     artifact_role: str = "candidate",
@@ -208,35 +315,39 @@ def sig_card(
     )
     lines.append(f"- evidence_scope: {evidence_scope}")
     lines.append(f"- confirmation_status: {confirmation_status}")
-    _append_assessment(lines, result)
-    signal_table = table.select(*keys, *signals)
-    triage = assess_features(signal_table, keys, result.records)
-    lines.extend(("", "## Signal output triage", ""))
-    for column, evidence in triage.items():
-        reasons = ", ".join(evidence["reason_codes"]) or "-"
-        lines.append(
-            f"- `{column}`: {evidence['status']} "
-            f"(coverage={evidence['coverage']:.3f}, reasons={reasons})"
+    if metadata.get("assessment"):
+        _append_thesis_assessment_summary(lines, metadata, result)
+        _append_assessment_output(lines, metadata, assessment_research or {})
+    else:
+        _append_assessment(lines, result)
+        signal_table = table.select(*keys, *signals)
+        triage = assess_features(signal_table, keys, result.records)
+        lines.extend(("", "## Signal output triage", ""))
+        for column, evidence in triage.items():
+            reasons = ", ".join(evidence["reason_codes"]) or "-"
+            lines.append(
+                f"- `{column}`: {evidence['status']} "
+                f"(coverage={evidence['coverage']:.3f}, reasons={reasons})"
+            )
+        feature_columns = tuple(
+            column
+            for column in evaluation_columns
+            if column not in {*keys, *signal_columns, *candidates}
         )
-    feature_columns = tuple(
-        column
-        for column in evaluation_columns
-        if column not in {*keys, *signal_columns, *candidates}
-    )
-    signal_evidence = assess_signal_evidence(
-        result.records,
-        signal_columns,
-        feature_columns,
-    )
-    _append_signal_evidence(lines, signal_evidence, heading="Final signal evidence")
-    if candidates:
-        candidate_evidence = assess_signal_evidence(result.records, candidates)
-        _append_signal_evidence(
-            lines,
-            candidate_evidence,
-            heading="Candidate signal evidence",
-            include_feature_ranking=False,
+        signal_evidence = assess_signal_evidence(
+            result.records,
+            signal_columns,
+            feature_columns,
         )
+        _append_signal_evidence(lines, signal_evidence, heading="Final signal evidence")
+        if candidates:
+            candidate_evidence = assess_signal_evidence(result.records, candidates)
+            _append_signal_evidence(
+                lines,
+                candidate_evidence,
+                heading="Candidate signal evidence",
+                include_feature_ranking=False,
+            )
     lines.extend(("", "## Feature disposition", ""))
     if dispositions.is_empty():
         lines.append("- no feature disposition was supplied")
@@ -354,6 +465,84 @@ def algo_card(
         )
     )
     return render_card("\n".join(lines))
+
+
+def _append_assessment_output(
+    lines: list[str],
+    metadata: dict[str, Any],
+    research: dict[str, pl.DataFrame],
+) -> None:
+    """Render Thesis Assessment evidence without treating text status as a signal."""
+
+    lines.extend(("", "## Thesis Assessment", ""))
+    for field in (
+        "thesis_id",
+        "author_version_id",
+        "as_of",
+        "assessment_status",
+        "uncertainty",
+        "stopping_rule",
+    ):
+        if field in metadata:
+            lines.append(f"- {field}: {_card_value(metadata[field])}")
+    premise_statuses = metadata.get("premise_statuses")
+    if isinstance(premise_statuses, dict):
+        lines.append(
+            "- premise_statuses: "
+            + ", ".join(f"`{key}`={value}" for key, value in premise_statuses.items())
+        )
+
+    premise_table = research.get("premise_assessment")
+    if premise_table is not None and not premise_table.is_empty():
+        lines.extend(("", "### Premise assessment", ""))
+        columns = [
+            column
+            for column in (
+                "premise_id",
+                "status",
+                "effect_size",
+                "effective_n",
+                "uncertainty",
+            )
+            if column in premise_table.columns
+        ]
+        lines.append("| " + " | ".join(columns) + " |")
+        lines.append("| " + " | ".join("---" for _ in columns) + " |")
+        for row in premise_table.select(columns).iter_rows(named=True):
+            lines.append(
+                "| " + " | ".join(_card_value(row[column]) for column in columns) + " |"
+            )
+
+    findings = research.get("quantitative_findings")
+    if findings is not None and not findings.is_empty():
+        lines.extend(("", "### Quantitative findings", ""))
+        columns = [
+            column
+            for column in ("premise_id", "test", "estimate", "unit", "n", "method")
+            if column in findings.columns
+        ]
+        lines.append("| " + " | ".join(columns) + " |")
+        lines.append("| " + " | ".join("---" for _ in columns) + " |")
+        for row in findings.select(columns).iter_rows(named=True):
+            lines.append(
+                "| " + " | ".join(_card_value(row[column]) for column in columns) + " |"
+            )
+
+    ledger = research.get("evidence_ledger")
+    if ledger is not None and not ledger.is_empty():
+        lines.extend(("", "### Evidence ledger", ""))
+        lines.append(f"- evidence rows: {ledger.height}")
+        if "stance" in ledger.columns:
+            counts = ledger.group_by("stance").len().sort("stance").iter_rows()
+            lines.append(
+                "- stance counts: "
+                + ", ".join(f"{stance}={count}" for stance, count in counts)
+            )
+        if "independence_cluster" in ledger.columns:
+            lines.append(
+                f"- independent evidence clusters: "
+                f"{ledger.get_column('independence_cluster').n_unique()}"
+            )
 
 
 def _append_signal_evidence(
@@ -506,6 +695,34 @@ def _append_assessment(lines: list[str], result: Any) -> None:
     for reason in assessment["reasons"]:
         affected = ", ".join(reason["records"])
         lines.append(f"- reason `{reason['code']}`: {affected}")
+
+
+def _append_thesis_assessment_summary(
+    lines: list[str], metadata: dict[str, Any], result: Any
+) -> None:
+    """Render execution status separately from a non-trading assessment verdict."""
+
+    assessment = assess_records(result.records)
+    lines.extend(
+        (
+            "",
+            "## Assessment",
+            "",
+            f"- eval_execution: {assessment['execution_status']}",
+            "- thesis_status: "
+            + _card_value(metadata.get("assessment_status", "undeclared")),
+            f"- uncertainty: {_card_value(metadata.get('uncertainty', 'undeclared'))}",
+            f"- metric_count: {assessment['metric_count']}",
+            "- interpretation: this is a Thesis Assessment; it is not a trading signal "
+            "and has no signal-output triage.",
+        )
+    )
+    statuses = metadata.get("premise_statuses")
+    if isinstance(statuses, dict):
+        lines.append(
+            "- premise_statuses: "
+            + ", ".join(f"`{key}`={value}" for key, value in statuses.items())
+        )
 
 
 def _review_prompt(stage: str, artifact_role: str) -> tuple[str, str]:

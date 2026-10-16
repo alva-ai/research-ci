@@ -1,8 +1,10 @@
 # Research CI design and requirements
 
-> **Status, 2026-10-15:** the MVP path from Contract through Algo is
+> **Status, 2026-10-16:** the MVP path from Contract through Algo is
 > implemented and has been exercised on the SK Hynix/SKHY proxy-spread case.
 > Optional Sig procedure freeze and one-time confirmation are implemented.
+> DataBundle, explicit internal research preparation, concise external Cards,
+> and Agent-owned upstream revision are implemented.
 > Secure holdout custody, a tamper-evident ledger, forward evaluation, and a
 > built-in backtester are planned. This document states the product requirements
 > and stage boundaries. [README.md](../README.md) is the quickstart,
@@ -93,6 +95,11 @@ The handoff tables are independent artifacts:
 data/main.parquet -> feat/main.parquet -> sig/main.parquet -> algo/main.parquet
 ```
 
+Data also freezes normalized native-frequency source tables. They are formal
+Data evidence and may be selected by Feat, but `data/main.parquet` remains the
+default aligned handoff. Raw snapshots are audit material and cannot be read
+directly as a formal Feat input.
+
 ### Wide by default
 
 For fixed instruments or a fixed pair, one row represents one time and the
@@ -132,6 +139,7 @@ structure is intentionally direct:
 ```text
 src/research_ci/
   contract.py      small Contract and structural validation
+  artifacts.py     DataBundle, source catalog, and ReviewBrief
   workflow.py      ordered stage states and approval provenance
   cli.py           external builder, plan, backtester, and renderer entrypoints
   cards.py         deterministic Markdown Cards and stable Card IDs
@@ -191,7 +199,8 @@ the declared builder result and the four-slot plan.
 flowchart LR
     C[Contract review] -->|approve continue| D[Data ready]
     D -->|run one or more attempts| DA[Data attempts]
-    DA -->|submit one valid attempt| DC[Data review]
+    DA -->|prepare one valid result| DP[Data result Card]
+    DP -->|submit| DC[Data review]
     DC -->|reject| D
     DC -->|approve continue| F[Feat ready]
     DC -->|approve stop| X[Stopped]
@@ -199,8 +208,8 @@ flowchart LR
     S --> A[Algo ready]
 ```
 
-Feat, Sig, and Algo use the same `ready -> attempts -> review` protocol shown
-for Data. Sig inserts `freeze -> one-time confirmation` before submit when its
+Feat, Sig, and Algo use the same `ready -> attempts -> prepare -> review`
+protocol shown for Data. Sig inserts `freeze -> one-time confirmation` before submit when its
 plan declares a confirmation holdout. The short arrows between stages mean
 that the submitted Card was approved with `continue`, not that a stage run
 approved itself.
@@ -211,22 +220,36 @@ Every enabled stage is in one of these states:
 | --- | --- |
 | `locked` | An earlier enabled stage has not been approved. |
 | `ready` | The upstream artifact is approved and the Agent may run this stage. |
-| `review` | One valid attempt was submitted as the formal candidate; only a reviewer may act. |
+| `review` | One valid, prepared attempt was submitted as the formal candidate; only a reviewer may act. |
 | `approved` | The submitted Card was explicitly approved with `continue`. |
 | `stopped` | The submitted Card was explicitly approved with `stop`; the workflow ends without advancing. |
 | `disabled` | The Contract omitted this stage. |
 
 Attempt validity is not a workflow state. A failed mandatory check marks that
 attempt `invalid`, leaves the stage `ready`, and prevents submission. A valid
-attempt also leaves the stage `ready`, so the Agent may inspect it, improve the
-Lab, and run again. Only `submit` chooses one valid attempt and moves the stage
-to `review`. Cards expose these as separate fields: `workflow_state` remains
-one of the six states above, while `artifact_role` is `attempt` or `candidate`.
+attempt also leaves the stage `ready`, so the internal Agent may inspect it,
+improve the Lab, and run again. Validity means that the declared computation
+and mandatory checks ran; it does not mean the research is mature.
 
-In `review`, the reviewer may approve with `continue`, approve with `stop`, or
-reject with a reason. Rejection returns the stage to `ready`; the Agent must
-produce a new attempt before resubmitting. Reopening an approved or stopped
-stage is an explicit human action and locks every downstream stage again.
+Before submission, the internal Agent must prepare one valid attempt with a
+structured `ReviewBrief`: question, conclusion, evidence, counterevidence,
+limitations, iteration delta, and optional key plots. Preparation marks the
+attempt `research_ready` and renders the concise result Card. Only `submit`
+chooses a valid, prepared, current attempt and moves the stage to `review`.
+Rejected and stale attempts cannot be reused.
+
+In `review`, the external reviewer reads the result Card and may approve with
+`continue`, approve with `stop`, or reject with a short reason. The reviewer is
+not expected to inspect code or per-method eval rows. Rejection returns the
+stage to `ready`; the internal Agent must produce a new attempt before
+resubmitting. Reopening an approved or stopped stage from outside the active
+research loop remains an explicit human action.
+
+While a downstream stage is actively `ready`, the internal Agent may use
+`rci revise --stage data|feat|sig` to return to an approved upstream boundary.
+This action records the reason, marks attempts at that stage and below stale,
+and locks downstream stages. It does not approve the replacement: the revised
+stage must produce, prepare, submit, and receive approval for a new Card.
 
 The workflow does not assume which Agent implementation drives it. The CLI is
 the authority for legal transitions: a skipped or out-of-order command is
@@ -240,19 +263,23 @@ refused with an error code and the exact next legal actor, command, and reason.
 Each stage after Contract follows the same outer protocol:
 
 1. Refuse the run unless the stage is exactly `ready`.
-2. Read the approved upstream `main.parquet`.
+2. Read the approved upstream product. Feat receives the Data main table and
+   normalized native-frequency tables; other stages receive `main.parquet`.
 3. Execute an external Lab builder without allowing it to mutate the input.
 4. Validate the builder result against a stage declaration.
 5. Build the external Agent's selected library plan and case rules.
 6. Run four slots against the formal table and explicit sidecars.
 7. Save an immutable numbered attempt containing the main table, research
    artifacts, eval report, assessment, Card, and manifest.
-8. Record the attempt as `valid` or `invalid` while the stage remains `ready`.
+8. Record the attempt as mechanically `valid` or `invalid` while the stage
+   remains `ready`; continue iterating when the evidence is not mature.
 9. For a Sig attempt with a declared confirmation holdout, freeze the selected
    procedure and run that holdout once before submission.
-10. Submit one valid eligible attempt to publish it as the formal candidate and
+10. Prepare one valid attempt with a result-focused `ReviewBrief`; this marks
+    it `research_ready` and generates the external Card.
+11. Submit that prepared attempt to publish it as the formal candidate and
     enter `review`.
-11. Wait for explicit approval or rejection before any downstream work.
+12. Wait for explicit approval or rejection before any downstream work.
 
 ### The four slots
 
@@ -294,8 +321,8 @@ selection reason, status, metrics, findings, and reason code.
 
 | Stage | Formal input | Formal output | Excluded from the main table |
 | --- | --- | --- | --- |
-| Data | Contract plus Lab sources | Joined, point-in-time research data | Labels, outcomes, feature candidates, eval columns |
-| Feat | Approved `data/main.parquet` | Keys plus target-free feature columns | Labels, targets, fitted target-aware transforms, signals |
+| Data | Contract plus Lab sources | `DataBundle`: aligned main table, normalized native tables, catalog, coverage, request log, and audit raw | Labels, outcomes, feature candidates, eval columns |
+| Feat | Approved `data/main.parquet` and `data/native/*.parquet` | Keys plus target-free feature columns | Raw snapshots, labels, targets, fitted target-aware transforms, signals |
 | Sig | Approved `feat/main.parquet`; Data may be read only to assemble the direct Algo handoff | Keys, context/prices needed by Algo, and final signal columns | Labels, screening metrics, rejected features, research candidates |
 | Algo | Approved `sig/main.parquet` | Prices/signals plus positions, weights, or trade rows | Backtest paths, PnL summary, eval columns |
 
@@ -308,6 +335,7 @@ valid submitted attempt is then published at the stage root:
 attempts/
   0001/
     main.parquet
+    review.json
     recipe.json
     artifacts/
     eval/report.jsonl
@@ -325,6 +353,11 @@ candidate.json          submitted attempt and Card identity
 approved.json           created only after explicit approval
 plots/                  optional and generated only on request
 ```
+
+A Data attempt additionally contains `native/`, `catalog.json`,
+`source_coverage.parquet`, `request_log.jsonl`, `metadata.json`, and optional
+`raw/`. The catalog names each table's keys, source, frequency, event-time
+column, availability-time column, units, and description.
 
 Stage-specific research tables remain next to these common artifacts. The
 attempt history remains available after submission. The manifest is the
@@ -363,11 +396,26 @@ Requirements:
 
 Data is the Agent's source-exploration and assembly stage. It may download new
 sources, inspect coverage, reconcile timestamps, and revise joins. Its formal
-result is a table whose values mean what their names and times claim.
+result is a `DataBundle` whose values mean what their names and times claim.
+
+The bundle separates three roles:
+
+- `main.parquet` is the aligned wide research grid used by most Feat work;
+- `native/*.parquet` preserves normalized sources at their own cadence and is
+  also a formal, validated Feat input;
+- `raw/` preserves optional acquisition snapshots for audit and exploration,
+  but it is never a formal Feat input.
+
+`catalog.json` covers `main` and every native table. `source_coverage.parquet`
+shows coverage and freshness. `request_log.jsonl` records acquisition attempts,
+including failures, so a missing source cannot silently disappear from the
+research record.
 
 Requirements:
 
 - Preserve each source at its original cadence before assembly.
+- Normalize any source field that may affect Feat into `main` or `native` and
+  declare its keys, source, frequency, event time, availability time, and units.
 - Make timestamp semantics explicit: bar start, bar close, event time, and
   availability time must not be conflated.
 - Join slower sources backward/as-of unless the case proves another rule.
@@ -382,8 +430,9 @@ columnar quality and temporal checks. Case rules verify source-specific facts
 such as OHLC envelopes, symbol identity, derived spread formulas, and funding
 availability. `case_eval` plants violations of those definitions.
 
-Data approval means the assembled table is suitable as the sole formal input
-to Feat. It does not mean the research idea is correct.
+Data approval means the assembled main table and normalized native tables are
+suitable as Feat's formal input product. It does not mean the research idea is
+correct.
 
 ## Feat
 
@@ -395,7 +444,9 @@ declared feature rather than silently reading only a convenient subset.
 
 Requirements:
 
-- Read only the approved Data main table.
+- Read only the approved Data main and native tables. Raw snapshots may inform
+  exploration, but a raw field must return to Data and pass Data validation
+  before it can affect a formal feature.
 - Return a Polars table containing keys plus declared features.
 - Preserve the Data key grid; rolling warm-up does not justify dropping rows.
 - Preserve warm-up nulls unless a fill rule is part of the feature definition.
@@ -416,6 +467,14 @@ normally recorded or clustered, not silently deleted by the Engine.
 
 Feat approval means the feature table and its structural evidence are ready
 for target-aware Sig research.
+
+The stage boundary follows semantics rather than code location. Source/entity
+mapping, units, revisions, release timestamps, and normalization belong to
+Data. Rolling windows, lags, z-scores, interactions, and task-specific causal
+as-of transformations belong to Feat. If Feat discovers a missing normalized
+source or faulty release-time mapping, the internal Agent revises Data. If Sig
+needs a different target-free transformation of already approved source data,
+it revises Feat.
 
 ## Sig
 
@@ -694,7 +753,8 @@ reviewed. It is not a live-trading authorization.
 Every submitted Card has a stable ID derived from its rendered body and one
 Agent recommendation: `continue`, `stop`, or `uncertain`. The recommendation
 is a concise handoff to the reviewer, not a transition and not another eval
-verdict.
+verdict. Mechanical validity and research readiness are separate attempt
+properties; both are required before submission.
 
 Approval records:
 
@@ -705,11 +765,13 @@ Approval records:
 - timestamp;
 - review message.
 
-Cards summarize evidence without discarding the full report. A Card separates
-workflow state from eval evidence: a stage can have a valid attempt while its
-research evidence is weak, unstable, costly, or otherwise unsuitable to
-continue. Those findings inform the recommendation and review decision; they
-do not create more workflow states.
+The internal Agent may inspect code, full tables, every eval record, and all
+plots while iterating. The external Card is a result page: question,
+conclusion, evidence, counterevidence, limitations, iteration delta, compact
+Engine facts, and selected figures. Detailed methods remain linked audit
+artifacts. A stage can therefore have a valid attempt that is not yet
+`research_ready`, or evidence that supports an `uncertain` or `stop`
+recommendation, without creating more workflow states.
 
 Approvals are explicit CLI actions. Research CI never treats file creation or a
 successful process exit as approval. `approve --decision continue` unlocks the
@@ -720,8 +782,8 @@ and requires a new attempt; it does not mutate the submitted attempt.
 `rci next` is the single recovery and orchestration interface. It identifies
 whether the Agent or reviewer owns the next action and emits a concrete legal
 command. A command that tries to skip approval, run while in review, submit an
-invalid attempt, approve the wrong Card, or reuse a rejected attempt is
-refused before downstream work begins.
+invalid or unprepared attempt, approve the wrong Card, or reuse a rejected or
+stale attempt is refused before downstream work begins.
 
 Optional visualizations are generated by an external case renderer after a
 stage run. They are review aids, not a fifth eval slot or a pass condition.
@@ -734,9 +796,14 @@ The MVP currently guarantees:
 - one small workflow state machine: `locked`, `ready`, `review`, `approved`,
   `stopped`, and `disabled`;
 - append-only numbered attempts separated from the submitted candidate;
-- invalid attempts cannot be submitted and rejected attempts cannot be reused;
+- mechanical validity separated from explicit research readiness;
+- invalid, unprepared, rejected, and stale attempts cannot be submitted;
+- Agent-owned upstream revision during an active downstream loop, with
+  downstream invalidation and a new approval boundary;
 - structured refusals with the next legal actor, command, and reason;
-- only approved upstream main tables enter downstream stage runners;
+- only approved upstream products enter downstream stage runners;
+- typed DataBundle with an aligned main table, native-frequency formal tables,
+  source catalog, coverage, request log, and audit-only raw snapshots;
 - external builders cannot mutate input DataFrames;
 - stage declarations and exact formal schemas;
 - the four-slot protocol and stage-scoped library selection;
@@ -765,8 +832,8 @@ The next design work should preserve the MVP boundaries rather than enlarge
 the Contract prematurely:
 
 1. General point-in-time replay and fitted-artifact reproduction.
-2. Transitive source and data lineage, immutable upstream freezes, and automatic
-   downstream invalidation.
+2. Transitive source and data lineage and content-addressed immutable upstream
+   freezes. Workflow-level downstream invalidation is implemented.
 3. Secure holdout custody outside the external Lab process when the execution
    environment can enforce it.
 4. A built-in reference backtester only after at least two external

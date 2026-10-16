@@ -46,6 +46,8 @@ from .library.temporal import key_grid
 from .menu import require_selectable_method
 from .protocol import EvalContext, EvalObservation, EvalSpec
 
+_INTERNAL_FEATURE_TABLE = "__rci_feature_table"
+
 
 class LibrarySelectionError(ValueError):
     """Raised when a selected method is incompatible with its declaration."""
@@ -347,8 +349,39 @@ def _from_label_sidecar(
             )
         main_columns = tuple(dict.fromkeys((*keys, feature)))
         target_columns = tuple(dict.fromkeys((*keys, target, *context_columns)))
-        missing_main = sorted(set(main_columns) - set(table.columns))
+        source_table = table
+        join_keys = keys
+        context_source = "evaluation_table"
+        missing_main = sorted(set(main_columns) - set(source_table.columns))
         missing_target = sorted(set(target_columns) - set(sidecar.columns))
+
+        # Frozen assessments deliberately evaluate a one-row main table keyed
+        # by thesis/version/as-of. Their approved Feat grid and native label
+        # keys stay separate, so target-aware methods use the Engine-owned
+        # feature table when the assessment row cannot supply the feature.
+        if missing_main or missing_target:
+            try:
+                internal_features = context.table(_INTERNAL_FEATURE_TABLE)
+            except KeyError:
+                internal_features = None
+            if internal_features is not None and feature in internal_features.columns:
+                native_keys = tuple(
+                    column
+                    for column in internal_features.columns
+                    if column not in declaration.features
+                )
+                if native_keys and all(
+                    column in sidecar.columns for column in native_keys
+                ):
+                    source_table = internal_features
+                    join_keys = native_keys
+                    context_source = _INTERNAL_FEATURE_TABLE
+                    main_columns = tuple(dict.fromkeys((*join_keys, feature)))
+                    target_columns = tuple(
+                        dict.fromkeys((*join_keys, target, *context_columns))
+                    )
+                    missing_main = sorted(set(main_columns) - set(source_table.columns))
+                    missing_target = sorted(set(target_columns) - set(sidecar.columns))
         if missing_main or missing_target:
             return EvalObservation(
                 status="not_applicable",
@@ -357,10 +390,11 @@ def _from_label_sidecar(
                     "reason_code": "MISSING_CONTEXT",
                     "missing_main_columns": missing_main,
                     "missing_target_columns": missing_target,
+                    "context_source": context_source,
                 },
             )
         duplicate_keys = (
-            sidecar.select(keys).height - sidecar.select(keys).unique().height
+            sidecar.select(join_keys).height - sidecar.select(join_keys).unique().height
         )
         if duplicate_keys:
             return EvalObservation(
@@ -370,10 +404,12 @@ def _from_label_sidecar(
                     "reason_code": "CONTEXT_DUPLICATE_KEYS",
                     "duplicate_key_rows": duplicate_keys,
                     "context_table": declaration.label_table,
+                    "join_on": join_keys,
+                    "context_source": context_source,
                 },
             )
-        joined = table.select(main_columns).join(
-            sidecar.select(target_columns), on=list(keys), how="inner"
+        joined = source_table.select(main_columns).join(
+            sidecar.select(target_columns), on=list(join_keys), how="inner"
         )
         if base.runner is None:
             raise RuntimeError(f"target method {base.name!r} has no table runner")
@@ -384,7 +420,8 @@ def _from_label_sidecar(
         details.update(
             {
                 "context_table": declaration.label_table,
-                "join_on": keys,
+                "context_source": context_source,
+                "join_on": join_keys,
                 "joined_rows": joined.height,
             }
         )
