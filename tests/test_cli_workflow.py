@@ -132,6 +132,31 @@ def make_plan(table, stage="data", context=None):
     )
     capsys.readouterr()
 
+    assert main(["next", "--out", str(out), "--json"]) == 0
+    ready_action = json.loads(capsys.readouterr().out)
+    assert ready_action["stage"] == "data"
+    assert ready_action["action"] == "run"
+    assert ready_action["objective"].startswith("assemble point-in-time")
+    protocol = ready_action["eval_protocol"]
+    assert protocol["plan"] == str(plan)
+    slots = {slot["name"]: slot for slot in protocol["slots"]}
+    assert tuple(slots) == ("baseline", "library", "case", "case_eval")
+    assert slots["baseline"]["owner"] == "engine"
+    assert slots["library"]["declared"] == ["library.not_applicable"]
+    assert slots["case"]["declared"] == ["data.case.positive_value"]
+    assert slots["case_eval"]["declared"] == [
+        "data.case_eval.positive_value_has_counterexample"
+    ]
+
+    assert main(["next", "--out", str(out)]) == 0
+    rendered_next = capsys.readouterr().out
+    assert "Next · data" in rendered_next
+    assert "eval\n  baseline" in rendered_next
+    assert "library.not_applicable" in rendered_next
+    assert "data.case.positive_value" in rendered_next
+    assert "data.case_eval.positive_value_has_counterexample" in rendered_next
+    assert "all four slots required" in rendered_next
+
     abandoned = out / "data" / "attempts" / "0001"
     abandoned.mkdir(parents=True)
     (abandoned / "partial.txt").write_text("builder crashed\n", encoding="utf-8")

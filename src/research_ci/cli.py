@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import inspect
@@ -90,6 +91,20 @@ from .workflow import (
 
 _INTERNAL_FEATURE_TABLE = "__rci_feature_table"
 _INTERNAL_CONTEXT_PREFIX = "__rci_"
+
+_BASELINE_PREVIEWS = {
+    "data": "Engine · null/NaN/Inf and DataBundle shape",
+    "feat": "Engine · null/NaN/Inf, key grid, and feature-table shape",
+    "sig": "Engine · null/NaN/Inf, feature coverage, labels, lineage, and output shape",
+    "algo": "Engine · null/NaN/Inf, positions, backtest, and summary shape",
+}
+
+_EVAL_SLOT_PURPOSES = {
+    "baseline": "fixed stage correctness floor",
+    "library": "Agent-selected methods from the stage-specific Engine menu",
+    "case": "Agent-authored task-specific rules",
+    "case_eval": "valid fixtures and explicit counterexamples for case rules",
+}
 
 _STAGE_GUIDES: dict[str, dict[str, Any]] = {
     "data": {
@@ -2206,22 +2221,159 @@ def _next(out: Path, as_json: bool = False) -> int:
     except WorkflowError as exc:
         print(f"next failed: {exc}")
         return 1
-    action = next_action(state)
+    action = _enrich_next_action(state, next_action(state))
     if as_json:
         print(json.dumps(action, indent=2, sort_keys=True))
         return 0
-    print(f"actor: {action.get('actor') or '-'}")
-    print(f"stage: {action.get('stage') or '-'}")
-    print(f"state: {action.get('state') or '-'}")
-    print(f"action: {action['action']}")
-    print(f"command: {action.get('command') or '-'}")
-    print(f"card: {action.get('card') or '-'}")
-    print(f"reason: {action['reason']}")
+    print(f"Next · {action.get('stage') or 'complete'}")
+
+    def add(key: str, *values: str) -> None:
+        body = [value for value in values if value]
+        for index, value in enumerate(body):
+            print(f"{key if index == 0 else '':<11}{value}")
+
+    add("actor", action.get("actor") or "-")
+    add("state", action.get("state") or "-")
+    add("action", action["action"].upper())
+    add("objective", action.get("objective", ""))
+    protocol = action.get("eval_protocol")
+    if protocol:
+        print("eval")
+        for slot in protocol["slots"]:
+            print(f"  {slot['name']:<11}{slot['summary']}")
+            for item in slot["declared"]:
+                print(f"  {'':<11}{item}")
+        if protocol.get("plan"):
+            print(f"  {'plan':<11}{protocol['plan']}")
+        print(f"  {'enforced':<11}{protocol['enforcement']}")
+    add("command", action.get("command") or "-")
+    add("card", action.get("card") or "")
+    add("reason", action["reason"])
     if action.get("recommendation"):
-        print(f"recommendation: {action['recommendation']}")
-    for item in action.get("optional_help", []):
-        print(f"optional help: {item}")
+        add("recommend", action["recommendation"])
+    add("help", *action.get("optional_help", []))
     return 0
+
+
+def _enrich_next_action(
+    state: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach the stage contract an Agent needs before it starts work."""
+
+    enriched = dict(action)
+    stage = action.get("stage")
+    if stage not in _STAGE_GUIDES:
+        return enriched
+    enriched["objective"] = _STAGE_GUIDES[stage]["objective"]
+    if action.get("actor") == "agent":
+        enriched["eval_protocol"] = _eval_protocol_preview(state, stage)
+    return enriched
+
+
+def _eval_protocol_preview(state: dict[str, Any], stage: str) -> dict[str, Any]:
+    run_command = state.get("commands", {}).get(stage, {}).get("run", "")
+    plan = _command_option(run_command, "--plan")
+    declarations = _inspect_eval_plan(Path(plan)) if plan else {}
+    summaries = {
+        "baseline": _BASELINE_PREVIEWS[stage],
+        "library": "Agent · selected Engine methods",
+        "case": "Agent · task-specific rules",
+        "case_eval": "Agent · valid fixtures and counterexamples",
+    }
+    slots = []
+    for name in ("baseline", "library", "case", "case_eval"):
+        slots.append(
+            {
+                "name": name,
+                "owner": "engine" if name == "baseline" else "agent",
+                "purpose": _EVAL_SLOT_PURPOSES[name],
+                "summary": summaries[name],
+                "declared": list(declarations.get(name, ())),
+            }
+        )
+    return {
+        "plan": plan,
+        "slots": slots,
+        "enforcement": "all four slots required; mandatory failures reject attempt",
+    }
+
+
+def _command_option(command: str, option: str) -> str | None:
+    try:
+        parts = shlex.split(command)
+        index = parts.index(option)
+    except (ValueError, IndexError):
+        return None
+    return parts[index + 1] if index + 1 < len(parts) else None
+
+
+def _inspect_eval_plan(path: Path) -> dict[str, tuple[str, ...]]:
+    """Read declarations without importing or executing external Agent code."""
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeError):
+        return {}
+    found: dict[str, list[str]] = {
+        "library": [],
+        "case": [],
+        "case_eval": [],
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _ast_call_name(node.func)
+        short_name = call_name.rsplit(".", 1)[-1]
+        if short_name == "SelectedMethod":
+            _append_unique(found["library"], _literal_call_argument(node))
+        if call_name.endswith(("EvalSpec", "EvalSpec.noop")):
+            name = _literal_call_argument(node)
+            if name and ".case." in name and ".case_eval." not in name:
+                _append_unique(found["case"], name)
+            method = _literal_keyword(node, "library_method")
+            if method:
+                _append_unique(found["library"], method)
+        if "CaseEvalTest" in call_name.split("."):
+            name = _literal_keyword(node, "name") or _literal_call_argument(node)
+            _append_unique(found["case_eval"], name)
+    return {name: tuple(values) for name, values in found.items()}
+
+
+def _ast_call_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _ast_call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _literal_call_argument(node: ast.Call, index: int = 0) -> str | None:
+    if len(node.args) <= index:
+        return None
+    value = node.args[index]
+    return (
+        value.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        else None
+    )
+
+
+def _literal_keyword(node: ast.Call, name: str) -> str | None:
+    for keyword in node.keywords:
+        value = keyword.value
+        if (
+            keyword.arg == name
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            return value.value
+    return None
+
+
+def _append_unique(values: list[str], value: str | None) -> None:
+    if value and value not in values:
+        values.append(value)
 
 
 def _approve(
@@ -2481,8 +2633,11 @@ def _revise(stage: str, out: Path, message: str) -> int:
 
 def _guide(stage: str, as_json: bool) -> int:
     guide = _STAGE_GUIDES[stage]
+    protocol = _eval_protocol_preview({}, stage)
     if as_json:
-        print(json.dumps(guide, indent=2, sort_keys=True))
+        print(
+            json.dumps({**guide, "eval_protocol": protocol}, indent=2, sort_keys=True)
+        )
         return 0
     print(f"stage: {stage}")
     print(f"objective: {guide['objective']}")
@@ -2494,6 +2649,14 @@ def _guide(stage: str, as_json: bool) -> int:
     print("required boundary:")
     for item in guide["required"]:
         print(f"- {item}")
+    print("four-slot eval protocol:")
+    for slot in protocol["slots"]:
+        explanation = slot["purpose"]
+        if slot["name"] == "baseline":
+            detail = slot["summary"].partition(" · ")[2]
+            explanation = f"{detail}; {explanation}"
+        print(f"- {slot['name']} [{slot['owner']}]: {explanation}")
+    print(f"- enforcement: {protocol['enforcement']}")
     print("completion checklist:")
     for item in guide["completion_checklist"]:
         print(f"- {item}")
