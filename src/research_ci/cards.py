@@ -34,61 +34,147 @@ def render_terminal_card(
     file or remembering a long command.
     """
 
-    lines = [f"{stage.title()}Card · {card_identifier}"]
-    metadata: list[tuple[str, str]] = []
-    body: list[str] = []
-    section: str | None = None
-    for raw in card_text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("# ") or line.startswith("- card_id:"):
-            continue
-        if line.startswith("## "):
-            section = line[3:].strip()
-            if section not in {"Review", "Audit trail"}:
-                body.extend(("", section))
-            continue
-        if line.startswith("### "):
-            body.extend(("", line[4:].strip()))
-            continue
-        match = re.match(r"^-\s+([a-zA-Z][\w-]*):\s*(.*)$", line)
-        if match and section is None:
-            key, value = match.groups()
-            metadata.append(
-                (
-                    key.replace("_", " "),
-                    _terminal_status(key, _terminal_value(value)),
-                )
-            )
-            continue
-        if line.startswith("```") or line.startswith("| ---"):
-            continue
-        if line.startswith("| "):
-            body.append(line.replace("|", " ").strip())
-            continue
-        if line.startswith("- "):
-            if section not in {"Review", "Audit trail"}:
-                body.append("  " + _terminal_value(line[2:]))
-            continue
-        if section not in {"Review", "Audit trail"}:
-            body.append(_terminal_value(line))
+    title, metadata, sections = _parse_terminal_markdown(card_text)
+    header = (
+        title.replace("Contract Card", "ContractCard", 1)
+        if title.startswith("Contract Card")
+        else f"{stage.title()}Card · {card_identifier}"
+    )
+    lines = [header]
+    add = _terminal_adder(lines)
 
-    for key, value in metadata:
-        lines.append(f"{key:<18} {value}")
+    labels = {
+        "workflow_state": "state",
+        "artifact_role": "artifact",
+        "research_ready": "ready",
+        "previous_attempt": "previous",
+    }
+    for key, values in metadata:
+        if key in {"card_id", "recommendation"} or not values:
+            continue
+        label = labels.get(key, key.replace("_", " "))
+        rendered = tuple(
+            _terminal_status(key, _terminal_value(value)) for value in values
+        )
+        add(label, *rendered)
+
+    for name, values in sections:
+        _render_terminal_section(add, name, values)
+
     if recommendation:
-        lines.append(f"recommendation      {recommendation.upper()}")
+        add("verdict", recommendation.upper())
+    lines.extend(("-" * 100, f"card {card_identifier}"))
     if dependencies:
-        lines.extend(("", "frozen dependencies:"))
-        lines.extend(f"  {name:<16} {digest}" for name, digest in dependencies)
-    if body:
-        lines.extend(("", *body))
-    lines.extend(("", "-" * 88, f"card {card_identifier}"))
+        lines.extend(("", "  frozen dependencies:"))
+        lines.extend(f"    {name:<16} {digest}" for name, digest in dependencies)
     return "\n".join(lines)
+
+
+def _parse_terminal_markdown(
+    card_text: str,
+) -> tuple[str, list[tuple[str, list[str]]], list[tuple[str, list[str]]]]:
+    """Keep Markdown hierarchy while extracting the small terminal view."""
+
+    title = ""
+    metadata: list[tuple[str, list[str]]] = []
+    sections: list[tuple[str, list[str]]] = []
+    section: list[str] | None = None
+    metadata_values: list[str] | None = None
+    in_fence = False
+    for raw in card_text.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            continue
+        if stripped.startswith("## "):
+            sections.append((stripped[3:].strip(), []))
+            section = sections[-1][1]
+            metadata_values = None
+            continue
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not stripped:
+            continue
+        if section is None:
+            match = re.match(r"^-\s+([a-zA-Z][\w-]*):\s*(.*)$", raw)
+            if match:
+                key, value = match.groups()
+                metadata_values = []
+                if value:
+                    metadata_values.append(value)
+                metadata.append((key, metadata_values))
+                continue
+            if raw.startswith("  - ") and metadata_values is not None:
+                metadata_values.append(raw[4:].strip())
+            continue
+        if stripped.startswith("### "):
+            section.append(stripped[4:].strip())
+        elif stripped.startswith("| ---"):
+            continue
+        elif stripped.startswith("| "):
+            section.append(stripped.replace("|", " ").strip())
+        elif stripped.startswith("- "):
+            section.append(stripped[2:].strip())
+        else:
+            section.append(stripped)
+    return title, metadata, sections
+
+
+def _terminal_adder(lines: list[str]):
+    """Use the compact key/continuation layout of the original RCI Cards."""
+
+    def add(key: str, *values: str) -> None:
+        body = [value for value in values if value]
+        for index, value in enumerate(body):
+            lines.append(f"{key if index == 0 else '':<11}{value}")
+
+    return add
+
+
+def _render_terminal_section(add, name: str, values: list[str]) -> None:
+    """Map reviewer-facing Markdown sections onto old RCI-style rows."""
+
+    if name in {"Review", "Audit trail", "Evidence references"} or not values:
+        return
+    cleaned = [_terminal_value(value) for value in values]
+    if name == "Result":
+        questions = [
+            value.removeprefix("Question:").strip()
+            for value in cleaned
+            if value.startswith("Question:")
+        ]
+        results = [value for value in cleaned if not value.startswith("Question:")]
+        add("question", *questions)
+        add("result", *results)
+        return
+    if name == "Evidence":
+        add("evidence", *(f"ok   {value}" for value in cleaned))
+        return
+    if name == "Counterevidence and limits":
+        warnings = []
+        for value in cleaned:
+            value = value.removeprefix("Counterevidence:")
+            value = value.removeprefix("Limitation:").strip()
+            warnings.append(f"[!] {value}")
+        add("limits", *warnings)
+        return
+    if name == "Key figures" and values == [
+        "No key figure was selected for this review."
+    ]:
+        return
+    label = {
+        "Iteration delta": "changes",
+        "Engine facts": "facts",
+        "Key figures": "figures",
+    }.get(name, name.lower())
+    add(label, *cleaned)
 
 
 def _terminal_value(value: str) -> str:
     """Remove Markdown decoration while retaining the Card's words."""
 
-    return value.replace("**", "").replace("`", "")
+    return value.replace("**", "").replace("`", "").replace(" -> ", " → ")
 
 
 def _terminal_status(key: str, value: str) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 
+from research_ci.cards import render_terminal_card
 from research_ci.cli import main
 from research_ci.workflow import (
     new_workflow,
@@ -297,6 +298,105 @@ def _write_review_fixture(tmp_path):
         encoding="utf-8",
     )
     return out
+
+
+def test_terminal_contract_card_keeps_nested_fields_in_old_rci_layout() -> None:
+    card = """# Contract Card · btc_weekend
+
+- state: review
+- mission: Test one conditional market premise.
+- stages: data -> feat -> sig -> algo
+- scope:
+  - one real hourly source
+  - two forward horizons
+- invariants:
+  - point_in_time
+  - review_each_stage
+
+## Review
+
+Approve this card before Data can run.
+
+- card_id: contract-card
+"""
+
+    rendered = render_terminal_card(
+        "contract",
+        card,
+        card_identifier="contract-card",
+        recommendation="continue",
+        dependencies=(("workflow", "abc123"),),
+    )
+
+    assert rendered == "\n".join(
+        (
+            "ContractCard · btc_weekend",
+            "state      review",
+            "mission    Test one conditional market premise.",
+            "stages     data → feat → sig → algo",
+            "scope      one real hourly source",
+            "           two forward horizons",
+            "invariants point_in_time",
+            "           review_each_stage",
+            "verdict    CONTINUE",
+            "-" * 100,
+            "card contract-card",
+            "",
+            "  frozen dependencies:",
+            "    workflow         abc123",
+        )
+    )
+
+
+def test_terminal_result_card_prioritizes_decision_evidence_over_audit_paths() -> None:
+    card = """# Sig Review Card
+
+- workflow_state: review
+- recommendation: uncertain
+- checks: valid
+- research_ready: true
+- attempt: 0001
+
+## Result
+
+**Question:** Is the premise stable?
+
+Revise the premise.
+
+## Evidence
+
+- Train and test agree.
+
+## Counterevidence and limits
+
+- Counterevidence: Validation changes sign.
+- Limitation: The sample is short.
+
+## Evidence references
+
+- `research/screening.parquet`
+
+## Key figures
+
+- No key figure was selected for this review.
+"""
+
+    rendered = render_terminal_card(
+        "sig",
+        card,
+        card_identifier="sig-card",
+        recommendation="uncertain",
+    )
+
+    assert "question   Is the premise stable?" in rendered
+    assert "result     Revise the premise." in rendered
+    assert "evidence   ok   Train and test agree." in rendered
+    assert "limits     [!] Validation changes sign." in rendered
+    assert "           [!] The sample is short." in rendered
+    assert "verdict    UNCERTAIN" in rendered
+    assert "recommendation" not in rendered
+    assert "screening.parquet" not in rendered
+    assert "No key figure" not in rendered
 
 
 def test_interactive_approval_displays_card_and_defaults_to_no(
