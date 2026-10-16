@@ -160,6 +160,88 @@ def test_target_selection_reads_sidecar_without_mutating_feature_table() -> None
     assert features.columns == ["event_time", "x"]
 
 
+def test_assessment_target_selection_uses_approved_feature_grid() -> None:
+    assessment = pl.DataFrame(
+        {
+            "thesis_id": [1001],
+            "author_version_id": [2001],
+            "as_of": ["2026-10-15T09:16:39Z"],
+            "assessment_id": ["1001:2001:2026-10-15T09:16:39Z"],
+            "overall_status": ["insufficient"],
+        }
+    )
+    assessment_before = assessment.clone()
+    features = pl.DataFrame(
+        {
+            "event_time": [1, 2, 3, 4],
+            "x": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    labels = pl.DataFrame(
+        {
+            "event_time": [1, 2, 3, 4],
+            "proxy_target": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    declaration = SignalSet(
+        keys=("thesis_id", "author_version_id", "as_of"),
+        features=("x",),
+        targets={"P1": "proxy_target"},
+        label_table="labels",
+    )
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.association.pearson_ic",
+                    reason="evaluate the declared premise proxy",
+                ),
+            )
+        ),
+    )
+    status_case = EvalSpec(
+        "case.assessment_status",
+        expr=pl.col("overall_status") == "insufficient",
+    )
+
+    result = run_eval_plan(
+        assessment,
+        EvalPlan(
+            stage="sig",
+            baseline=(),
+            library=specs,
+            case=(status_case,),
+            case_eval=(
+                CaseEvalTest.from_rows(
+                    name="case.assessment_status.counterexample",
+                    case=status_case.name,
+                    valid={"overall_status": ["insufficient"]},
+                    invalid={"overall_status": ["buy"]},
+                ),
+            ),
+        ),
+        EvalContext(
+            tables={
+                "labels": labels,
+                "__rci_feature_table": features.select("event_time", "x"),
+            }
+        ),
+    )
+
+    record = next(
+        record
+        for record in result.records
+        if record.library_method.endswith("pearson_ic")
+    )
+    assert record.status == "passed"
+    assert record.value == 1.0
+    assert record.details["context_source"] == "__rci_feature_table"
+    assert record.details["join_on"] == ("event_time",)
+    assert record.details["joined_rows"] == 4
+    assert assessment.equals(assessment_before)
+
+
 def test_agent_cannot_select_target_method_in_targetless_sig() -> None:
     declaration = SignalSet(
         keys=("event_time",),

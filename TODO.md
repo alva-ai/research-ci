@@ -1,6 +1,6 @@
 # Research Engine TODO
 
-状态：Contract、DataLoop、FeatLoop、SigLoop 和最小 AlgoLoop 已实现；当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个已批准 signal 运行到 Algo Card review。两套独立 pair strategy 已生成宽表权重，并通过外部 Lab 回测器和 Algo 四槽检查。
+状态：Contract、DataLoop、FeatLoop、SigLoop 和最小 AlgoLoop 已实现；DataBundle、内部多轮研究准备、结果型 Card 和 Agent 主动回退上游已经进入 Engine。当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个已批准 signal 运行到 Algo Card review。两套独立 pair strategy 已生成宽表权重，并通过外部 Lab 回测器和 Algo 四槽检查。
 
 这份文件只记录当前有效的设计任务。历史讨论、失败方案和旧实现保存在仓库外部的 agent log，不在这里重复维护。
 
@@ -64,13 +64,16 @@
 - **完成**：workflow 只使用 `locked`、`ready`、`review`、`approved`、`stopped`、`disabled` 六个状态；attempt 的 `valid`/`invalid` 是执行结果，不再伪装成 workflow 状态。
 - **完成**：Card 将 `workflow_state` 与 `artifact_role` 分开；draft 为 `ready + attempt`，提交后为 `review + candidate`。
 - **完成**：`rci <stage> run` 只允许在 `ready` 执行，每次追加一个编号 attempt，运行结束后仍保持 `ready`，Agent 可以自行检查、修改并继续运行。
-- **完成**：只有已登记且 `valid` 的 attempt 可以 `submit`；提交后才把正式产物发布到阶段根目录并进入 `review`，`invalid` 或已被 reject 的 attempt 会被 CLI 拒绝。
+- **完成**：机械 `valid` 与研究 `research_ready` 已分开。`valid` 只说明构建和强制检查可执行；内部 Agent 必须用 `rci <stage> prepare --brief ...` 总结问题、结论、证据、反证、限制、迭代变化和关键图，才能提交。
+- **完成**：只有已登记、`valid`、已 prepare、未 reject 且未 stale 的 attempt 可以 `submit`；提交后才把正式产物发布到阶段根目录并进入 `review`。
 - **完成**：提交时 Agent 必须给出 `continue`、`stop` 或 `uncertain` recommendation；它只进入 Card 供审核，不直接改变 workflow。
 - **完成**：reviewer 可以 `approve --decision continue`、`approve --decision stop` 或带原因 `reject`；continue 解锁下一阶段，stop 形成明确 no-go，reject 返回 `ready` 并要求新 attempt。
 - **完成**：只有 human 可以显式 `reopen` 已批准或已停止的阶段；reopen 会把该阶段恢复为 `ready` 并重新锁住全部下游阶段。
+- **完成**：下游阶段处于 `ready` 时，内部 Agent 可用 `rci revise --stage data|feat|sig` 主动回到已批准上游；目标及其下游历史 attempt 标记为 stale，下游重新锁定，替代结果仍必须重新 Card 审批。
 - **完成**：CLI 对跳过审批、顺序错误、review 中重跑、错误 Card、无效提交和复用被拒 attempt 给出稳定 refusal code，并返回 next legal actor、command 和 reason；`rci next --json` 可供外部 Agent/编排器直接消费。
 - **完成**：`rci guide --stage <stage>` 提供该阶段的目标、正式输入输出、可选 Kit 和不可跨越的职责边界，减少 Agent 把 Feat、Sig、Algo 方法放错阶段。
 - **完成**：attempt 编号同时检查 workflow 记录和已有磁盘目录；builder 中断留下的半成品目录不会被下一次运行覆盖。
+- **完成**：外部 Reviewer Card 已简化为结果页，只要求阅读结论、证据、反证、限制、迭代变化、Engine facts 和关键图；逐条 eval、代码、recipe 与完整表留作 audit，不要求外部 Reviewer 日常查看。
 
 ## 1. Contract
 
@@ -176,15 +179,20 @@
 - **待讨论**：`output_kind` 如何覆盖 `none`、`summary`、`metric`、`findings` 和完整证据。
 - **待讨论**：case eval 的输入是否只能来自当前阶段产物。
 - **待讨论**：eval 变更后如何使下游产物失效。
-- **待讨论**：eval 结果如何进入卡片、账本和 manifest。
+- **部分完成**：eval 汇总、reason codes 和关键事实进入结果型 Card；完整 eval 留在 JSONL/assessment，统一证据账本仍待设计。
 - **完成**：Data、Feat Card 增加 `execution_status`、`research_disposition` 和 reason codes；同时写出 `eval/assessment.json`。它只做证据分流，不把单个指标自动解释为 alpha 通过。
 - **完成**：Feat Card 增加逐列 structural triage，区分 `candidate_for_review`、`incomplete`、`weak_data`、`redundant` 和 `invalid`，并列出 coverage、usable rows、VIF 和原因码。
 - **决定**：有了显式 target 和样本外切分后，在 Sig 中比较候选 feature 或 signal 的 Pareto 证据（IC/ICIR、稳定性、增量信息、换手和复杂度）；不使用单一总分自动排序。
 
 ## 4. Data 阶段
 
-- **完成**：Agent builder 提供 `build_main_table()`（兼容 `build()`），可在 DataLoop 中执行。
-- **完成**：DataLoop 先在编号 attempt 中输出 `main.parquet`、`exploration.json`、`recipe.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`；提交有效 attempt 后才发布为正式 Data candidate。
+- **完成**：Data 正式边界扩展为 `DataBundle`：`main.parquet` 是对齐宽表，`native/*.parquet` 保存标准化原频表，`catalog.json` 声明 key/frequency/source/event_time/available_at/unit，另有 coverage、request log、metadata 和可选 raw audit 快照。
+- **完成**：旧 `build_main_table()`/`build()` 返回 DataFrame 的 Lab 保持兼容；新 Lab 可返回 `build_data_bundle()`。
+- **完成**：Engine baseline 检查 DataBundle 的 catalog 覆盖、每张表非空、key 非空且唯一、coverage 覆盖；native 表以 `data.native.<name>` 显式进入 Data/Feat EvalContext，不拼入主表。
+- **决定**：`raw/` 只用于审计和探索，不是 Feat 正式输入。任何会影响 feature 的 raw 字段必须回到 Data，标准化并进入 `main` 或 `native`，重新通过 Data 四槽和 Card 审批。
+
+- **完成**：Agent builder 提供 `build_data_bundle()`；`build_main_table()`/`build()` 继续作为单表兼容接口。
+- **完成**：DataLoop 先在编号 attempt 中输出完整 DataBundle、`exploration.json`、`recipe.json`、四 slot `report.jsonl`、`card.md` 和 `manifest.json`；prepare + submit 后才发布为正式 Data candidate。
 - **决定**：Engine 在 Data 主表上运行外部 `EvalPlan`，不向 Data 主表加入 eval 列。
 - **完成**：当前 case 已经实际运行 baseline、library、case、case_eval 四个插槽。
 - **完成**：当前 case 将 candle close time 作为 OHLCV 的 `event_time`，保留 bar start；funding 只做 backward as-of join 并记录 age，避免把整根 K 线或未来 funding 提前可用。
@@ -195,18 +203,19 @@
 - **待讨论**：数据问题的处理方式：标记、屏蔽、删除、拆分或要求人工处理。
 - **决定**：任何处理都生成新表版本，不原地修改冻结数据。
 - **待讨论**：处理后哪些检查必须重新执行。
-- **待讨论**：Data freeze 的内容：数据大表、eval 结果、处理记录、来源版本、manifest 和 hash。
+- **部分完成**：Data freeze 已包含 main/native、catalog、coverage、request log、metadata、可选 raw、eval、recipe、Card、manifest 和 Parquet hash；完整来源版本与传递式 lineage 仍待实现。
 - **废弃**：Data 阶段生成 outcome、label、收益、MDE 或 power。
 
 ## 5. Feat 阶段
 
-- **决定**：Feat 只能读取 Data freeze 的数据大表。
+- **决定**：Feat 只能读取 approved DataBundle 的 `main` 和 `native` 正式表；不能直接从 `raw` 构建正式 feature。
 - **决定**：Feat 主表只保存 key 和 feature columns；label、target、horizon 和 signal 不写入 `feat/main.parquet`。
 - **决定**：Feat 的职责是生成可复用的 point-in-time feature，并完成与研究目标无关的结构筛选；它不负责决定某个 feature 对某个 target 是否有预测力。
 - **决定**：Feat 的 Engine baseline 只判断特征产物是否正确、可复现、可因果计算和可被下游读取；不因为某个特征的 IC 高低改变 correctness verdict。
-- **完成**：最小 Feat builder 接口为 `build_features(data_table)`（兼容 `build(data_table)`）返回一张 Polars 宽表，并通过 `FEATURE_KEYS` 声明 key；后续再扩展显式 evaluation context。
-- **完成**：FeatLoop 只读取当前 run 已批准的 `data/main.parquet`，先把 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json` 写入编号 attempt；提交后才成为正式 candidate。
-- **完成**：Feat 在 `ready` 可以由 Agent 多次运行；提交一个有效 attempt 后进入 `review` 并禁止重跑，必须由 reviewer reject 回 `ready` 或 approve continue 解锁 Sig。
+- **完成**：最小 Feat builder 继续兼容 `build_features(data_table)`/`build(data_table)`；需要原频表时可实现 `build_features_from_bundle(bundle)`，Engine 会验证 builder 没有修改 main 或任何 native DataFrame。
+- **完成**：FeatLoop 读取当前 run 已批准的 DataBundle，先把 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json` 写入编号 attempt；prepare + submit 后才成为正式 candidate。
+- **决定**：source/entity mapping、unit、revision、release/availability time 属于 Data；rolling、lag、z-score、interaction 和任务特定 causal as-of transform 属于 Feat。Feat 缺标准化源时回退 Data；Sig 缺 target-free transform 时回退 Feat。
+- **完成**：Feat 在 `ready` 可以由 Agent 多次运行；prepare + submit 一个有效 attempt 后进入 `review` 并禁止重跑，必须由 reviewer reject 回 `ready` 或 approve continue 解锁 Sig。
 - **完成**：当前 SK Hynix case 生成 88 个候选特征：五组基础状态、1h/6h/24h 变化、24h/72h/168h rolling mean/std/z-score、24h/168h median/IQR robust scale、tanh 有界变换，以及价差波动率和波动率缩放变化。
 - **决定**：Feat normalization 只使用截至当前行的因果滚动窗口，并要求完整 warm-up；不在全样本上 fit、不填充 warm-up null、不加隐藏 epsilon。需要 fitted scaler/PCA 时由 Sig 在时间隔离的 train/validation/test 或 walk-forward 内拟合。
 - **完成**：当前 case 用历史截断重算验证 Feat prefix 不受未来行影响；Data 行数 2321，Feat 保持同一 key grid 和 2321 行，不再因 `shift` 或 `drop_nulls` 缩成样例行数。

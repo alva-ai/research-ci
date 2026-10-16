@@ -273,7 +273,7 @@ def make_confirmation_plan(table, stage="sig", context=None):
     assert attempt["confirmation_status"] == "revealed_valid"
     assert attempt["evidence_scope"] == "confirmed_holdout"
     assert len(state["holdouts"]) == 1
-    assert next_action(state)["action"] == "submit"
+    assert next_action(state)["action"] == "prepare"
     attempt_dir = out / "sig" / "attempts" / "0001"
     holdout_record = json.loads(
         (attempt_dir / "confirmation" / "holdout.json").read_text()
@@ -319,6 +319,35 @@ def make_confirmation_plan(table, stage="sig", context=None):
     )
     assert "RCI-SIG-FREEZE-MISMATCH" in capsys.readouterr().out
     selection_path.write_bytes(original_selection)
+
+    brief = tmp_path / "sig-confirmed-review.json"
+    brief.write_text(
+        json.dumps(
+            {
+                "question": "Did the frozen signal survive its confirmation block?",
+                "conclusion": "The frozen final signal passed confirmation.",
+                "evidence": ["The one-time holdout checks passed."],
+                "limitations": ["The confirmation block contains two rows."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "sig",
+                "prepare",
+                "--out",
+                str(out),
+                "--attempt",
+                "0001",
+                "--brief",
+                str(brief),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
 
     assert (
         main(

@@ -5,6 +5,7 @@ from .baseline import (
     algo_backtest_output_shape,
     algo_backtest_summary_shape,
     algo_main_output_shape,
+    assessment_output_shape,
     feature_output_shape,
     general_missing_values,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "algo_backtest_output_shape",
     "algo_backtest_summary_shape",
     "algo_main_output_shape",
+    "assessment_output_shape",
     "CaseEvalTest",
     "ConfirmationPlan",
     "DataSet",

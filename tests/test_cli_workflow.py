@@ -154,6 +154,8 @@ def make_plan(table, stage="data", context=None):
     assert state["attempts"]["data"][-1]["valid"] is True
     assert (out / "data" / "attempts" / "0001" / "partial.txt").exists()
     assert (out / "data" / "attempts" / "0002" / "main.parquet").exists()
+    assert (out / "data" / "attempts" / "0002" / "catalog.json").exists()
+    assert (out / "data" / "attempts" / "0002" / "source_coverage.parquet").exists()
     assert not (out / "data" / "main.parquet").exists()
     attempt_card = (out / "data" / "attempts" / "0002" / "card.md").read_text()
     assert "- workflow_state: ready" in attempt_card
@@ -162,9 +164,49 @@ def make_plan(table, stage="data", context=None):
     assert main(["next", "--out", str(out), "--json"]) == 0
     action = json.loads(capsys.readouterr().out)
     assert action["actor"] == "agent"
-    assert action["action"] == "submit"
+    assert action["action"] == "prepare"
     next_args = shlex.split(action["command"])
     assert next_args[next_args.index("--attempt") + 1] == "0002"
+
+    brief = lab / "data-review.json"
+    brief.write_text(
+        json.dumps(
+            {
+                "question": "Is the source table structurally usable?",
+                "conclusion": "The two-row source is aligned and ready for Feat.",
+                "evidence": ["All mandatory checks passed on both rows."],
+                "counterevidence": [],
+                "limitations": ["This is a synthetic fixture."],
+                "changes": ["Completed the first valid Data attempt."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        main(
+            [
+                "data",
+                "prepare",
+                "--out",
+                str(out),
+                "--attempt",
+                "0002",
+                "--brief",
+                str(brief),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    prepared_card = (out / "data" / "attempts" / "0002" / "card.md").read_text()
+    assert "## Result" in prepared_card
+    assert "## Audit trail" in prepared_card
+    assert "## Exploration" not in prepared_card
+    assert "data.case.positive_value" not in prepared_card
+
+    assert main(["next", "--out", str(out), "--json"]) == 0
+    action = json.loads(capsys.readouterr().out)
+    assert action["action"] == "submit"
 
     assert (
         main(
