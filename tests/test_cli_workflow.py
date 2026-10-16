@@ -239,6 +239,7 @@ def make_plan(table, stage="data", context=None):
     assert review_action["allowed_actors"] == ["human", "agent"]
     review_args = shlex.split(review_action["command"])
     assert review_args[review_args.index("--by") + 1] == "agent"
+    assert review_args[review_args.index("--decision") + 1] == "<continue|stop>"
 
     refused_rerun = main(
         [

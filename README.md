@@ -16,6 +16,39 @@ audits that plan.
 
 The project uses `uv` for environments and dependency locking.
 
+## Install and first handshake
+
+The repository is currently private and the package is not published to PyPI.
+A newcomer with GitHub access can still install and verify it reproducibly:
+
+```sh
+git clone https://github.com/alva-ai/research-ci.git
+cd research-ci
+uv sync --locked
+uv run rci --help
+uv run pytest -q
+```
+
+Normal research happens in a separate Lab repository that pins an Engine wheel
+or commit. The Agent writes the Contract, builders, four-slot plans, review
+briefs, and optional plots under `lab/<case>/`; it does not edit workflow state
+or publish stage artifacts by hand. The Engine owns order, numbered attempts,
+formal Parquet handoffs, Cards, and approvals.
+
+Three machine-readable commands form the Agent interface:
+
+```sh
+uv run rci guide --stage data --json
+uv run rci eval methods --stage data --available-only --json
+uv run rci next --out .rci/runs/<run> --json
+```
+
+`guide` states the current stage boundary, `eval methods` lists compatible
+general methods, and `next` returns the only legal next action, actor, command,
+attempt id, Card id, and reason. Before real research, an Agent can verify a
+Lab with `rci contract check <case>/contract.py`; the Lab test suite then checks
+its case adapters against the pinned Engine.
+
 ## Design documents
 
 - [Design and product requirements](docs/design.md) defines the normative

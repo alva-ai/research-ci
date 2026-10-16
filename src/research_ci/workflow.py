@@ -737,7 +737,7 @@ def next_action(state: dict[str, Any]) -> dict[str, Any]:
             command = _command(state, stage, "approve")
             if not command:
                 command = (
-                    f"rci approve --stage {stage} --decision continue "
+                    f"rci approve --stage {stage} --decision <continue|stop> "
                     f"--card {card or '<card_id>'} --out <run> --by agent"
                 )
             return {
