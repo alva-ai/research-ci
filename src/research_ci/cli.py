@@ -2382,7 +2382,7 @@ def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, st
             "--by",
             "agent",
             "--decision",
-            "continue",
+            "<continue|stop>",
             "--card",
             "{card}",
         )

@@ -117,6 +117,10 @@ def test_human_can_accept_a_valid_negative_result_and_stop(tmp_path) -> None:
     state["recommendations"]["data"] = "stop"
     write_workflow(tmp_path, state)
 
+    review_action = next_action(state)
+    assert review_action["recommendation"] == "stop"
+    assert "--decision <continue|stop>" in review_action["command"]
+
     approved, next_stage = approve(
         tmp_path,
         stage="data",
