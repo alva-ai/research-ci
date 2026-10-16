@@ -9,6 +9,7 @@ import inspect
 import json
 import shlex
 import shutil
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import ModuleType
@@ -17,7 +18,15 @@ from typing import Any
 import polars as pl
 
 from .artifacts import DataBundle, ReviewBrief
-from .cards import algo_card, contract_card, data_card, feat_card, review_card, sig_card
+from .cards import (
+    algo_card,
+    contract_card,
+    data_card,
+    feat_card,
+    render_terminal_card,
+    review_card,
+    sig_card,
+)
 from .contract import ContractError, validate_contract
 from .eval import (
     AlgoSet,
@@ -101,6 +110,24 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "catalog metadata covers main and every native-frequency table",
             "no feature, label, signal, position, or PnL semantics enter the table",
         ],
+        "completion_checklist": [
+            (
+                "identify every source, frequency, event-time and "
+                "availability-time meaning"
+            ),
+            "record coverage, freshness, proxy status and unresolved gaps",
+            "preserve native source tables and explain every alignment or treatment",
+            (
+                "state whether the result is sufficient, insufficient, or needs "
+                "another data attempt"
+            ),
+        ],
+        "common_failure_modes": [
+            "using a revised value before its publication time",
+            "silently forward-filling stale or missing observations",
+            "mixing features, labels, signals, or outcomes into the Data table",
+            "claiming a source is available when only a proxy was downloaded",
+        ],
     },
     "feat": {
         "objective": "build reusable point-in-time, target-free measurements",
@@ -120,6 +147,18 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "features are causal and target-free",
             "all four eval slots are populated",
         ],
+        "completion_checklist": [
+            "declare the complete feature universe and formula lineage",
+            "replay every rolling, lagged, normalized, and transformed expression",
+            "show coverage, warm-up behavior, dispersion, redundancy, and stability",
+            "return to Data when a required raw field is missing instead of guessing",
+        ],
+        "common_failure_modes": [
+            "filling warm-up rows without declaring a boundary policy",
+            "using a future row or full-sample fit in a historical feature",
+            "dropping inconvenient features without a disposition or reason",
+            "using target-aware IC or labels before the Sig stage",
+        ],
     },
     "sig": {
         "objective": "turn the complete approved feature universe into signals",
@@ -137,6 +176,24 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "confirmation, when declared, freezes development before holdout reveal",
             "all four eval slots are populated",
         ],
+        "completion_checklist": [
+            (
+                "declare labels, horizons, time splits, and the complete approved "
+                "Feat universe"
+            ),
+            "screen every approved feature and give each one an evidenced disposition",
+            (
+                "compare candidates with stability, counterevidence, and a "
+                "predeclared selection rule"
+            ),
+            "separate development evidence from confirmation or holdout evidence",
+        ],
+        "common_failure_modes": [
+            "jumping directly to one convenient rule and skipping most features",
+            "tuning on the validation or holdout period",
+            "treating correlation or IC as causal proof",
+            "publishing a signal without an explicit label sidecar and lineage",
+        ],
     },
     "algo": {
         "objective": "map approved signals into executable positions or trades",
@@ -151,6 +208,21 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "source prices and signals are preserved",
             "position and backtest accounting satisfy the declared contract",
             "all four eval slots are populated",
+        ],
+        "completion_checklist": [
+            "declare how each signal becomes a position, order, or trade",
+            (
+                "measure exposure, leverage, turnover, costs, drawdown, and "
+                "liquidity constraints"
+            ),
+            "run the external backtest and preserve its assumptions and time series",
+            "state whether the result is executable, insufficient, or rejected",
+        ],
+        "common_failure_modes": [
+            "treating a signal as a position without sizing or execution semantics",
+            "omitting fees, slippage, funding, or trading lag",
+            "using prices or signals that do not come from the approved Sig handoff",
+            "reporting return without risk, turnover, or drawdown evidence",
         ],
     },
 }
@@ -253,19 +325,42 @@ def main(argv: list[str] | None = None) -> int:
         "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
     )
     approve.add_argument("--out", required=True, type=Path)
-    approve.add_argument("--by", required=True, choices=("human", "agent"))
-    approve.add_argument("--decision", required=True, choices=("continue", "stop"))
+    approve.add_argument(
+        "--by",
+        choices=("human", "agent"),
+        help="reviewer identity; omit in an interactive terminal for human review",
+    )
+    approve.add_argument(
+        "--decision",
+        choices=("continue", "stop"),
+        help="review decision; omit in an interactive terminal to see a yes/no prompt",
+    )
     approve.add_argument("--message", default="")
-    approve.add_argument("--card", required=True, dest="expected_card")
+    approve.add_argument(
+        "--card",
+        dest="expected_card",
+        help="Card id; omit in an interactive terminal to bind the displayed Card",
+    )
 
     reject = commands.add_parser("reject", help="return a reviewed stage to its Agent")
     reject.add_argument(
         "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
     )
     reject.add_argument("--out", required=True, type=Path)
-    reject.add_argument("--by", required=True, choices=("human", "agent"))
-    reject.add_argument("--message", required=True)
-    reject.add_argument("--card", required=True, dest="expected_card")
+    reject.add_argument(
+        "--by",
+        choices=("human", "agent"),
+        help="reviewer identity; omit in an interactive terminal for human review",
+    )
+    reject.add_argument(
+        "--message",
+        help="feedback; in a terminal, omit it to enter feedback after confirmation",
+    )
+    reject.add_argument(
+        "--card",
+        dest="expected_card",
+        help="Card id; omit in an interactive terminal to bind the displayed Card",
+    )
 
     reopen = commands.add_parser("reopen", help="reopen an accepted stage")
     reopen.add_argument(
@@ -1864,6 +1959,13 @@ def _stage_prepare(
                 raise FileNotFoundError(
                     f"review brief key plot is missing from the attempt: {relative}"
                 )
+        for relative in brief.evidence_refs:
+            evidence = (attempt_dir / relative).resolve()
+            if not evidence.is_relative_to(root) or not evidence.is_file():
+                raise FileNotFoundError(
+                    "review brief evidence reference is missing from the attempt: "
+                    f"{relative}"
+                )
         manifest_path = attempt_dir / "manifest.json"
         assessment_path = attempt_dir / "eval" / "assessment.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1905,6 +2007,8 @@ def _stage_prepare(
                 "research_ready": True,
                 "review_brief": str(attempt_dir / "review.json"),
                 "previous_attempt": previous,
+                "evidence_refs": list(brief.evidence_refs),
+                "key_plots": list(brief.key_plots),
             }
         )
         manifest_path.write_text(
@@ -2123,11 +2227,48 @@ def _next(out: Path, as_json: bool = False) -> int:
 def _approve(
     stage: str,
     out: Path,
-    by: str,
-    decision: str,
+    by: str | None,
+    decision: str | None,
     message: str,
     expected_card: str | None,
 ) -> int:
+    interactive = _interactive_terminal()
+    needs_prompt = by is None or decision is None or expected_card is None
+    if by == "agent" and (decision is None or expected_card is None):
+        return _review_arguments_required(stage, out, "approve")
+    if needs_prompt and not interactive:
+        return _review_arguments_required(stage, out, "approve")
+    if by is None:
+        by = "human"
+    if by == "human" and interactive and needs_prompt:
+        try:
+            state = read_workflow(out)
+            active_card = state.get("cards", {}).get(stage)
+            if state.get("stages", {}).get(stage) != "review" or not active_card:
+                raise WorkflowError(
+                    f"Stage {stage!r} has no submitted review Card.",
+                    code="RCI-NO-REVIEW-CARD",
+                    action=next_action(state),
+                )
+            recommendation = state.get("recommendations", {}).get(stage)
+            print(
+                _terminal_review(
+                    out,
+                    stage,
+                    state,
+                    recommendation=recommendation,
+                )
+            )
+            expected_card = expected_card or active_card
+            decision = decision or ("stop" if recommendation == "stop" else "continue")
+            if not _confirm(f"Approve {stage} with decision {decision!r}?"):
+                print("approval cancelled; workflow unchanged")
+                return 1
+        except (OSError, ValueError, WorkflowError) as exc:
+            print(f"approval failed: {exc}")
+            return 1
+    if decision is None or expected_card is None:
+        return _review_arguments_required(stage, out, "approve")
     try:
         state, next_stage = approve_workflow(
             out,
@@ -2167,10 +2308,43 @@ def _approve(
 def _reject(
     stage: str,
     out: Path,
-    by: str,
-    message: str,
+    by: str | None,
+    message: str | None,
     expected_card: str | None,
 ) -> int:
+    interactive = _interactive_terminal()
+    needs_prompt = by is None or not message or expected_card is None
+    if by == "agent" and (not message or expected_card is None):
+        return _review_arguments_required(stage, out, "reject")
+    if needs_prompt and not interactive:
+        return _review_arguments_required(stage, out, "reject")
+    if by is None:
+        by = "human"
+    if by == "human" and interactive and needs_prompt:
+        try:
+            state = read_workflow(out)
+            active_card = state.get("cards", {}).get(stage)
+            if state.get("stages", {}).get(stage) != "review" or not active_card:
+                raise WorkflowError(
+                    f"Stage {stage!r} has no submitted review Card.",
+                    code="RCI-NO-REVIEW-CARD",
+                    action=next_action(state),
+                )
+            print(_terminal_review(out, stage, state))
+            expected_card = expected_card or active_card
+            if not _confirm("Return this Card to the Agent?"):
+                print("rejection cancelled; workflow unchanged")
+                return 1
+            if not message:
+                message = input("Feedback: ").strip()
+            if not message:
+                print("rejection cancelled: feedback is required")
+                return 1
+        except (OSError, ValueError, WorkflowError, EOFError) as exc:
+            print(f"rejection failed: {exc}")
+            return 1
+    if not message or expected_card is None:
+        return _review_arguments_required(stage, out, "reject")
     try:
         reject_workflow(
             out,
@@ -2193,6 +2367,88 @@ def _reject(
         return 1
     print(f"rejected: {stage}; Agent may revise and run a new attempt")
     return 0
+
+
+def _interactive_terminal() -> bool:
+    """Whether the reviewer can use the human terminal handshake."""
+
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _review_arguments_required(stage: str, out: Path, action: str) -> int:
+    """Explain the explicit Agent/CI form when a prompt is unavailable."""
+
+    if action == "approve":
+        command = (
+            f"rci approve --stage {stage} --out {out} --by <human|agent> "
+            "--decision <continue|stop> --card <card_id>"
+        )
+    else:
+        command = (
+            f"rci reject --stage {stage} --out {out} --by <human|agent> "
+            "--message <reason> --card <card_id>"
+        )
+    print(
+        "review failed: approval arguments are required outside an interactive terminal"
+    )
+    print(f"next: {command}")
+    return 1
+
+
+def _confirm(prompt: str) -> bool:
+    """Use the old RCI-style default-no terminal confirmation."""
+
+    try:
+        answer = input(f"{prompt} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
+
+
+def _terminal_review(
+    out: Path,
+    stage: str,
+    state: dict[str, Any],
+    *,
+    recommendation: str | None = None,
+) -> str:
+    """Build the compact terminal view from the durable submitted Card."""
+
+    card_path = out / stage / "card.md"
+    if not card_path.is_file():
+        raise FileNotFoundError(f"review Card does not exist: {card_path}")
+    card_identifier = str(state.get("cards", {}).get(stage, ""))
+    if not card_identifier:
+        raise WorkflowError(
+            f"Stage {stage!r} has no active Card.", code="RCI-CARD-MISSING"
+        )
+    return render_terminal_card(
+        stage,
+        card_path.read_text(encoding="utf-8"),
+        card_identifier=card_identifier,
+        recommendation=recommendation,
+        dependencies=_review_dependencies(out, stage),
+    )
+
+
+def _review_dependencies(out: Path, stage: str) -> tuple[tuple[str, str], ...]:
+    """Hash the small set of files that a reviewer is about to accept."""
+
+    candidates = [
+        ("workflow", out / "workflow.json"),
+        ("manifest", out / stage / "manifest.json"),
+        ("eval", out / stage / "eval"),
+        ("main", out / stage / "main.parquet"),
+    ]
+    result: list[tuple[str, str]] = []
+    for name, path in candidates:
+        if not path.exists():
+            continue
+        try:
+            result.append((name, _path_digest(path)[:12]))
+        except (OSError, ValueError):
+            continue
+    return tuple(result)
 
 
 def _reopen(stage: str, out: Path, by: str, message: str) -> int:
@@ -2237,6 +2493,12 @@ def _guide(stage: str, as_json: bool) -> int:
         print(f"- {item}")
     print("required boundary:")
     for item in guide["required"]:
+        print(f"- {item}")
+    print("completion checklist:")
+    for item in guide["completion_checklist"]:
+        print(f"- {item}")
+    print("common failure modes:")
+    for item in guide["common_failure_modes"]:
         print(f"- {item}")
     print(f"eval menu: rci eval methods --stage {stage} --available-only")
     return 0
@@ -2549,7 +2811,9 @@ def _build_algo(module: ModuleType, table: pl.DataFrame) -> AlgoBundle:
         if builder is not None:
             result = builder(table)
             if not isinstance(result, AlgoBundle):
-                raise TypeError("algo builder must return a research_ci.kit.AlgoBundle")
+                raise TypeError(
+                    "algo builder must return an research_ci.kit.AlgoBundle"
+                )
             return result
     raise AttributeError("algo builder must define build_algo(table) or build(table)")
 

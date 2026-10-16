@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,92 @@ from .eval.assessment import (
     assess_signal_evidence,
 )
 from .workflow import render_card
+
+
+def render_terminal_card(
+    stage: str,
+    card_text: str,
+    *,
+    card_identifier: str,
+    recommendation: str | None = None,
+    dependencies: tuple[tuple[str, str], ...] = (),
+) -> str:
+    """Render a submitted Markdown Card as a compact terminal review.
+
+    The Markdown Card remains the durable artifact. This view changes only the
+    presentation so a person can review the current Card without opening a
+    file or remembering a long command.
+    """
+
+    lines = [f"{stage.title()}Card · {card_identifier}"]
+    metadata: list[tuple[str, str]] = []
+    body: list[str] = []
+    section: str | None = None
+    for raw in card_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("# ") or line.startswith("- card_id:"):
+            continue
+        if line.startswith("## "):
+            section = line[3:].strip()
+            if section not in {"Review", "Audit trail"}:
+                body.extend(("", section))
+            continue
+        if line.startswith("### "):
+            body.extend(("", line[4:].strip()))
+            continue
+        match = re.match(r"^-\s+([a-zA-Z][\w-]*):\s*(.*)$", line)
+        if match and section is None:
+            key, value = match.groups()
+            metadata.append(
+                (
+                    key.replace("_", " "),
+                    _terminal_status(key, _terminal_value(value)),
+                )
+            )
+            continue
+        if line.startswith("```") or line.startswith("| ---"):
+            continue
+        if line.startswith("| "):
+            body.append(line.replace("|", " ").strip())
+            continue
+        if line.startswith("- "):
+            if section not in {"Review", "Audit trail"}:
+                body.append("  " + _terminal_value(line[2:]))
+            continue
+        if section not in {"Review", "Audit trail"}:
+            body.append(_terminal_value(line))
+
+    for key, value in metadata:
+        lines.append(f"{key:<18} {value}")
+    if recommendation:
+        lines.append(f"recommendation      {recommendation.upper()}")
+    if dependencies:
+        lines.extend(("", "frozen dependencies:"))
+        lines.extend(f"  {name:<16} {digest}" for name, digest in dependencies)
+    if body:
+        lines.extend(("", *body))
+    lines.extend(("", "-" * 88, f"card {card_identifier}"))
+    return "\n".join(lines)
+
+
+def _terminal_value(value: str) -> str:
+    """Remove Markdown decoration while retaining the Card's words."""
+
+    return value.replace("**", "").replace("`", "")
+
+
+def _terminal_status(key: str, value: str) -> str:
+    """Use the compact status vocabulary familiar from the old RCI Card."""
+
+    if key in {"checks", "research_ready"}:
+        lowered = value.lower()
+        if lowered in {"valid", "passed", "true", "ok"}:
+            return "ok"
+        if lowered in {"failed", "error", "false", "invalid"}:
+            return "FAIL"
+        if lowered in {"not_applicable", "uncertain"}:
+            return "[!]"
+    return value
 
 
 def review_card(
@@ -56,6 +143,12 @@ def review_card(
         lines.extend(f"- Limitation: {item}" for item in brief.limitations)
     if not brief.counterevidence and not brief.limitations:
         lines.append("- None declared.")
+
+    lines.extend(("", "## Evidence references", ""))
+    if brief.evidence_refs:
+        lines.extend(f"- `{path}`" for path in brief.evidence_refs)
+    else:
+        lines.append("- No machine-readable evidence reference was selected.")
 
     lines.extend(("", "## Iteration delta", ""))
     if brief.changes:

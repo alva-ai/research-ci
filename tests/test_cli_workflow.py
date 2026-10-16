@@ -4,7 +4,12 @@ import json
 import shlex
 
 from research_ci.cli import main
-from research_ci.workflow import read_workflow
+from research_ci.workflow import (
+    new_workflow,
+    read_workflow,
+    render_card,
+    write_workflow,
+)
 
 
 def test_cli_drives_agent_attempts_and_refuses_skipped_transitions(
@@ -258,3 +263,86 @@ def make_plan(table, stage="data", context=None):
     rerun_output = capsys.readouterr().out
     assert refused_rerun == 1
     assert "Its submitted Card must be reviewed first" in rerun_output
+
+
+def _write_review_fixture(tmp_path):
+    out = tmp_path / "run"
+    state = new_workflow(("data",), "contract-card")
+    state["stages"].update(
+        {"contract": "approved", "data": "review", "feat": "disabled"}
+    )
+    state["cards"]["data"] = "data-card"
+    state["recommendations"]["data"] = "continue"
+    state["candidates"]["data"] = "0001"
+    write_workflow(out, state)
+    data = out / "data"
+    data.mkdir(parents=True)
+    (data / "card.md").write_text(
+        render_card(
+            "\n".join(
+                (
+                    "# Data Review Card",
+                    "",
+                    "- workflow_state: review",
+                    "- checks: valid",
+                    "- attempt: 0001",
+                    "",
+                    "## Result",
+                    "",
+                    "The fixture is ready for Feat.",
+                )
+            )
+        )[0]
+        + "\n",
+        encoding="utf-8",
+    )
+    return out
+
+
+def test_interactive_approval_displays_card_and_defaults_to_no(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    out = _write_review_fixture(tmp_path)
+    monkeypatch.setattr("research_ci.cli._interactive_terminal", lambda: True)
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "n")
+
+    assert main(["approve", "--stage", "data", "--out", str(out)]) == 1
+    output = capsys.readouterr().out
+    assert "DataCard · data-card" in output
+    assert "frozen dependencies:" in output
+    assert "[y/N]" in prompts[0]
+    assert read_workflow(out)["stages"]["data"] == "review"
+
+    prompts.clear()
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "y")
+    assert (
+        main(
+            [
+                "approve",
+                "--stage",
+                "data",
+                "--out",
+                str(out),
+                "--decision",
+                "continue",
+                "--card",
+                "data-card",
+            ]
+        )
+        == 0
+    )
+    assert "[y/N]" in prompts[0]
+    assert read_workflow(out)["stages"]["data"] == "approved"
+
+
+def test_noninteractive_review_requires_explicit_agent_arguments(
+    tmp_path, capsys
+) -> None:
+    out = _write_review_fixture(tmp_path)
+
+    assert main(["approve", "--stage", "data", "--out", str(out)]) == 1
+    output = capsys.readouterr().out
+    assert "approval arguments are required outside an interactive terminal" in output
+    assert "--by <human|agent>" in output
+    assert read_workflow(out)["stages"]["data"] == "review"

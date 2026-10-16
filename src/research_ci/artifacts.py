@@ -281,6 +281,7 @@ class ReviewBrief:
     limitations: tuple[str, ...] = ()
     changes: tuple[str, ...] = ()
     key_plots: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.question.strip():
@@ -295,6 +296,7 @@ class ReviewBrief:
             "limitations",
             "changes",
             "key_plots",
+            "evidence_refs",
         ):
             values = tuple(str(value).strip() for value in getattr(self, field_name))
             if any(not value for value in values):
@@ -302,6 +304,8 @@ class ReviewBrief:
             object.__setattr__(self, field_name, values)
         for path in self.key_plots:
             _validate_relative_path(path, "key plot")
+        for path in self.evidence_refs:
+            _validate_relative_path(path, "evidence reference")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -312,6 +316,7 @@ class ReviewBrief:
             "limitations": list(self.limitations),
             "changes": list(self.changes),
             "key_plots": list(self.key_plots),
+            "evidence_refs": list(self.evidence_refs),
         }
 
     @classmethod
@@ -324,6 +329,7 @@ class ReviewBrief:
             limitations=tuple(value.get("limitations", ())),
             changes=tuple(value.get("changes", ())),
             key_plots=tuple(value.get("key_plots", ())),
+            evidence_refs=tuple(value.get("evidence_refs", ())),
         )
 
 

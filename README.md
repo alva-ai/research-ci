@@ -49,11 +49,18 @@ attempt id, Card id, and reason. Before real research, an Agent can verify a
 Lab with `rci contract check <case>/contract.py`; the Lab test suite then checks
 its case adapters against the pinned Engine.
 
+In an interactive terminal, `rci approve` and `rci reject` can omit the reviewer
+identity, decision, Card ID, or feedback. The CLI displays the submitted Card,
+shows short dependency digests, and uses a default-no `[y/N]` prompt. Automation
+and external review Agents must provide those arguments explicitly.
+
 ## Design documents
 
 - [Design and product requirements](docs/design.md) defines the normative
   stage boundaries, shared four-slot protocol, artifact contracts, and the
   detailed Sig research loop.
+- [Agent protocol](docs/agent-protocol.md) is the operational checklist for
+  exploration, attempts, four-slot evidence, revision, and human/Agent review.
 - [Interactive design map](docs/research-ci-viz-en.html) shows the current MVP
   workflow, stage ownership, Sig internals, and the guarantees still planned.
 - [TODO](TODO.md) records implementation status and open design work in

@@ -768,13 +768,20 @@ Approval records:
 The internal Agent may inspect code, full tables, every eval record, and all
 plots while iterating. The external Card is a result page: question,
 conclusion, evidence, counterevidence, limitations, iteration delta, compact
-Engine facts, and selected figures. Detailed methods remain linked audit
-artifacts. A stage can therefore have a valid attempt that is not yet
-`research_ready`, or evidence that supports an `uncertain` or `stop`
-recommendation, without creating more workflow states.
+Engine facts, evidence references, and selected figures. The Engine verifies
+that declared `evidence_refs` and `key_plots` exist inside the attempt before
+the Card can enter review. Detailed methods remain linked audit artifacts. A
+stage can therefore have a valid attempt that is not yet `research_ready`, or
+evidence that supports an `uncertain` or `stop` recommendation, without
+creating more workflow states.
 
 Approvals are explicit CLI actions. Research CI never treats file creation or a
-successful process exit as approval. `approve --decision continue` unlocks the
+successful process exit as approval. In an interactive terminal, omitting the
+review identity, decision, or Card ID displays the submitted Card, its short
+frozen dependency digests, and a default-no `[y/N]` prompt. The prompt binds a
+human approval to the displayed Card. Automation and external review Agents
+must provide `--by`, `--decision`, and `--card` explicitly; the CLI refuses an
+incomplete non-interactive request. `approve --decision continue` unlocks the
 next enabled stage. `approve --decision stop` records an intentional no-go and
 ends the workflow. `reject --message ...` returns the current stage to `ready`
 and requires a new attempt; it does not mutate the submitted attempt.
