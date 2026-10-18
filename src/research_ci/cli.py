@@ -24,6 +24,7 @@ from .cards import (
     contract_card,
     data_card,
     feat_card,
+    render_eval_terminal,
     render_terminal_card,
     review_card,
     sig_card,
@@ -816,6 +817,7 @@ def _data_run(
         print(f"data run failed: {exc}")
         return 1
     print(f"data attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("data", result.records, assessment))
     print(f"attempt report: {out_data / 'card.md'}")
     if result.passed:
         print(
@@ -967,6 +969,7 @@ def _feat_run(
         print(f"feat run failed: {exc}")
         return 1
     print(f"feat attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("feat", result.records, assessment))
     print(f"attempt report: {out_feat / 'card.md'}")
     if result.passed:
         print(
@@ -1479,6 +1482,7 @@ def _sig_run(
         print(f"sig run failed: {exc}")
         return 1
     print(f"sig attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("sig", result.records, assessment))
     print(f"attempt report: {out_sig / 'card.md'}")
     if result.passed:
         if confirmation_required:
@@ -1920,6 +1924,7 @@ def _algo_run(
         print(f"algo run failed: {exc}")
         return 1
     print(f"algo attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("algo", eval_result.records, assessment))
     print(f"attempt report: {out_algo / 'card.md'}")
     if eval_result.passed:
         print(
@@ -1983,8 +1988,10 @@ def _stage_prepare(
                 )
         manifest_path = attempt_dir / "manifest.json"
         assessment_path = attempt_dir / "eval" / "assessment.json"
+        eval_report_path = attempt_dir / "eval" / "report.jsonl"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        eval_records = _read_json_lines(eval_report_path)
         stage_attempts = state.get("attempts", {}).get(stage, [])
         selected_index = next(
             index
@@ -2010,6 +2017,7 @@ def _stage_prepare(
             assessment,
             attempt=selected["id"],
             previous_attempt=previous,
+            eval_records=eval_records,
         )
         (attempt_dir / "review.json").write_text(
             json.dumps(brief.as_dict(), indent=2, sort_keys=True) + "\n",
@@ -2246,6 +2254,16 @@ def _next(out: Path, as_json: bool = False) -> int:
         if protocol.get("plan"):
             print(f"  {'plan':<11}{protocol['plan']}")
         print(f"  {'enforced':<11}{protocol['enforcement']}")
+    eval_result = action.get("eval_result")
+    if eval_result:
+        print()
+        print(
+            render_eval_terminal(
+                str(action["stage"]),
+                eval_result["records"],
+                eval_result["assessment"],
+            )
+        )
     add("command", action.get("command") or "-")
     add("card", action.get("card") or "")
     add("reason", action["reason"])
@@ -2267,7 +2285,25 @@ def _enrich_next_action(
     enriched["objective"] = _STAGE_GUIDES[stage]["objective"]
     if action.get("actor") == "agent":
         enriched["eval_protocol"] = _eval_protocol_preview(state, stage)
+        attempt = action.get("attempt")
+        if isinstance(attempt, dict) and attempt.get("path"):
+            result = _attempt_eval_preview(Path(attempt["path"]))
+            if result is not None:
+                enriched["eval_result"] = result
     return enriched
+
+
+def _attempt_eval_preview(attempt_dir: Path) -> dict[str, Any] | None:
+    report = attempt_dir / "eval" / "report.jsonl"
+    assessment = attempt_dir / "eval" / "assessment.json"
+    try:
+        payload = json.loads(assessment.read_text(encoding="utf-8"))
+        records = _read_json_lines(report)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {"assessment": payload, "records": records}
 
 
 def _eval_protocol_preview(state: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -2788,6 +2824,19 @@ def _replace_path_prefix(value: Any, old: str, new: str) -> Any:
             key: _replace_path_prefix(item, old, new) for key, item in value.items()
         }
     return value
+
+
+def _read_json_lines(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise TypeError(f"JSONL row {number} in {path} is not an object")
+            records.append(value)
+    return records
 
 
 def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, str]]:
@@ -3505,7 +3554,7 @@ def _result_status(result: Any) -> str:
 
 
 def _load_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("aci_external_module", path)
+    spec = importlib.util.spec_from_file_location("rci_external_module", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load module: {path}")
     module = importlib.util.module_from_spec(spec)

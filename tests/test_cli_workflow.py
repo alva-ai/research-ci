@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 
-from research_ci.cards import render_terminal_card
+from research_ci.cards import render_eval_terminal, render_terminal_card
 from research_ci.cli import main
 from research_ci.workflow import (
     new_workflow,
@@ -178,7 +178,17 @@ def make_plan(table, stage="data", context=None):
         )
         == 0
     )
-    capsys.readouterr()
+    run_output = capsys.readouterr().out
+    assert "Eval · data" in run_output
+    assert "execution  READY" in run_output
+    assert "readiness  ELIGIBLE" in run_output
+    assert "baseline   [OK] 2/2 passed" in run_output
+    assert "library    [OK] 1/1 passed" in run_output
+    assert "case       [OK] 1/1 passed" in run_output
+    assert "case_eval  [OK] 1/1 passed" in run_output
+    assert "positive value" in run_output
+    assert "valid fixture=accepted · counterexample=rejected" in run_output
+    assert "structurally admissible for Feat review" in run_output
 
     state = read_workflow(out)
     assert state["stages"]["data"] == "ready"
@@ -196,6 +206,13 @@ def make_plan(table, stage="data", context=None):
     action = json.loads(capsys.readouterr().out)
     assert action["actor"] == "agent"
     assert action["action"] == "prepare"
+    assert action["eval_result"]["assessment"]["execution_status"] == "ready"
+    assert {record["slot"] for record in action["eval_result"]["records"]} == {
+        "baseline",
+        "library",
+        "case",
+        "case_eval",
+    }
     next_args = shlex.split(action["command"])
     assert next_args[next_args.index("--attempt") + 1] == "0002"
 
@@ -233,7 +250,13 @@ def make_plan(table, stage="data", context=None):
     assert "## Result" in prepared_card
     assert "## Audit trail" in prepared_card
     assert "## Exploration" not in prepared_card
-    assert "data.case.positive_value" not in prepared_card
+    assert "## Four slots" in prepared_card
+    assert "- baseline: [OK] 2/2 passed" in prepared_card
+    assert "- library: [OK] 1/1 passed" in prepared_card
+    assert "- case: [OK] 1/1 passed" in prepared_card
+    assert "- case_eval: [OK] 1/1 passed" in prepared_card
+    assert "positive value" in prepared_card
+    assert "valid fixture=accepted · counterexample=rejected" in prepared_card
 
     assert main(["next", "--out", str(out), "--json"]) == 0
     action = json.loads(capsys.readouterr().out)
@@ -371,6 +394,54 @@ Approve this card before Data can run.
             "    workflow         abc123",
         )
     )
+
+
+def test_eval_terminal_distinguishes_review_findings_from_blockers() -> None:
+    records = (
+        {
+            "slot": "baseline",
+            "name": "engine.baseline.general_missing_values",
+            "status": "passed",
+            "failure_policy": "record",
+            "details": {"totals": {}},
+        },
+        {
+            "slot": "library",
+            "name": "data.library.optional_reference",
+            "status": "not_applicable",
+            "failure_policy": "record",
+            "details": {"reason": "reference source unavailable"},
+        },
+        {
+            "slot": "case",
+            "name": "data.case.unique_events",
+            "status": "failed",
+            "failure_policy": "stop",
+            "details": {"reason": "duplicate event keys found"},
+        },
+        {
+            "slot": "case_eval",
+            "name": "data.case_eval.unique_events_rejects_duplicates",
+            "status": "passed",
+            "failure_policy": "stop",
+            "details": {"valid_status": "passed", "invalid_status": "failed"},
+        },
+    )
+    assessment = {
+        "execution_status": "halted",
+        "hard_failures": ["data.case.unique_events"],
+        "soft_findings": [],
+        "not_applicable": ["data.library.optional_reference"],
+    }
+
+    rendered = render_eval_terminal("data", records, assessment)
+
+    assert "readiness  BLOCKED" in rendered
+    assert "library    [!] 0/1 passed" in rendered
+    assert "case       [FAIL] 0/1 passed" in rendered
+    assert "case_eval  [OK] 1/1 passed" in rendered
+    assert "valid fixture=accepted · counterexample=rejected" in rendered
+    assert "mandatory correctness failed" in rendered
 
 
 def test_terminal_result_card_prioritizes_decision_evidence_over_audit_paths() -> None:

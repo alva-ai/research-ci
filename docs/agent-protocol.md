@@ -53,6 +53,23 @@ Populate all four eval slots:
 If the result is insufficient, write that conclusion and run another attempt or
 return to the source exploration. Do not hide a gap with a silent fill.
 
+After a stage run, the terminal prints the same four-slot evidence that will
+appear on the review Card:
+
+- `[OK]` means the declared rule ran and its condition was satisfied.
+- `[!]` means a non-blocking failure or `not_applicable` result needs review.
+- `[FAIL]` means a `failure_policy="stop"` rule failed or errored, so the
+  attempt cannot advance.
+- `READY / ELIGIBLE` means no blocking rule failed; `REVIEW / REVIEW_REQUIRED`
+  means findings need an explicit decision; `HALTED / BLOCKED` means the Agent
+  must create a corrected attempt.
+
+For Data, `ELIGIBLE` means only that the table is structurally admissible for
+Feat. It does not establish predictive value or causality. `rci next` repeats
+the latest result, and the terminal approval view shows each rule and its
+observed evidence. The complete records remain in `eval/report.jsonl` and the
+aggregate decision remains in `eval/assessment.json` inside the attempt.
+
 ### Feat
 
 Read only the approved Data handoff. Build the complete target-free feature

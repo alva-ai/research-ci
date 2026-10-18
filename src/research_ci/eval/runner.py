@@ -37,6 +37,7 @@ class EvalRecord:
     execution_mode: str = "custom_runner"
     selection_reason: str = ""
     library_method: str = ""
+    description: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +52,7 @@ class EvalRecord:
             "execution_mode": self.execution_mode,
             "selection_reason": self.selection_reason,
             "library_method": self.library_method,
+            "description": self.description,
         }
 
 
@@ -106,6 +108,10 @@ def run_eval_plan(
             "record",
             general_missing_values(table),
             execution_mode="polars_select",
+            description=(
+                "Report null, NaN, infinite, and string-sentinel values across "
+                "the complete table."
+            ),
         )
     )
 
@@ -145,6 +151,7 @@ def _run_spec(
         execution_mode=_execution_mode(spec),
         selection_reason=spec.selection_reason,
         library_method=spec.library_method,
+        description=spec.description,
     )
 
 
@@ -188,6 +195,9 @@ def _run_case_test(
         observation,
         execution_mode=_execution_mode(spec),
         selection_reason=spec.selection_reason,
+        description=(
+            "The valid fixture must pass and the counterexample must be rejected."
+        ),
     )
 
 
@@ -260,6 +270,7 @@ def _record(
     execution_mode: str = "custom_runner",
     selection_reason: str = "",
     library_method: str = "",
+    description: str = "",
 ) -> EvalRecord:
     return EvalRecord(
         stage=stage,
@@ -273,6 +284,7 @@ def _record(
         execution_mode=execution_mode,
         selection_reason=selection_reason,
         library_method=library_method,
+        description=description,
     )
 
 

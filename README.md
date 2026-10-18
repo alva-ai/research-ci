@@ -331,6 +331,21 @@ Feat Cards additionally list each feature's structural status, usable coverage,
 and redundancy evidence so a sparse or constant column is visible without
 turning the entire wide table into an eval table.
 
+The CLI exposes the same evidence at the point of action. Each stage `run`,
+the following `next`, and the prepared review Card show all four slots with a
+compact status:
+
+- `[OK]` means the rule ran and its declared condition was satisfied;
+- `[!]` means a non-blocking finding or a method that was not applicable;
+- `[FAIL]` means a stop-policy rule failed or could not be evaluated.
+
+The summary also separates execution (`READY`, `REVIEW`, or `HALTED`) from
+stage readiness (`ELIGIBLE`, `REVIEW_REQUIRED`, or `BLOCKED`) and prints the
+evidence that produced each status. For Data, `ELIGIBLE` means structurally
+admissible for Feat review; it does not establish a research claim. The
+complete machine-readable records remain in `eval/report.jsonl` and
+`eval/assessment.json`.
+
 ## Minimal example
 
 ```python

@@ -1,10 +1,10 @@
 # Research Engine TODO
 
-状态：Contract、DataLoop、FeatLoop、SigLoop 和最小 AlgoLoop 已实现；DataBundle、内部多轮研究准备、结果型 Card 和 Agent 主动回退上游已经进入 Engine。当前 SK Hynix case 已用 88 个 Feat、10 个候选构造和 2 个已批准 signal 运行到 Algo Card review。两套独立 pair strategy 已生成宽表权重，并通过外部 Lab 回测器和 Algo 四槽检查。
+状态：Contract、DataLoop、FeatLoop、SigLoop 和最小 AlgoLoop 已实现；DataBundle、内部多轮研究准备、结果型 Card 和 Agent 主动回退上游已经进入 Engine。参考 paired-market case 已用 88 个 Feat、10 个候选构造和 2 个已批准 signal 运行到 Algo Card review。两套独立 pair strategy 已生成宽表权重，并通过外部 Lab 回测器和 Algo 四槽检查。
 
 这份文件只记录当前有效的设计任务。历史讨论、失败方案和旧实现保存在仓库外部的 agent log，不在这里重复维护。
 
-当前用 `research-ci-lab` 的 SK Hynix proxy case 验证 Contract → DataLoop → FeatLoop → SigLoop → AlgoLoop 的可审核闭环。
+当前用 `research-ci-lab` 的参考 paired-market case 验证 Contract → DataLoop → FeatLoop → SigLoop → AlgoLoop 的可审核闭环。
 
 不继承旧 `research-ci` 的代码、API、数据模型或兼容约束，也不设版本迁移计划。
 
@@ -181,6 +181,7 @@
 - **待讨论**：eval 变更后如何使下游产物失效。
 - **部分完成**：eval 汇总、reason codes 和关键事实进入结果型 Card；完整 eval 留在 JSONL/assessment，统一证据账本仍待设计。
 - **完成**：Data、Feat Card 增加 `execution_status`、`research_disposition` 和 reason codes；同时写出 `eval/assessment.json`。它只做证据分流，不把单个指标自动解释为 alpha 通过。
+- **完成**：Data、Feat、Sig、Algo 的 `run`、后续 `next` 和 prepared review Card 都直接展示四槽结果；`[OK]`、`[!]`、`[FAIL]` 区分通过、非阻断发现/不适用和阻断失败，并把执行状态、阶段可交付性与研究价值分开表达。
 - **完成**：Feat Card 增加逐列 structural triage，区分 `candidate_for_review`、`incomplete`、`weak_data`、`redundant` 和 `invalid`，并列出 coverage、usable rows、VIF 和原因码。
 - **决定**：有了显式 target 和样本外切分后，在 Sig 中比较候选 feature 或 signal 的 Pareto 证据（IC/ICIR、稳定性、增量信息、换手和复杂度）；不使用单一总分自动排序。
 
@@ -216,7 +217,7 @@
 - **完成**：FeatLoop 读取当前 run 已批准的 DataBundle，先把 `feat/main.parquet`、`exploration.json`、`recipe.json`、四槽 `report.jsonl`、`card.md` 和 `manifest.json` 写入编号 attempt；prepare + submit 后才成为正式 candidate。
 - **决定**：source/entity mapping、unit、revision、release/availability time 属于 Data；rolling、lag、z-score、interaction 和任务特定 causal as-of transform 属于 Feat。Feat 缺标准化源时回退 Data；Sig 缺 target-free transform 时回退 Feat。
 - **完成**：Feat 在 `ready` 可以由 Agent 多次运行；prepare + submit 一个有效 attempt 后进入 `review` 并禁止重跑，必须由 reviewer reject 回 `ready` 或 approve continue 解锁 Sig。
-- **完成**：当前 SK Hynix case 生成 88 个候选特征：五组基础状态、1h/6h/24h 变化、24h/72h/168h rolling mean/std/z-score、24h/168h median/IQR robust scale、tanh 有界变换，以及价差波动率和波动率缩放变化。
+- **完成**：参考 paired-market case 生成 88 个候选特征：五组基础状态、1h/6h/24h 变化、24h/72h/168h rolling mean/std/z-score、24h/168h median/IQR robust scale、tanh 有界变换，以及价差波动率和波动率缩放变化。
 - **决定**：Feat normalization 只使用截至当前行的因果滚动窗口，并要求完整 warm-up；不在全样本上 fit、不填充 warm-up null、不加隐藏 epsilon。需要 fitted scaler/PCA 时由 Sig 在时间隔离的 train/validation/test 或 walk-forward 内拟合。
 - **完成**：当前 case 用历史截断重算验证 Feat prefix 不受未来行影响；Data 行数 2321，Feat 保持同一 key grid 和 2321 行，不再因 `shift` 或 `drop_nulls` 缩成样例行数。
 - **完成**：当前 Feat 四槽已实际执行；case Agent 选择 coverage、dispersion、feature-feature correlation、VIF、PCA、autocorrelation、feature-feature MI 和 drift，没有选择 target 相关方法。
@@ -240,7 +241,7 @@
 - **待讨论**：数值列的 null、NaN、正负无穷、字符串 sentinel、全常数和近常数检查。
 - **待讨论**：feature coverage、按时间和 instrument 的缺失分布、最小有效样本量。
 - **待讨论**：重复运行一致性和输入顺序不变性。
-- **部分完成**：当前 SK Hynix case 已做历史 cut 的 prefix replay；仍待把通用 point-in-time replay 固化为 Engine baseline。
+- **部分完成**：参考 paired-market case 已做历史 cut 的 prefix replay；仍待把通用 point-in-time replay 固化为 Engine baseline。
 - **待讨论**：feature provenance：输入列、lookback、available time、单位、变换和 builder hash。
 
 ### 5.2 Feat Engine eval library 候选
@@ -293,7 +294,7 @@
 - **完成**：最小 Sig Kit 已提供显式 forward target、简单 signal 组合、时间切分、`FeatureDisposition`、`SignalLineage` 和 `SignalBundle`；它不等同于 SigLoop，也不替 Agent 选择 target、feature 或模型。
 - **完成**：SigLoop 和 `rci sig run` 只读取已批准的 Feat freeze，执行外部 `SignalBundle` builder 与四槽计划并保存 attempt；`rci sig submit` 才发布正式 candidate、进入 `review` 并继续锁住 Algo。
 - **完成**：`sig/main.parquet` 只包含 key 和下游需要的 signal columns；已实现的未来值叫 label，保存在 `sig/context/label.parquet`；target/horizon 只表达研究要预测哪个 label。
-- **完成**：固定标的 case 由 `build_main_table(data, signals)` 直接生成 `sig/main.parquet`；当前 SK Hynix case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal，Algo 只读取这张正式阶段表。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
+- **完成**：固定标的 case 由 `build_main_table(data, signals)` 直接生成 `sig/main.parquet`；参考 paired-market case 使用每个 `event_time` 一行的宽表，保存两腿 instrument、price、spread 和 final signal，Algo 只读取这张正式阶段表。Engine 检查 key grid、`*_inst`/`*_price` 配对和正的有限价格。长表只在跨标的截面粒度需要时由 case 明确采用。
 - **决定**：同一 Sig 表可以保存多个独立策略候选 signal；signal 是价差预测值，不是单腿仓位。当前 fast/slow 各自进入一个 Algo 策略候选，每个 Algo 再把标量 signal 映射为两腿对冲仓位。若要合并，组合规则和组合后的 signal 必须先回到 Sig 中评价。
 - **完成**：`sig/research/candidates.parquet` 保存全部 candidate；`screening.parquet` 保存分 sample 的 feature-target 证据；`disposition.parquet` 覆盖每个 feature；`lineage.json` 覆盖每个 candidate 和 final signal；其他 research 表保存相关簇和冗余证据。
 - **完成**：`sig/selection.json` 保存本轮候选、物化 signal、horizon、决策原则和是否自动筛选。
@@ -336,7 +337,7 @@
 - **完成**：`rci algo run` 只读取已批准的 `sig/main.parquet`，执行外部 `AlgoBundle` builder、显式 `--backtester` 和 Algo 四槽，并把主表、backtest、Card、manifest 与 eval sidecar 保存为 attempt；`rci algo submit` 才发布正式 candidate 并进入 review。
 - **完成**：Algo Engine baseline 验证 source price/signal 保真、key grid、价格正且有限、仓位有限、max absolute position、每策略 gross exposure、回测 key grid、return/equity/turnover 路径和 summary strategy coverage。
 - **完成**：Algo 通用库第一项 `library.economic.backtest_summary` 从外部回测时序重新计算 total return、annualized volatility、Sharpe、max drawdown 和 average turnover；它不负责产生 PnL。
-- **完成**：当前 SK Hynix Lab 将 fast/slow signal 各自映射成一套美元中性双腿权重；`tanh(signal / 2)` 限幅，总 gross 上限 1，回测延迟一根小时 bar，按双腿总换手收取 5 bps 成本。
+- **完成**：参考 paired-market Lab 将 fast/slow signal 各自映射成一套美元中性双腿权重；`tanh(signal / 2)` 限幅，总 gross 上限 1，回测延迟一根小时 bar，按双腿总换手收取 5 bps 成本。
 - **完成**：当前 Algo case 规则独立验证仓位公式和回测会计，case_eval 通过修改一条 fast leg 权重证明两个规则都能识别反例。
 - **决定**：Algo 主表由 `AlgoSet.representation` 选择 `weights` 或 `trades`；当前 case 使用每个 `event_time` 一行的宽表 weights。逐笔 contract 可使用 trade keys 和独立 backtest keys。
 - **待实现**：Engine 默认回测器、默认交易成本/滑点模型和默认撮合器；在至少两个外部 backtester 验证接口前不固化默认经济语义。
