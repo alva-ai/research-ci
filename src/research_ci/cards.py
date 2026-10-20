@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -235,6 +236,22 @@ def render_eval_terminal(
     add("readiness", _stage_readiness(execution))
     for slot in ("baseline", "library", "case", "case_eval"):
         selected = tuple(record for record in normalized if record["slot"] == slot)
+        if slot == "library":
+            groups = _library_groups(selected)
+            add(
+                slot,
+                f"{_slot_marker(selected)} {_counted(len(groups), 'method')} · "
+                f"{_counted(len(selected), 'record')}",
+            )
+            for _, group in groups:
+                add(
+                    "",
+                    f"{_slot_marker(group)} {_eval_name(group[0])} · "
+                    f"{_eval_group_evidence(group)}",
+                )
+                for detail in _eval_group_details(group):
+                    add("", f"    {detail}")
+            continue
         marker = _slot_marker(selected)
         passed = sum(record["status"] == "passed" for record in selected)
         add(slot, f"{marker} {passed}/{len(selected)} passed")
@@ -252,10 +269,15 @@ def render_eval_terminal(
     if soft_findings or not_applicable:
         add(
             "review",
-            *[str(value) for value in (*soft_findings, *not_applicable)],
+            f"{len(soft_findings)} non-blocking findings · "
+            f"{len(not_applicable)} unavailable · see eval/report.jsonl",
         )
     add("meaning", _stage_meaning(stage, execution))
-    add("legend", "[OK] satisfied · [!] review finding · [FAIL] blocks attempt")
+    add(
+        "legend",
+        "[OK] completed without configured finding · [!] review finding · "
+        "[FAIL] blocks attempt",
+    )
     return "\n".join(lines)
 
 
@@ -268,6 +290,20 @@ def _append_eval_results(
         return
     for slot in ("baseline", "library", "case", "case_eval"):
         selected = tuple(record for record in normalized if record["slot"] == slot)
+        if slot == "library":
+            groups = _library_groups(selected)
+            lines.append(
+                f"- {slot}: {_slot_marker(selected)} "
+                f"{_counted(len(groups), 'method')} · "
+                f"{_counted(len(selected), 'record')}"
+            )
+            for _, group in groups:
+                lines.append(
+                    f"  - {_slot_marker(group)} `{_eval_name(group[0])}`: "
+                    f"{_eval_group_evidence(group)}"
+                )
+                lines.extend(f"    - {detail}" for detail in _eval_group_details(group))
+            continue
         passed = sum(record["status"] == "passed" for record in selected)
         lines.append(
             f"- {slot}: {_slot_marker(selected)} {passed}/{len(selected)} passed"
@@ -288,9 +324,28 @@ def _eval_record(record: Any) -> dict[str, Any]:
     raise TypeError("eval terminal renderer requires EvalRecord-like values")
 
 
+def _library_groups(
+    records: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, tuple[Mapping[str, Any], ...]], ...]:
+    """Group expanded metric records by the method selected by the Agent."""
+
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for record in records:
+        method = str(record.get("library_method") or record.get("name") or "unknown")
+        grouped.setdefault(method, []).append(record)
+    return tuple((method, tuple(group)) for method, group in grouped.items())
+
+
+def _counted(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
 def _eval_marker(record: Mapping[str, Any]) -> str:
     status = record.get("status")
     if status == "passed":
+        details = record.get("details")
+        if isinstance(details, Mapping) and details.get("reason_code"):
+            return "[!]"
         return "[OK]"
     if status in {"failed", "error"} and record.get("failure_policy") == "stop":
         return "[FAIL]"
@@ -361,6 +416,16 @@ def _eval_evidence(record: Mapping[str, Any]) -> str:
             f"tables={len(tables)} · duplicate keys={duplicate_rows} · "
             f"missing coverage={len(details.get('missing_coverage_tables', ()))}"
         )
+    if name == "engine.baseline.feature_output_shape":
+        return " · ".join(
+            (
+                f"input={details.get('input_rows', '-')}",
+                f"output={details.get('output_rows', '-')}",
+                f"missing keys={details.get('missing_key_rows', '-')}",
+                f"extra keys={details.get('extra_key_rows', '-')}",
+                f"duplicate keys={details.get('duplicate_key_rows', '-')}",
+            )
+        )
     if record.get("library_method") == "library.quality.required_columns":
         missing = details.get("missing_columns", ())
         return "all required columns present" if not missing else f"missing={missing}"
@@ -400,6 +465,249 @@ def _eval_evidence(record: Mapping[str, Any]) -> str:
     if description:
         return description
     return status
+
+
+def _eval_group_evidence(records: Sequence[Mapping[str, Any]]) -> str:
+    """Summarize one selected library method without hiding its raw records."""
+
+    first = records[0]
+    method = str(first.get("library_method") or "")
+    if method == "library.quality.dispersion":
+        details = first.get("details")
+        details = dict(details) if isinstance(details, Mapping) else {}
+        constants = details.get("constant_columns", ())
+        return (
+            f"columns={len(details.get('columns', ()))} · "
+            f"constant={len(constants) if isinstance(constants, Sequence) else '-'}"
+        )
+    if method == "library.quality.coverage":
+        details = first.get("details")
+        details = dict(details) if isinstance(details, Mapping) else {}
+        values = details.get("coverage", {})
+        values = dict(values) if isinstance(values, Mapping) else {}
+        numeric = [float(value) for value in values.values() if _finite_number(value)]
+        minimum = details.get("minimum")
+        below = details.get("below_minimum", {})
+        below = dict(below) if isinstance(below, Mapping) else {}
+        return " · ".join(
+            (
+                f"columns={len(values)}",
+                f"lowest={min(numeric):.3f}" if numeric else "lowest=-",
+                (
+                    f"minimum={float(minimum):.3f}"
+                    if _finite_number(minimum)
+                    else "minimum=not set"
+                ),
+                f"below={len(below)}",
+            )
+        )
+    if method == "library.structure.pairwise_correlation":
+        thresholds = [
+            float(details["maximum_absolute"])
+            for record in records
+            if isinstance((details := record.get("details")), Mapping)
+            and isinstance(details.get("maximum_absolute"), (int, float))
+        ]
+        unavailable = sum(
+            record.get("status") == "not_applicable" for record in records
+        )
+        if thresholds:
+            threshold = thresholds[0]
+            findings = sum(
+                isinstance(record.get("value"), (int, float))
+                and not isinstance(record.get("value"), bool)
+                and abs(float(record["value"])) >= threshold
+                for record in records
+            )
+            return (
+                f"pairs={len(records)} · |r|>={threshold:.2f}: {findings} · "
+                f"unavailable={unavailable}"
+            )
+        return f"pairs={len(records)} · unavailable={unavailable}"
+    if method == "library.structure.vif":
+        details = first.get("details")
+        details = dict(details) if isinstance(details, Mapping) else {}
+        maximum = details.get("maximum")
+        return " · ".join(
+            (
+                f"columns={len(details.get('columns', ()))}",
+                _number_summary("max VIF", details.get("max_vif")),
+                (
+                    _number_summary("limit", maximum)
+                    if maximum is not None
+                    else "limit=not set"
+                ),
+                f"rows={details.get('rows', '-')}",
+            )
+        )
+    if method == "library.structure.pca_diagnostics":
+        details = first.get("details")
+        details = dict(details) if isinstance(details, Mapping) else {}
+        value = first.get("value")
+        value = dict(value) if isinstance(value, Mapping) else {}
+        ratios = value.get("explained_variance_ratio", ())
+        ratios = ratios if isinstance(ratios, Sequence) else ()
+        first_ratio = ratios[0] if ratios else None
+        minimum_rank = details.get("minimum_effective_rank")
+        return " · ".join(
+            (
+                f"columns={len(details.get('columns', ()))}",
+                _number_summary("effective rank", details.get("effective_rank")),
+                _number_summary("PC1", first_ratio),
+                (
+                    _number_summary("minimum rank", minimum_rank)
+                    if minimum_rank is not None
+                    else "minimum rank=not set"
+                ),
+            )
+        )
+    if method == "library.information.feature_pair_mutual_information":
+        values = [
+            float(record["value"])
+            for record in records
+            if _finite_number(record.get("value"))
+        ]
+        unavailable = sum(
+            record.get("status") == "not_applicable" for record in records
+        )
+        return " · ".join(
+            (
+                f"pairs={len(records)}",
+                f"max NMI={max(values):.3f}" if values else "max NMI=-",
+                f"unavailable={unavailable}",
+            )
+        )
+    if method == "library.stability.distribution_shift":
+        values = [
+            abs(float(record["value"]))
+            for record in records
+            if _finite_number(record.get("value"))
+        ]
+        limits = [
+            float(details["max_absolute_shift"])
+            for record in records
+            if isinstance((details := record.get("details")), Mapping)
+            and _finite_number(details.get("max_absolute_shift"))
+        ]
+        findings = sum(
+            record.get("status") in {"failed", "error"} for record in records
+        )
+        return " · ".join(
+            (
+                f"columns={len(records)}",
+                f"max |shift|={max(values):.3f}" if values else "max |shift|=-",
+                f"limit={limits[0]:.3f}" if limits else "limit=not set",
+                f"findings={findings}",
+            )
+        )
+    if method in {
+        "library.structure.autocorrelation",
+        "library.stability.rank_autocorrelation",
+    }:
+        values = [
+            abs(float(record["value"]))
+            for record in records
+            if _finite_number(record.get("value"))
+        ]
+        return (
+            f"columns={len(records)} · max |rho|={max(values):.3f}"
+            if values
+            else f"columns={len(records)}"
+        )
+    if len(records) == 1:
+        return _eval_evidence(first)
+    counts = Counter(str(record.get("status") or "unknown") for record in records)
+    findings = counts["failed"] + counts["error"]
+    return (
+        f"records={len(records)} · passed={counts['passed']} · "
+        f"findings={findings} · unavailable={counts['not_applicable']}"
+    )
+
+
+def _eval_group_details(records: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Show only the decision-relevant tail of an expanded method."""
+
+    first = records[0]
+    method = first.get("library_method")
+    if method == "library.structure.vif":
+        values = first.get("value")
+        values = dict(values) if isinstance(values, Mapping) else {}
+        ranked = sorted(
+            (
+                (str(column), float(value))
+                for column, value in values.items()
+                if _finite_number(value)
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        return tuple(f"{column}: VIF {value:.2f}" for column, value in ranked[:3])
+    if method in {
+        "library.information.feature_pair_mutual_information",
+        "library.stability.distribution_shift",
+        "library.structure.autocorrelation",
+        "library.stability.rank_autocorrelation",
+    }:
+        ranked = [record for record in records if _finite_number(record.get("value"))]
+        ranked.sort(key=lambda record: abs(float(record["value"])), reverse=True)
+        summaries: list[str] = []
+        for record in ranked[:3]:
+            metadata = record.get("details")
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            if method == "library.information.feature_pair_mutual_information":
+                label = f"{metadata.get('left', '-')} ↔ {metadata.get('right', '-')}"
+                metric = "NMI"
+            else:
+                label = str(metadata.get("column", "-"))
+                metric = "shift" if "distribution_shift" in str(method) else "rho"
+            summaries.append(f"{label}: {metric} {float(record['value']):.3f}")
+        return tuple(summaries)
+    if method != "library.structure.pairwise_correlation":
+        return ()
+    ranked = [
+        record
+        for record in records
+        if isinstance(record.get("value"), (int, float))
+        and not isinstance(record.get("value"), bool)
+        and math.isfinite(float(record["value"]))
+    ]
+    ranked.sort(key=lambda record: abs(float(record["value"])), reverse=True)
+    thresholds = [
+        float(details["maximum_absolute"])
+        for record in records
+        if isinstance((details := record.get("details")), Mapping)
+        and isinstance(details.get("maximum_absolute"), (int, float))
+    ]
+    if thresholds:
+        threshold = thresholds[0]
+        ranked = [
+            record for record in ranked if abs(float(record["value"])) >= threshold
+        ]
+    else:
+        ranked = ranked[:3]
+    details: list[str] = []
+    for record in ranked[:5]:
+        metadata = record.get("details")
+        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        details.append(
+            f"{metadata.get('left', '-')} ↔ {metadata.get('right', '-')}: "
+            f"{float(record['value']):.3f}"
+        )
+    if len(ranked) > 5:
+        details.append(f"{len(ranked) - 5} more in eval/report.jsonl")
+    return tuple(details)
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _number_summary(label: str, value: Any) -> str:
+    return f"{label}={float(value):.3f}" if _finite_number(value) else f"{label}=-"
 
 
 def _stage_readiness(execution: str) -> str:
@@ -521,7 +829,7 @@ def review_card(
             "",
             "## Eval legend",
             "",
-            "- [OK] rule evaluated and satisfied",
+            "- [OK] check or method completed without a configured finding",
             "- [!] non-blocking finding or not applicable; reviewer must decide",
             "- [FAIL] stop rule failed or could not be evaluated",
             "- Stage readiness measures data admissibility for the next stage; "
@@ -619,20 +927,7 @@ def data_card(
     _append_assessment(lines, result)
     lines.extend(("", "## Four slots", ""))
     _append_slot_contract(lines)
-    for record in result.records:
-        lines.append(
-            f"- `{record.slot}` `{record.name}`: {record.status}"
-            f" (failure_policy={record.failure_policy}, "
-            f"execution_mode={record.execution_mode})"
-        )
-        if record.selection_reason:
-            lines.append(f"  selected because: {record.selection_reason}")
-        if record.library_method:
-            lines.append(f"  library method: `{record.library_method}`")
-        if record.details:
-            lines.append(
-                "  details: " + json.dumps(record.details, sort_keys=True, default=str)
-            )
+    _append_eval_results(lines, result.records)
     lines.extend(("", "## Exploration", "", "```json"))
     lines.append(json.dumps(exploration, indent=2, sort_keys=True, default=str))
     review_message, review_command = _review_prompt("data", artifact_role)
@@ -679,20 +974,7 @@ def feat_card(
     _append_feature_triage(lines, table, keys, result.records)
     lines.extend(("", "## Four slots", ""))
     _append_slot_contract(lines)
-    for record in result.records:
-        lines.append(
-            f"- `{record.slot}` `{record.name}`: {record.status}"
-            f" (failure_policy={record.failure_policy}, "
-            f"execution_mode={record.execution_mode})"
-        )
-        if record.selection_reason:
-            lines.append(f"  selected because: {record.selection_reason}")
-        if record.library_method:
-            lines.append(f"  library method: `{record.library_method}`")
-        if record.details:
-            lines.append(
-                "  details: " + json.dumps(record.details, sort_keys=True, default=str)
-            )
+    _append_eval_results(lines, result.records)
     lines.extend(("", "## Exploration", "", "```json"))
     lines.append(json.dumps(exploration, indent=2, sort_keys=True, default=str))
     review_message, review_command = _review_prompt("feat", artifact_role)
