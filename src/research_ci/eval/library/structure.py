@@ -66,6 +66,7 @@ def pairwise_correlation(
     right: str,
     *,
     method: str = "pearson",
+    maximum_absolute: float | None = None,
     name: str = "library.structure.pairwise_correlation",
     failure_policy: FailurePolicy = "record",
 ) -> EvalSpec:
@@ -73,6 +74,8 @@ def pairwise_correlation(
 
     if method not in {"pearson", "spearman"}:
         raise ValueError("pairwise correlation method must be pearson or spearman")
+    if maximum_absolute is not None and not 0 < maximum_absolute <= 1:
+        raise ValueError("maximum absolute correlation must be in (0, 1]")
     if not left.strip() or not right.strip():
         raise ValueError("structure evals need two named columns")
 
@@ -98,16 +101,24 @@ def pairwise_correlation(
             or not math.isfinite(float(value))
         ):
             return not_applicable("correlation is undefined", rows=pairs.height)
+        correlation = float(value)
+        over_limit = (
+            maximum_absolute is not None and abs(correlation) >= maximum_absolute
+        )
+        details = {
+            "left": left,
+            "right": right,
+            "method": method,
+            "rows": pairs.height,
+            "maximum_absolute": maximum_absolute,
+        }
+        if over_limit:
+            details["reason_code"] = "HIGH_REDUNDANCY"
         return EvalObservation(
-            status="passed",
-            value=float(value),
-            output_kind="metric",
-            details={
-                "left": left,
-                "right": right,
-                "method": method,
-                "rows": pairs.height,
-            },
+            status="failed" if over_limit else "passed",
+            value=correlation,
+            output_kind="findings" if over_limit else "metric",
+            details=details,
         )
 
     return EvalSpec(

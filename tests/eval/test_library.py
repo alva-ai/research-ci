@@ -61,6 +61,41 @@ def test_association_and_structure_methods_are_metrics() -> None:
     assert structure.records[1].value == -1.0
 
 
+def test_pairwise_correlation_can_record_a_redundancy_threshold() -> None:
+    table = pl.DataFrame(
+        {
+            "x": [1.0, 1.0, 1.0],
+            "left": [1.0, 2.0, 3.0],
+            "right": [-1.0, -2.0, -3.0],
+        }
+    )
+
+    case = EvalSpec("case.positive", expr=pl.col("x") > 0)
+    plan = EvalPlan(
+        stage="feat",
+        baseline=(),
+        library=(pairwise_correlation("left", "right", maximum_absolute=0.8),),
+        case=(case,),
+        case_eval=(
+            CaseEvalTest.from_rows(
+                name="case.positive.counterexample",
+                case=case.name,
+                valid={"x": [1]},
+                invalid={"x": [-1]},
+            ),
+        ),
+    )
+    result = run_eval_plan(table, plan)
+
+    record = result.records[1]
+    assert record.status == "failed"
+    assert record.failure_policy == "record"
+    assert record.value == -1.0
+    assert record.output_kind == "findings"
+    assert record.details["reason_code"] == "HIGH_REDUNDANCY"
+    assert result.passed
+
+
 def test_association_is_explicitly_not_applicable_without_a_target() -> None:
     result = run_eval_plan(
         pl.DataFrame({"score": [1.0, 2.0]}),

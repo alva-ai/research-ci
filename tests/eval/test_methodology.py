@@ -253,3 +253,18 @@ def test_known_no_variation_is_weak_evidence_not_missing_context() -> None:
 
     assert assessment["research_disposition"] == "weak_data"
     assert assessment["reason_codes"] == ["NO_VARIATION"]
+
+
+def test_specific_library_reason_does_not_duplicate_generic_failure() -> None:
+    record = EvalRecord(
+        stage="feat",
+        slot="library",
+        name="feature.correlation",
+        status="failed",
+        failure_policy="record",
+        details={"reason_code": "HIGH_REDUNDANCY"},
+    )
+
+    assessment = assess_records((record,))
+
+    assert assessment["reason_codes"] == ["HIGH_REDUNDANCY"]

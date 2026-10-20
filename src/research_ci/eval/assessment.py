@@ -334,7 +334,8 @@ def _reason_codes(record: EvalRecord, details: dict[str, Any]) -> set[str]:
         elif record.slot in {"baseline", "case"}:
             codes.add("CORRECTNESS_FAILURE")
         else:
-            codes.add("LIBRARY_CHECK_FAILED")
+            if not codes:
+                codes.add("LIBRARY_CHECK_FAILED")
             if "finite" in record.name.lower():
                 codes.add("NON_FINITE_VALUES")
     elif record.status == "not_applicable":

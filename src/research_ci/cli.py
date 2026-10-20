@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import inspect
 import json
 import shlex
 import shutil
+import sys
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import ModuleType
@@ -17,7 +19,16 @@ from typing import Any
 import polars as pl
 
 from .artifacts import DataBundle, ReviewBrief
-from .cards import algo_card, contract_card, data_card, feat_card, review_card, sig_card
+from .cards import (
+    algo_card,
+    contract_card,
+    data_card,
+    feat_card,
+    render_eval_terminal,
+    render_terminal_card,
+    review_card,
+    sig_card,
+)
 from .contract import ContractError, validate_contract
 from .eval import (
     AlgoSet,
@@ -82,6 +93,20 @@ from .workflow import (
 _INTERNAL_FEATURE_TABLE = "__rci_feature_table"
 _INTERNAL_CONTEXT_PREFIX = "__rci_"
 
+_BASELINE_PREVIEWS = {
+    "data": "Engine · null/NaN/Inf and DataBundle shape",
+    "feat": "Engine · null/NaN/Inf, key grid, and feature-table shape",
+    "sig": "Engine · null/NaN/Inf, feature coverage, labels, lineage, and output shape",
+    "algo": "Engine · null/NaN/Inf, positions, backtest, and summary shape",
+}
+
+_EVAL_SLOT_PURPOSES = {
+    "baseline": "fixed stage correctness floor",
+    "library": "Agent-selected methods from the stage-specific Engine menu",
+    "case": "Agent-authored task-specific rules",
+    "case_eval": "valid fixtures and explicit counterexamples for case rules",
+}
+
 _STAGE_GUIDES: dict[str, dict[str, Any]] = {
     "data": {
         "objective": "assemble point-in-time source facts into a formal DataBundle",
@@ -100,6 +125,24 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "mandatory baseline and case rules pass",
             "catalog metadata covers main and every native-frequency table",
             "no feature, label, signal, position, or PnL semantics enter the table",
+        ],
+        "completion_checklist": [
+            (
+                "identify every source, frequency, event-time and "
+                "availability-time meaning"
+            ),
+            "record coverage, freshness, proxy status and unresolved gaps",
+            "preserve native source tables and explain every alignment or treatment",
+            (
+                "state whether the result is sufficient, insufficient, or needs "
+                "another data attempt"
+            ),
+        ],
+        "common_failure_modes": [
+            "using a revised value before its publication time",
+            "silently forward-filling stale or missing observations",
+            "mixing features, labels, signals, or outcomes into the Data table",
+            "claiming a source is available when only a proxy was downloaded",
         ],
     },
     "feat": {
@@ -120,6 +163,18 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "features are causal and target-free",
             "all four eval slots are populated",
         ],
+        "completion_checklist": [
+            "declare the complete feature universe and formula lineage",
+            "replay every rolling, lagged, normalized, and transformed expression",
+            "show coverage, warm-up behavior, dispersion, redundancy, and stability",
+            "return to Data when a required raw field is missing instead of guessing",
+        ],
+        "common_failure_modes": [
+            "filling warm-up rows without declaring a boundary policy",
+            "using a future row or full-sample fit in a historical feature",
+            "dropping inconvenient features without a disposition or reason",
+            "using target-aware IC or labels before the Sig stage",
+        ],
     },
     "sig": {
         "objective": "turn the complete approved feature universe into signals",
@@ -137,6 +192,24 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "confirmation, when declared, freezes development before holdout reveal",
             "all four eval slots are populated",
         ],
+        "completion_checklist": [
+            (
+                "declare labels, horizons, time splits, and the complete approved "
+                "Feat universe"
+            ),
+            "screen every approved feature and give each one an evidenced disposition",
+            (
+                "compare candidates with stability, counterevidence, and a "
+                "predeclared selection rule"
+            ),
+            "separate development evidence from confirmation or holdout evidence",
+        ],
+        "common_failure_modes": [
+            "jumping directly to one convenient rule and skipping most features",
+            "tuning on the validation or holdout period",
+            "treating correlation or IC as causal proof",
+            "publishing a signal without an explicit label sidecar and lineage",
+        ],
     },
     "algo": {
         "objective": "map approved signals into executable positions or trades",
@@ -151,6 +224,21 @@ _STAGE_GUIDES: dict[str, dict[str, Any]] = {
             "source prices and signals are preserved",
             "position and backtest accounting satisfy the declared contract",
             "all four eval slots are populated",
+        ],
+        "completion_checklist": [
+            "declare how each signal becomes a position, order, or trade",
+            (
+                "measure exposure, leverage, turnover, costs, drawdown, and "
+                "liquidity constraints"
+            ),
+            "run the external backtest and preserve its assumptions and time series",
+            "state whether the result is executable, insufficient, or rejected",
+        ],
+        "common_failure_modes": [
+            "treating a signal as a position without sizing or execution semantics",
+            "omitting fees, slippage, funding, or trading lag",
+            "using prices or signals that do not come from the approved Sig handoff",
+            "reporting return without risk, turnover, or drawdown evidence",
         ],
     },
 }
@@ -253,19 +341,42 @@ def main(argv: list[str] | None = None) -> int:
         "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
     )
     approve.add_argument("--out", required=True, type=Path)
-    approve.add_argument("--by", required=True, choices=("human", "agent"))
-    approve.add_argument("--decision", required=True, choices=("continue", "stop"))
+    approve.add_argument(
+        "--by",
+        choices=("human", "agent"),
+        help="reviewer identity; omit in an interactive terminal for human review",
+    )
+    approve.add_argument(
+        "--decision",
+        choices=("continue", "stop"),
+        help="review decision; omit in an interactive terminal to see a yes/no prompt",
+    )
     approve.add_argument("--message", default="")
-    approve.add_argument("--card", required=True, dest="expected_card")
+    approve.add_argument(
+        "--card",
+        dest="expected_card",
+        help="Card id; omit in an interactive terminal to bind the displayed Card",
+    )
 
     reject = commands.add_parser("reject", help="return a reviewed stage to its Agent")
     reject.add_argument(
         "--stage", required=True, choices=("contract", "data", "feat", "sig", "algo")
     )
     reject.add_argument("--out", required=True, type=Path)
-    reject.add_argument("--by", required=True, choices=("human", "agent"))
-    reject.add_argument("--message", required=True)
-    reject.add_argument("--card", required=True, dest="expected_card")
+    reject.add_argument(
+        "--by",
+        choices=("human", "agent"),
+        help="reviewer identity; omit in an interactive terminal for human review",
+    )
+    reject.add_argument(
+        "--message",
+        help="feedback; in a terminal, omit it to enter feedback after confirmation",
+    )
+    reject.add_argument(
+        "--card",
+        dest="expected_card",
+        help="Card id; omit in an interactive terminal to bind the displayed Card",
+    )
 
     reopen = commands.add_parser("reopen", help="reopen an accepted stage")
     reopen.add_argument(
@@ -706,6 +817,7 @@ def _data_run(
         print(f"data run failed: {exc}")
         return 1
     print(f"data attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("data", result.records, assessment))
     print(f"attempt report: {out_data / 'card.md'}")
     if result.passed:
         print(
@@ -857,6 +969,7 @@ def _feat_run(
         print(f"feat run failed: {exc}")
         return 1
     print(f"feat attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("feat", result.records, assessment))
     print(f"attempt report: {out_feat / 'card.md'}")
     if result.passed:
         print(
@@ -1369,6 +1482,7 @@ def _sig_run(
         print(f"sig run failed: {exc}")
         return 1
     print(f"sig attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("sig", result.records, assessment))
     print(f"attempt report: {out_sig / 'card.md'}")
     if result.passed:
         if confirmation_required:
@@ -1810,6 +1924,7 @@ def _algo_run(
         print(f"algo run failed: {exc}")
         return 1
     print(f"algo attempt {attempt}: {checks_status}")
+    print(render_eval_terminal("algo", eval_result.records, assessment))
     print(f"attempt report: {out_algo / 'card.md'}")
     if eval_result.passed:
         print(
@@ -1864,10 +1979,19 @@ def _stage_prepare(
                 raise FileNotFoundError(
                     f"review brief key plot is missing from the attempt: {relative}"
                 )
+        for relative in brief.evidence_refs:
+            evidence = (attempt_dir / relative).resolve()
+            if not evidence.is_relative_to(root) or not evidence.is_file():
+                raise FileNotFoundError(
+                    "review brief evidence reference is missing from the attempt: "
+                    f"{relative}"
+                )
         manifest_path = attempt_dir / "manifest.json"
         assessment_path = attempt_dir / "eval" / "assessment.json"
+        eval_report_path = attempt_dir / "eval" / "report.jsonl"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assessment = json.loads(assessment_path.read_text(encoding="utf-8"))
+        eval_records = _read_json_lines(eval_report_path)
         stage_attempts = state.get("attempts", {}).get(stage, [])
         selected_index = next(
             index
@@ -1893,6 +2017,7 @@ def _stage_prepare(
             assessment,
             attempt=selected["id"],
             previous_attempt=previous,
+            eval_records=eval_records,
         )
         (attempt_dir / "review.json").write_text(
             json.dumps(brief.as_dict(), indent=2, sort_keys=True) + "\n",
@@ -1905,6 +2030,8 @@ def _stage_prepare(
                 "research_ready": True,
                 "review_brief": str(attempt_dir / "review.json"),
                 "previous_attempt": previous,
+                "evidence_refs": list(brief.evidence_refs),
+                "key_plots": list(brief.key_plots),
             }
         )
         manifest_path.write_text(
@@ -2102,32 +2229,234 @@ def _next(out: Path, as_json: bool = False) -> int:
     except WorkflowError as exc:
         print(f"next failed: {exc}")
         return 1
-    action = next_action(state)
+    action = _enrich_next_action(state, next_action(state))
     if as_json:
         print(json.dumps(action, indent=2, sort_keys=True))
         return 0
-    print(f"actor: {action.get('actor') or '-'}")
-    print(f"stage: {action.get('stage') or '-'}")
-    print(f"state: {action.get('state') or '-'}")
-    print(f"action: {action['action']}")
-    print(f"command: {action.get('command') or '-'}")
-    print(f"card: {action.get('card') or '-'}")
-    print(f"reason: {action['reason']}")
+    print(f"Next · {action.get('stage') or 'complete'}")
+
+    def add(key: str, *values: str) -> None:
+        body = [value for value in values if value]
+        for index, value in enumerate(body):
+            print(f"{key if index == 0 else '':<11}{value}")
+
+    add("actor", action.get("actor") or "-")
+    add("state", action.get("state") or "-")
+    add("action", action["action"].upper())
+    add("objective", action.get("objective", ""))
+    protocol = action.get("eval_protocol")
+    if protocol:
+        print("eval")
+        for slot in protocol["slots"]:
+            print(f"  {slot['name']:<11}{slot['summary']}")
+            for item in slot["declared"]:
+                print(f"  {'':<11}{item}")
+        if protocol.get("plan"):
+            print(f"  {'plan':<11}{protocol['plan']}")
+        print(f"  {'enforced':<11}{protocol['enforcement']}")
+    eval_result = action.get("eval_result")
+    if eval_result:
+        print()
+        print(
+            render_eval_terminal(
+                str(action["stage"]),
+                eval_result["records"],
+                eval_result["assessment"],
+            )
+        )
+    add("command", action.get("command") or "-")
+    add("card", action.get("card") or "")
+    add("reason", action["reason"])
     if action.get("recommendation"):
-        print(f"recommendation: {action['recommendation']}")
-    for item in action.get("optional_help", []):
-        print(f"optional help: {item}")
+        add("recommend", action["recommendation"])
+    add("help", *action.get("optional_help", []))
     return 0
+
+
+def _enrich_next_action(
+    state: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    """Attach the stage contract an Agent needs before it starts work."""
+
+    enriched = dict(action)
+    stage = action.get("stage")
+    if stage not in _STAGE_GUIDES:
+        return enriched
+    enriched["objective"] = _STAGE_GUIDES[stage]["objective"]
+    if action.get("actor") == "agent":
+        enriched["eval_protocol"] = _eval_protocol_preview(state, stage)
+        attempt = action.get("attempt")
+        if isinstance(attempt, dict) and attempt.get("path"):
+            result = _attempt_eval_preview(Path(attempt["path"]))
+            if result is not None:
+                enriched["eval_result"] = result
+    return enriched
+
+
+def _attempt_eval_preview(attempt_dir: Path) -> dict[str, Any] | None:
+    report = attempt_dir / "eval" / "report.jsonl"
+    assessment = attempt_dir / "eval" / "assessment.json"
+    try:
+        payload = json.loads(assessment.read_text(encoding="utf-8"))
+        records = _read_json_lines(report)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {"assessment": payload, "records": records}
+
+
+def _eval_protocol_preview(state: dict[str, Any], stage: str) -> dict[str, Any]:
+    run_command = state.get("commands", {}).get(stage, {}).get("run", "")
+    plan = _command_option(run_command, "--plan")
+    declarations = _inspect_eval_plan(Path(plan)) if plan else {}
+    summaries = {
+        "baseline": _BASELINE_PREVIEWS[stage],
+        "library": "Agent · selected Engine methods",
+        "case": "Agent · task-specific rules",
+        "case_eval": "Agent · valid fixtures and counterexamples",
+    }
+    slots = []
+    for name in ("baseline", "library", "case", "case_eval"):
+        slots.append(
+            {
+                "name": name,
+                "owner": "engine" if name == "baseline" else "agent",
+                "purpose": _EVAL_SLOT_PURPOSES[name],
+                "summary": summaries[name],
+                "declared": list(declarations.get(name, ())),
+            }
+        )
+    return {
+        "plan": plan,
+        "slots": slots,
+        "enforcement": "all four slots required; mandatory failures reject attempt",
+    }
+
+
+def _command_option(command: str, option: str) -> str | None:
+    try:
+        parts = shlex.split(command)
+        index = parts.index(option)
+    except (ValueError, IndexError):
+        return None
+    return parts[index + 1] if index + 1 < len(parts) else None
+
+
+def _inspect_eval_plan(path: Path) -> dict[str, tuple[str, ...]]:
+    """Read declarations without importing or executing external Agent code."""
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeError):
+        return {}
+    found: dict[str, list[str]] = {
+        "library": [],
+        "case": [],
+        "case_eval": [],
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _ast_call_name(node.func)
+        short_name = call_name.rsplit(".", 1)[-1]
+        if short_name == "SelectedMethod":
+            _append_unique(found["library"], _literal_call_argument(node))
+        if call_name.endswith(("EvalSpec", "EvalSpec.noop")):
+            name = _literal_call_argument(node)
+            if name and ".case." in name and ".case_eval." not in name:
+                _append_unique(found["case"], name)
+            method = _literal_keyword(node, "library_method")
+            if method:
+                _append_unique(found["library"], method)
+        if "CaseEvalTest" in call_name.split("."):
+            name = _literal_keyword(node, "name") or _literal_call_argument(node)
+            _append_unique(found["case_eval"], name)
+    return {name: tuple(values) for name, values in found.items()}
+
+
+def _ast_call_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _ast_call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _literal_call_argument(node: ast.Call, index: int = 0) -> str | None:
+    if len(node.args) <= index:
+        return None
+    value = node.args[index]
+    return (
+        value.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        else None
+    )
+
+
+def _literal_keyword(node: ast.Call, name: str) -> str | None:
+    for keyword in node.keywords:
+        value = keyword.value
+        if (
+            keyword.arg == name
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            return value.value
+    return None
+
+
+def _append_unique(values: list[str], value: str | None) -> None:
+    if value and value not in values:
+        values.append(value)
 
 
 def _approve(
     stage: str,
     out: Path,
-    by: str,
-    decision: str,
+    by: str | None,
+    decision: str | None,
     message: str,
     expected_card: str | None,
 ) -> int:
+    interactive = _interactive_terminal()
+    needs_prompt = by is None or decision is None or expected_card is None
+    if by == "agent" and (decision is None or expected_card is None):
+        return _review_arguments_required(stage, out, "approve")
+    if needs_prompt and not interactive:
+        return _review_arguments_required(stage, out, "approve")
+    if by is None:
+        by = "human"
+    if by == "human" and interactive and needs_prompt:
+        try:
+            state = read_workflow(out)
+            active_card = state.get("cards", {}).get(stage)
+            if state.get("stages", {}).get(stage) != "review" or not active_card:
+                raise WorkflowError(
+                    f"Stage {stage!r} has no submitted review Card.",
+                    code="RCI-NO-REVIEW-CARD",
+                    action=next_action(state),
+                )
+            recommendation = state.get("recommendations", {}).get(stage)
+            print(
+                _terminal_review(
+                    out,
+                    stage,
+                    state,
+                    recommendation=recommendation,
+                )
+            )
+            expected_card = expected_card or active_card
+            decision = decision or ("stop" if recommendation == "stop" else "continue")
+            if not _confirm(f"Approve {stage} with decision {decision!r}?"):
+                print("approval cancelled; workflow unchanged")
+                return 1
+        except (OSError, ValueError, WorkflowError) as exc:
+            print(f"approval failed: {exc}")
+            return 1
+    if decision is None or expected_card is None:
+        return _review_arguments_required(stage, out, "approve")
     try:
         state, next_stage = approve_workflow(
             out,
@@ -2167,10 +2496,43 @@ def _approve(
 def _reject(
     stage: str,
     out: Path,
-    by: str,
-    message: str,
+    by: str | None,
+    message: str | None,
     expected_card: str | None,
 ) -> int:
+    interactive = _interactive_terminal()
+    needs_prompt = by is None or not message or expected_card is None
+    if by == "agent" and (not message or expected_card is None):
+        return _review_arguments_required(stage, out, "reject")
+    if needs_prompt and not interactive:
+        return _review_arguments_required(stage, out, "reject")
+    if by is None:
+        by = "human"
+    if by == "human" and interactive and needs_prompt:
+        try:
+            state = read_workflow(out)
+            active_card = state.get("cards", {}).get(stage)
+            if state.get("stages", {}).get(stage) != "review" or not active_card:
+                raise WorkflowError(
+                    f"Stage {stage!r} has no submitted review Card.",
+                    code="RCI-NO-REVIEW-CARD",
+                    action=next_action(state),
+                )
+            print(_terminal_review(out, stage, state))
+            expected_card = expected_card or active_card
+            if not _confirm("Return this Card to the Agent?"):
+                print("rejection cancelled; workflow unchanged")
+                return 1
+            if not message:
+                message = input("Feedback: ").strip()
+            if not message:
+                print("rejection cancelled: feedback is required")
+                return 1
+        except (OSError, ValueError, WorkflowError, EOFError) as exc:
+            print(f"rejection failed: {exc}")
+            return 1
+    if not message or expected_card is None:
+        return _review_arguments_required(stage, out, "reject")
     try:
         reject_workflow(
             out,
@@ -2193,6 +2555,88 @@ def _reject(
         return 1
     print(f"rejected: {stage}; Agent may revise and run a new attempt")
     return 0
+
+
+def _interactive_terminal() -> bool:
+    """Whether the reviewer can use the human terminal handshake."""
+
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
+def _review_arguments_required(stage: str, out: Path, action: str) -> int:
+    """Explain the explicit Agent/CI form when a prompt is unavailable."""
+
+    if action == "approve":
+        command = (
+            f"rci approve --stage {stage} --out {out} --by <human|agent> "
+            "--decision <continue|stop> --card <card_id>"
+        )
+    else:
+        command = (
+            f"rci reject --stage {stage} --out {out} --by <human|agent> "
+            "--message <reason> --card <card_id>"
+        )
+    print(
+        "review failed: approval arguments are required outside an interactive terminal"
+    )
+    print(f"next: {command}")
+    return 1
+
+
+def _confirm(prompt: str) -> bool:
+    """Use the old RCI-style default-no terminal confirmation."""
+
+    try:
+        answer = input(f"{prompt} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
+
+
+def _terminal_review(
+    out: Path,
+    stage: str,
+    state: dict[str, Any],
+    *,
+    recommendation: str | None = None,
+) -> str:
+    """Build the compact terminal view from the durable submitted Card."""
+
+    card_path = out / stage / "card.md"
+    if not card_path.is_file():
+        raise FileNotFoundError(f"review Card does not exist: {card_path}")
+    card_identifier = str(state.get("cards", {}).get(stage, ""))
+    if not card_identifier:
+        raise WorkflowError(
+            f"Stage {stage!r} has no active Card.", code="RCI-CARD-MISSING"
+        )
+    return render_terminal_card(
+        stage,
+        card_path.read_text(encoding="utf-8"),
+        card_identifier=card_identifier,
+        recommendation=recommendation,
+        dependencies=_review_dependencies(out, stage),
+    )
+
+
+def _review_dependencies(out: Path, stage: str) -> tuple[tuple[str, str], ...]:
+    """Hash the small set of files that a reviewer is about to accept."""
+
+    candidates = [
+        ("workflow", out / "workflow.json"),
+        ("manifest", out / stage / "manifest.json"),
+        ("eval", out / stage / "eval"),
+        ("main", out / stage / "main.parquet"),
+    ]
+    result: list[tuple[str, str]] = []
+    for name, path in candidates:
+        if not path.exists():
+            continue
+        try:
+            result.append((name, _path_digest(path)[:12]))
+        except (OSError, ValueError):
+            continue
+    return tuple(result)
 
 
 def _reopen(stage: str, out: Path, by: str, message: str) -> int:
@@ -2225,8 +2669,11 @@ def _revise(stage: str, out: Path, message: str) -> int:
 
 def _guide(stage: str, as_json: bool) -> int:
     guide = _STAGE_GUIDES[stage]
+    protocol = _eval_protocol_preview({}, stage)
     if as_json:
-        print(json.dumps(guide, indent=2, sort_keys=True))
+        print(
+            json.dumps({**guide, "eval_protocol": protocol}, indent=2, sort_keys=True)
+        )
         return 0
     print(f"stage: {stage}")
     print(f"objective: {guide['objective']}")
@@ -2237,6 +2684,20 @@ def _guide(stage: str, as_json: bool) -> int:
         print(f"- {item}")
     print("required boundary:")
     for item in guide["required"]:
+        print(f"- {item}")
+    print("four-slot eval protocol:")
+    for slot in protocol["slots"]:
+        explanation = slot["purpose"]
+        if slot["name"] == "baseline":
+            detail = slot["summary"].partition(" · ")[2]
+            explanation = f"{detail}; {explanation}"
+        print(f"- {slot['name']} [{slot['owner']}]: {explanation}")
+    print(f"- enforcement: {protocol['enforcement']}")
+    print("completion checklist:")
+    for item in guide["completion_checklist"]:
+        print(f"- {item}")
+    print("common failure modes:")
+    for item in guide["common_failure_modes"]:
         print(f"- {item}")
     print(f"eval menu: rci eval methods --stage {stage} --available-only")
     return 0
@@ -2363,6 +2824,19 @@ def _replace_path_prefix(value: Any, old: str, new: str) -> Any:
             key: _replace_path_prefix(item, old, new) for key, item in value.items()
         }
     return value
+
+
+def _read_json_lines(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise TypeError(f"JSONL row {number} in {path} is not an object")
+            records.append(value)
+    return records
 
 
 def _workflow_commands(contract_path: Path, out: Path) -> dict[str, dict[str, str]]:
@@ -2549,7 +3023,9 @@ def _build_algo(module: ModuleType, table: pl.DataFrame) -> AlgoBundle:
         if builder is not None:
             result = builder(table)
             if not isinstance(result, AlgoBundle):
-                raise TypeError("algo builder must return a research_ci.kit.AlgoBundle")
+                raise TypeError(
+                    "algo builder must return an research_ci.kit.AlgoBundle"
+                )
             return result
     raise AttributeError("algo builder must define build_algo(table) or build(table)")
 
@@ -3078,7 +3554,7 @@ def _result_status(result: Any) -> str:
 
 
 def _load_module(path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location("aci_external_module", path)
+    spec = importlib.util.spec_from_file_location("rci_external_module", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load module: {path}")
     module = importlib.util.module_from_spec(spec)

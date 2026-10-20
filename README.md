@@ -49,11 +49,18 @@ attempt id, Card id, and reason. Before real research, an Agent can verify a
 Lab with `rci contract check <case>/contract.py`; the Lab test suite then checks
 its case adapters against the pinned Engine.
 
+In an interactive terminal, `rci approve` and `rci reject` can omit the reviewer
+identity, decision, Card ID, or feedback. The CLI displays the submitted Card,
+shows short dependency digests, and uses a default-no `[y/N]` prompt. Automation
+and external review Agents must provide those arguments explicitly.
+
 ## Design documents
 
 - [Design and product requirements](docs/design.md) defines the normative
   stage boundaries, shared four-slot protocol, artifact contracts, and the
   detailed Sig research loop.
+- [Agent protocol](docs/agent-protocol.md) is the operational checklist for
+  exploration, attempts, four-slot evidence, revision, and human/Agent review.
 - [Interactive design map](docs/research-ci-viz-en.html) shows the current MVP
   workflow, stage ownership, Sig internals, and the guarantees still planned.
 - [TODO](TODO.md) records implementation status and open design work in
@@ -323,6 +330,21 @@ while the Card still asks for more target, stability, or coverage evidence.
 Feat Cards additionally list each feature's structural status, usable coverage,
 and redundancy evidence so a sparse or constant column is visible without
 turning the entire wide table into an eval table.
+
+The CLI exposes the same evidence at the point of action. Each stage `run`,
+the following `next`, and the prepared review Card show all four slots with a
+compact status:
+
+- `[OK]` means the rule ran and its declared condition was satisfied;
+- `[!]` means a non-blocking finding or a method that was not applicable;
+- `[FAIL]` means a stop-policy rule failed or could not be evaluated.
+
+The summary also separates execution (`READY`, `REVIEW`, or `HALTED`) from
+stage readiness (`ELIGIBLE`, `REVIEW_REQUIRED`, or `BLOCKED`) and prints the
+evidence that produced each status. For Data, `ELIGIBLE` means structurally
+admissible for Feat review; it does not establish a research claim. The
+complete machine-readable records remain in `eval/report.jsonl` and
+`eval/assessment.json`.
 
 ## Minimal example
 

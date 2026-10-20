@@ -20,10 +20,10 @@ def test_signal_main_output_shape_requires_one_wide_row_per_time() -> None:
     wide = pl.DataFrame(
         {
             "event_time": [1, 2],
-            "skhx_inst": ["xyz:SKHX", "xyz:SKHX"],
-            "skhx_price": [100.0, 101.0],
-            "skhy_inst": ["xyz:SKHY", "xyz:SKHY"],
-            "skhy_price": [10.0, 10.5],
+            "leg_a_inst": ["market:LEG_A", "market:LEG_A"],
+            "leg_a_price": [100.0, 101.0],
+            "leg_b_inst": ["market:LEG_B", "market:LEG_B"],
+            "leg_b_price": [10.0, 10.5],
             "signal": [0.5, -0.25],
         }
     )
@@ -31,16 +31,16 @@ def test_signal_main_output_shape_requires_one_wide_row_per_time() -> None:
     passed = signal_main_output_shape(signals, wide, ("event_time",), ("signal",))
     invalid = signal_main_output_shape(
         signals,
-        wide.drop("skhy_price"),
+        wide.drop("leg_b_price"),
         ("event_time",),
         ("signal",),
     )
 
     assert passed.status == "passed"
     assert passed.details["layout"] == "wide"
-    assert passed.details["inst_columns"] == ("skhx_inst", "skhy_inst")
+    assert passed.details["inst_columns"] == ("leg_a_inst", "leg_b_inst")
     assert invalid.status == "failed"
-    assert invalid.details["unmatched_inst_prefixes"] == ["skhy"]
+    assert invalid.details["unmatched_inst_prefixes"] == ["leg_b"]
 
 
 def test_assessment_output_shape_accepts_unique_declared_rows_without_prices() -> None:

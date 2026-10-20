@@ -1,7 +1,7 @@
 # Research CI design and requirements
 
 > **Status, 2026-10-16:** the MVP path from Contract through Algo is
-> implemented and has been exercised on the SK Hynix/SKHY proxy-spread case.
+> implemented and has been exercised on a paired-market proxy-spread case.
 > Optional Sig procedure freeze and one-time confirmation are implemented.
 > DataBundle, explicit internal research preparation, concise external Cards,
 > and Agent-owned upstream revision are implemented.
@@ -13,7 +13,7 @@
 
 Research CI keeps its strongest product idea: an external research agent may
 explore freely, while a small deterministic engine owns stage order, output
-contracts, reusable checks, evidence records, and review gates. This
+contracts, reusable checks, evidence records, and review decisions. This
 implementation deliberately starts with a smaller contract and no universal
 statistical verdict. The research target, labels, feature selection, signal
 recipe, and portfolio logic become explicit at the stage where they can be
@@ -373,9 +373,9 @@ research starts:
 
 ```python
 Contract(
-    mission="Test whether the SK Hynix/SKHY proxy spread mean-reverts",
+    mission="Test whether a paired-market proxy spread mean-reverts",
     stages=("data", "feat", "sig", "algo"),
-    scope=("xyz:SKHX", "xyz:SKHY", "hourly"),
+    scope=("market:LEG_A", "market:LEG_B", "hourly"),
     invariants=("point_in_time", "review_each_stage"),
 )
 ```
@@ -768,13 +768,20 @@ Approval records:
 The internal Agent may inspect code, full tables, every eval record, and all
 plots while iterating. The external Card is a result page: question,
 conclusion, evidence, counterevidence, limitations, iteration delta, compact
-Engine facts, and selected figures. Detailed methods remain linked audit
-artifacts. A stage can therefore have a valid attempt that is not yet
-`research_ready`, or evidence that supports an `uncertain` or `stop`
-recommendation, without creating more workflow states.
+Engine facts, evidence references, and selected figures. The Engine verifies
+that declared `evidence_refs` and `key_plots` exist inside the attempt before
+the Card can enter review. Detailed methods remain linked audit artifacts. A
+stage can therefore have a valid attempt that is not yet `research_ready`, or
+evidence that supports an `uncertain` or `stop` recommendation, without
+creating more workflow states.
 
 Approvals are explicit CLI actions. Research CI never treats file creation or a
-successful process exit as approval. `approve --decision continue` unlocks the
+successful process exit as approval. In an interactive terminal, omitting the
+review identity, decision, or Card ID displays the submitted Card, its short
+frozen dependency digests, and a default-no `[y/N]` prompt. The prompt binds a
+human approval to the displayed Card. Automation and external review Agents
+must provide `--by`, `--decision`, and `--card` explicitly; the CLI refuses an
+incomplete non-interactive request. `approve --decision continue` unlocks the
 next enabled stage. `approve --decision stop` records an intentional no-go and
 ends the workflow. `reject --message ...` returns the current stage to `ready`
 and requires a new attempt; it does not mutate the submitted attempt.
@@ -792,7 +799,7 @@ stage run. They are review aids, not a fifth eval slot or a pass condition.
 
 The MVP currently guarantees:
 
-- Contract stage order and explicit review gates;
+- Contract stage order and explicit review decisions;
 - one small workflow state machine: `locked`, `ready`, `review`, `approved`,
   `stopped`, and `disabled`;
 - append-only numbered attempts separated from the submitted candidate;
