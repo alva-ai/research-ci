@@ -18,8 +18,8 @@ The project uses `uv` for environments and dependency locking.
 
 ## Install and first handshake
 
-The repository is currently private and the package is not published to PyPI.
-A newcomer with GitHub access can still install and verify it reproducibly:
+The package is not published to PyPI. Install and verify it reproducibly from
+the repository:
 
 ```sh
 git clone https://github.com/alva-ai/research-ci.git
@@ -633,3 +633,7 @@ volatility, Sharpe, maximum drawdown, and average turnover from the declared
 external timeseries. Case rules still verify the actual position formula and
 backtest accounting, while `case_eval` proves those rules against mutated
 counterexamples. A built-in default backtester remains future work.
+
+## License
+
+This project is licensed under the [Apache 2.0 license](LICENSE).
