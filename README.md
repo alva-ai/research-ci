@@ -115,7 +115,9 @@ research-ci/
         structure.py correlation, VIF, PCA, autocorrelation
         association.py IC, ICIR, cumulative IC, bucket spread
         information.py mutual information and target-sidecar MI
-        stability.py split stability, rank persistence, drift
+        temporal.py key-grid and explicit-universe completeness
+        stability.py split/walk-forward stability, rank persistence, drift
+        model.py frozen regression and probability diagnostics
         economic.py external-backtest return, risk, and turnover summary
       defaults/   stage-specific method proposals
     kit/          optional construction helpers for external Labs
@@ -180,6 +182,12 @@ fit policy. The menu rejects a semantically incompatible choice before data
 execution; a compatible calculation can still report `not_applicable` when
 the actual data is insufficient.
 
+The registered library also includes Data cross-section completeness against
+an explicit entity universe, Sig walk-forward association over declared folds,
+and regression/classification diagnostics for already-produced out-of-sample
+predictions. These methods only evaluate submitted artifacts; model fitting
+and score construction remain in the Lab and optional Stage Kit.
+
 The Stage Kit has a different role from the eval library. It is an optional
 construction library that an external Lab may import while building a stage
 artifact. It is neither an allowlist nor another workflow stage:
@@ -189,9 +197,12 @@ artifact. It is neither an allowlist nor another workflow stage:
 - Feat helpers accept `pl.Expr` inputs and return an unnamed `pl.Expr`. The Lab
   chooses source columns, output aliases, and expression layers.
 - Sig helpers construct explicit label sidecars, simple signal combinations,
-  chronological splits, and a `SignalBundle`. The bundle separates candidate
-  scores from final signals and records `FeatureDisposition` and
-  `SignalLineage`; case-specific estimators remain in the Lab.
+  chronological and walk-forward splits, purge label horizons, fit calibration
+  transforms, and return a `SignalBundle`. A small model adapter provides
+  explicit sklearn pipelines for repeated linear and histogram-gradient
+  boosting cases. The bundle separates candidate scores from final signals and
+  records `FeatureDisposition` and `SignalLineage`; model grids, parameters,
+  refit schedules, ensembles, and selection remain case-owned in the Lab.
 - Algo helpers provide bounded scores, dollar-neutral pair sizing,
   `AlgoBundle`, and the standardized `BacktestResult` interface. Portfolio
   rules, cost assumptions, and the backtest implementation remain in the Lab.
@@ -549,9 +560,9 @@ final output. It builds a transient evaluation table from declared Feat,
 candidate, and final columns, then joins each label from its sidecar only
 inside the selected method. The library slot remains agent-selected and may
 include IC, rank IC, ICIR, cumulative IC, target mutual information, bucket
-behavior, split stability, rank persistence, and drift. The case slot defines
-the actual recipe; `case_eval` proves it with valid fixtures and
-counterexamples.
+behavior, split and walk-forward stability, rank persistence, drift, and
+task-appropriate prediction diagnostics. The case slot defines the actual
+recipe; `case_eval` proves it with valid fixtures and counterexamples.
 
 An optional `ValidationPlan` records the case's development procedure without
 forcing every case into one method. Its method names are open-ended, so a Lab

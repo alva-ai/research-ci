@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
 StageName = Literal["data", "feat", "sig", "algo"]
-ToolKind = Literal["table", "expr", "split", "bundle"]
+ToolKind = Literal["table", "expr", "split", "model", "bundle"]
 
 
 def _non_empty(value: str, field_name: str) -> str:
@@ -29,8 +29,10 @@ class ToolInfo:
         _non_empty(self.purpose, "ToolInfo.purpose")
         if self.stage not in {"data", "feat", "sig", "algo"}:
             raise ValueError("ToolInfo.stage must be data, feat, sig, or algo")
-        if self.kind not in {"table", "expr", "split", "bundle"}:
-            raise ValueError("ToolInfo.kind must be table, expr, split, or bundle")
+        if self.kind not in {"table", "expr", "split", "model", "bundle"}:
+            raise ValueError(
+                "ToolInfo.kind must be table, expr, split, model, or bundle"
+            )
 
     def as_dict(self) -> dict[str, str]:
         return {

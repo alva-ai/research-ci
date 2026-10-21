@@ -157,7 +157,8 @@ src/research_ci/
 ```
 
 Method libraries are grouped by methodology—quality, temporal, structure,
-association, information, stability, and economic—not copied once per stage.
+association, information, stability, model diagnostics, and economic—not copied
+once per stage.
 The registry says where each method is valid. A compiled stage menu then
 filters the shared library by stage policy and the current declaration.
 

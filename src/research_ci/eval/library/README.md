@@ -14,7 +14,9 @@ method or choose the case's methodology.
 | `structure` | How are features related to one another? | correlation, VIF, PCA, effective rank, autocorrelation |
 | `association` | How does a feature relate to an explicit target? | Pearson IC, rank IC, ICIR, cumulative IC, bucket spread |
 | `information` | Is there nonlinear dependence? | feature-pair MI in Feat, feature-target MI in Sig |
-| `stability` | Does the evidence persist across ordered data? | split association, rank persistence, distribution shift |
+| `stability` | Does the evidence persist across ordered data? | split and walk-forward association, rank persistence, distribution shift |
+| `temporal` | Does the declared data grid match its contract? | key-grid and explicit cross-section completeness checks |
+| `model` | How do frozen out-of-sample predictions behave? | regression error/fit and classification probability/calibration diagnostics |
 
 The four slots remain separate:
 
@@ -47,3 +49,18 @@ target-dependent method requires
 an explicit horizon-to-label mapping, and an absent target keeps that method unavailable
 instead of inventing an empty evaluation. `FeatureSet` has no target field, so
 Feat cannot accidentally absorb Sig research.
+
+`library.temporal.cross_section_completeness` never infers the expected entity
+universe from observed rows. The selection supplies `expected_entities`; the
+Data declaration supplies the time key and, when unambiguous, the entity key.
+It reports section coverage, duplicates, unexpected entities, and missing
+required values without constructing or filling observations.
+
+`library.stability.walk_forward_association` consumes scores that the Lab has
+already produced out of sample plus an explicit fold column from the label
+sidecar. It does not split, fit, tune, or select a model. Likewise, the `model`
+family evaluates submitted predictions only. Regression diagnostics report
+MAE, RMSE, mean error, R-squared, and sign accuracy. Classification diagnostics
+require an explicit positive label and report ROC AUC, Brier score, log loss,
+threshold accuracy, and equal-width expected calibration error. Optional
+thresholds are recorded in the resulting evidence.

@@ -20,9 +20,11 @@ incompatible with the stage or declaration is rejected before table
 execution. The Engine recommends defaults but does not choose case semantics.
 
 The current families are `quality`, `temporal`, `structure`, `association`,
-`information`, `stability`, and `economic`. Structure methods include PCA and VIF;
-information methods use scikit-learn k-nearest-neighbour mutual information;
-association methods include IC, ICIR, cumulative IC, and bucket spreads.
+`information`, `stability`, `model`, and `economic`. Structure methods include
+PCA and VIF; information methods use scikit-learn k-nearest-neighbour mutual
+information; association methods include IC, ICIR, cumulative IC, and bucket
+spreads. Model methods audit frozen regression predictions or classification
+probabilities without fitting inside the evaluation layer.
 Target-dependent methods use `SignalSet` together with `EvalContext` and a
 named sidecar table, so a label or forward return never becomes an untracked
 feature column.
@@ -34,8 +36,8 @@ named backtest sidecar; they evaluate it but do not create a backtest.
 
 Method location and stage ownership are separate. Feat selects correctness,
 coverage, feature-feature structure, redundancy, and stability methods. Sig
-selects target-aware association, target mutual information, out-of-sample,
-null-world, and signal-stability methods. The implementation may be shared,
+selects target-aware association, target mutual information, walk-forward,
+model-diagnostic, null-world, and signal-stability methods. The implementation may be shared,
 but its interpretation and default proposal belong to the stage that owns the
 question.
 

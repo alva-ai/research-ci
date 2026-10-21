@@ -7,11 +7,22 @@ from .algo import AlgoBundle, BacktestResult, bounded_score, dollar_neutral_pair
 from .common import BuildInfo, BuildStep, StageName, ToolInfo, ToolKind
 from .data import TOOLS as DATA_TOOLS
 from .feat import TOOLS as FEAT_TOOLS
+from .model import TOOLS as MODEL_TOOLS
+from .model import FittedModel, ModelSpec, fit_model, make_model, score_model
 from .sig import TOOLS as SIG_TOOLS
-from .sig import FeatureDisposition, SignalBundle, SignalLineage, TimeSplit
+from .sig import (
+    AbsoluteQuantileCalibration,
+    FeatureDisposition,
+    SignalBundle,
+    SignalLineage,
+    TimeSplit,
+    WalkForwardSplit,
+    WalkForwardWindow,
+    ZScoreCalibration,
+)
 from .viz import TimeSeriesPanel, save_heatmap, save_time_series_panels
 
-CATALOG = (*DATA_TOOLS, *FEAT_TOOLS, *SIG_TOOLS, *ALGO_TOOLS)
+CATALOG = (*DATA_TOOLS, *FEAT_TOOLS, *SIG_TOOLS, *MODEL_TOOLS, *ALGO_TOOLS)
 
 
 def catalog(stage: StageName | None = None) -> tuple[ToolInfo, ...]:
@@ -26,9 +37,12 @@ __all__ = [
     "BuildInfo",
     "BuildStep",
     "CATALOG",
+    "AbsoluteQuantileCalibration",
     "AlgoBundle",
     "BacktestResult",
     "FeatureDisposition",
+    "FittedModel",
+    "ModelSpec",
     "SignalBundle",
     "SignalLineage",
     "StageName",
@@ -36,9 +50,15 @@ __all__ = [
     "TimeSeriesPanel",
     "ToolInfo",
     "ToolKind",
+    "WalkForwardSplit",
+    "WalkForwardWindow",
+    "ZScoreCalibration",
     "catalog",
     "bounded_score",
     "dollar_neutral_pair",
+    "fit_model",
+    "make_model",
     "save_heatmap",
     "save_time_series_panels",
+    "score_model",
 ]
