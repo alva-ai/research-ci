@@ -3,6 +3,7 @@ name = "research-ci"
 version = "0.1.0"
 description = "Execution protocol for agent-owned quantitative research stages"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.0",
@@ -18,6 +19,10 @@ visualization = [
 
 [project.scripts]
 rci = "research_ci.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/alva-ai/research-ci"
+Repository = "https://github.com/alva-ai/research-ci"
 
 [build-system]
 requires = ["setuptools>=68"]
