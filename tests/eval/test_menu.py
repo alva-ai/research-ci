@@ -62,6 +62,14 @@ def test_target_aware_sig_menu_enables_predictive_methods() -> None:
         entries["library.information.feature_target_mutual_information"].availability
         == "selectable"
     )
+    assert entries["library.stability.walk_forward_association"].availability == (
+        "selectable"
+    )
+    assert entries["library.model.regression_diagnostics"].availability == "selectable"
+    assert (
+        entries["library.model.classification_probability_diagnostics"].availability
+        == "selectable"
+    )
     assert entries["library.structure.vif"].availability == "unavailable"
 
 

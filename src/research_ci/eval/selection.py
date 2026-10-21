@@ -30,11 +30,16 @@ from .library.information import (
     feature_pair_mutual_information,
     feature_target_mutual_information,
 )
+from .library.model import (
+    classification_probability_diagnostics,
+    regression_diagnostics,
+)
 from .library.quality import coverage, dispersion, finite_columns, required_columns
 from .library.stability import (
     distribution_shift,
     rank_autocorrelation,
     split_association,
+    walk_forward_association,
 )
 from .library.structure import (
     autocorrelation,
@@ -42,7 +47,7 @@ from .library.structure import (
     pca_diagnostics,
     vif,
 )
-from .library.temporal import key_grid
+from .library.temporal import cross_section_completeness, key_grid
 from .menu import require_selectable_method
 from .protocol import EvalContext, EvalObservation, EvalSpec
 
@@ -158,6 +163,48 @@ def _expand_one(
                 "polars_select",
             )
         ]
+    if method == "library.temporal.cross_section_completeness":
+        if not isinstance(declaration, DataSet):
+            raise LibrarySelectionError(
+                "temporal.cross_section_completeness requires DataSet"
+            )
+        if declaration.time_key is None:
+            raise LibrarySelectionError(f"{method} requires DataSet.time_key")
+        expected_entities = parameters.pop("expected_entities", None)
+        if expected_entities is None:
+            raise LibrarySelectionError(
+                f"{method} requires parameter 'expected_entities'"
+            )
+        entity_key = parameters.pop("entity_key", None)
+        entity_candidates = tuple(
+            key for key in declaration.keys if key != declaration.time_key
+        )
+        if entity_key is None:
+            if len(entity_candidates) != 1:
+                raise LibrarySelectionError(
+                    f"{method} requires parameter 'entity_key' when DataSet.keys "
+                    "does not contain exactly one non-time key"
+                )
+            entity_key = entity_candidates[0]
+        if entity_key not in entity_candidates:
+            raise LibrarySelectionError(
+                f"{method} entity_key must be a declared non-time DataSet key"
+            )
+        required = declaration.required if selected.on is None else columns
+        return [
+            _selected(
+                cross_section_completeness(
+                    (declaration.time_key,),
+                    entity_key,
+                    expected_entities,
+                    required,
+                    name=base_name,
+                    **parameters,
+                ),
+                selected,
+                "polars_select",
+            )
+        ]
     if method == "library.structure.pairwise_correlation":
         return [
             _selected(
@@ -259,6 +306,11 @@ _TARGET_FACTORIES: dict[str, TargetFactory] = {
         feature_target_mutual_information
     ),
     "library.stability.split_association": split_association,
+    "library.stability.walk_forward_association": walk_forward_association,
+    "library.model.regression_diagnostics": regression_diagnostics,
+    "library.model.classification_probability_diagnostics": (
+        classification_probability_diagnostics
+    ),
 }
 
 
@@ -280,6 +332,13 @@ def _expand_targets(
             f"selected target horizons are not declared: {unknown}"
         )
     factory = _TARGET_FACTORIES[selected.name]
+    if (
+        selected.name == "library.model.classification_probability_diagnostics"
+        and "positive_label" not in parameters
+    ):
+        raise LibrarySelectionError(
+            f"{selected.name} requires parameter 'positive_label'"
+        )
     specs: list[EvalSpec] = []
     for feature, horizon in product(features, horizons):
         target = declaration.targets[horizon]
@@ -287,6 +346,7 @@ def _expand_targets(
         if selected.name in {
             "library.association.icir",
             "library.association.cumulative_ic",
+            "library.stability.walk_forward_association",
         }:
             by = options.pop(
                 "by",
@@ -311,13 +371,14 @@ def _expand_targets(
             target,
             context_columns=context_columns,
         )
+        matrix_method = selected.name.startswith("library.model.") or (
+            "mutual_information" in selected.name
+        )
         specs.append(
             _selected(
                 contextual,
                 selected,
-                "matrix_backend"
-                if "mutual_information" in selected.name
-                else "polars_join_group",
+                "matrix_backend" if matrix_method else "polars_join_group",
             )
         )
     return specs

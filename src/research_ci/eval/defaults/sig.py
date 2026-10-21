@@ -12,6 +12,7 @@ METHOD_NAMES = (
     "library.association.bucket_spread",
     "library.information.feature_target_mutual_information",
     "library.stability.split_association",
+    "library.stability.walk_forward_association",
     "library.stability.rank_autocorrelation",
     "library.stability.distribution_shift",
 )

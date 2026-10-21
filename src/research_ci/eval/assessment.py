@@ -63,23 +63,38 @@ def assess_records(records: Iterable[EvalRecord]) -> dict[str, Any]:
         disposition = "invalid"
     elif _contains_any(
         reason_codes,
-        {"MISSING_CONTEXT", "NOT_APPLICABLE", "MISSING_VALUES_REVIEW"},
+        {
+            "MISSING_CONTEXT",
+            "NOT_APPLICABLE",
+            "MISSING_VALUES_REVIEW",
+            "INCOMPLETE_CROSS_SECTION",
+            "MISSING_REQUIRED_VALUES",
+            "UNEXPECTED_ENTITIES",
+            "DUPLICATE_KEYS",
+        },
     ):
         disposition = "incomplete"
     elif _contains_any(
         reason_codes,
         {
             "LOW_COVERAGE",
+            "LOW_CROSS_SECTION_COMPLETENESS",
             "NO_VARIATION",
             "INSUFFICIENT_SAMPLE",
             "INSUFFICIENT_GROUPS",
             "WEAK_ASSOCIATION",
+            "MODEL_PERFORMANCE_BELOW_THRESHOLD",
+            "MODEL_CALIBRATION_BELOW_THRESHOLD",
+            "INVALID_PROBABILITY",
         },
     ):
         disposition = "weak_data"
     elif _contains_any(reason_codes, {"HIGH_REDUNDANCY", "STRUCTURE_CONCENTRATED"}):
         disposition = "redundant"
-    elif _contains_any(reason_codes, {"UNSTABLE", "DISTRIBUTION_SHIFT"}):
+    elif _contains_any(
+        reason_codes,
+        {"UNSTABLE", "DISTRIBUTION_SHIFT", "WALK_FORWARD_UNSTABLE"},
+    ):
         disposition = "unstable"
     elif metric_count:
         disposition = "candidate_for_review"
@@ -238,6 +253,19 @@ def assess_signal_evidence(
                     evidence[score]["reason_codes"].append(
                         f"SPLIT_SIGN_CHANGE:{target}"
                     )
+            elif method == "library.stability.walk_forward_association":
+                target_evidence["walk_forward"] = {
+                    "mean_association": details.get("mean_association"),
+                    "median_association": details.get("median_association"),
+                    "association_std": details.get("association_std"),
+                    "sign_consistency": details.get("sign_consistency"),
+                    "worst_directional_fold": details.get("worst_directional_fold"),
+                    "valid_folds": details.get("valid_folds"),
+                }
+            elif method == "library.model.regression_diagnostics":
+                target_evidence["regression_diagnostics"] = record.value
+            elif method == "library.model.classification_probability_diagnostics":
+                target_evidence["classification_probability_diagnostics"] = record.value
             elif method == "library.association.icir":
                 evidence[score]["block_stability"].setdefault(target, {}).update(
                     {

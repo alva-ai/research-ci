@@ -70,6 +70,63 @@ def test_data_agent_selects_methods_and_engine_expands_declared_groups() -> None
     assert all(spec.execution_mode == "polars_select" for spec in specs)
 
 
+def test_data_cross_section_selection_requires_an_explicit_entity_universe() -> None:
+    declaration = DataSet(
+        keys=("event_time", "symbol"),
+        required=("event_time", "symbol", "x"),
+        numeric=("x",),
+        time_key="event_time",
+    )
+
+    with pytest.raises(LibrarySelectionError, match="expected_entities"):
+        expand_library(
+            declaration,
+            LibrarySelection(
+                (
+                    SelectedMethod(
+                        "library.temporal.cross_section_completeness",
+                        reason="audit the declared daily symbol universe",
+                    ),
+                )
+            ),
+        )
+
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.temporal.cross_section_completeness",
+                    reason="audit the declared daily symbol universe",
+                    parameters={
+                        "expected_entities": ("A", "B"),
+                        "minimum_complete_ratio": 1.0,
+                    },
+                ),
+            )
+        ),
+    )
+    result = run_eval_plan(
+        pl.DataFrame(
+            {
+                "event_time": [1, 1, 2],
+                "symbol": ["A", "B", "A"],
+                "x": [1.0, 2.0, 3.0],
+            }
+        ),
+        _plan("data", specs),
+    )
+    record = next(
+        record
+        for record in result.records
+        if record.library_method.endswith("cross_section_completeness")
+    )
+
+    assert record.status == "failed"
+    assert record.value == 0.5
+    assert record.details["entity_key"] == "symbol"
+
+
 def test_feat_expands_only_structural_methods() -> None:
     declaration = FeatureSet(
         keys=("event_time",),
@@ -358,3 +415,120 @@ def test_grouped_sig_method_reads_evaluation_group_from_label_sidecar() -> None:
     assert record.status == "passed"
     assert record.details["joined_rows"] == 12
     assert record.details["group"] == "block"
+
+
+def test_walk_forward_selection_reads_fold_from_label_sidecar() -> None:
+    scores = pl.DataFrame(
+        {
+            "event_time": list(range(9)),
+            "x": [1.0] * 9,
+            "signal": [1.0, 2.0, 3.0] * 3,
+        }
+    )
+    labels = pl.DataFrame(
+        {
+            "event_time": list(range(9)),
+            "fold": [1, 1, 1, 2, 2, 2, 3, 3, 3],
+            "return_1h": [1.0, 2.0, 3.0] * 3,
+        }
+    )
+    declaration = SignalSet(
+        keys=("event_time",),
+        features=("x",),
+        signals=("signal",),
+        targets={"1h": "return_1h"},
+        label_table="labels",
+        evaluation_by="fold",
+    )
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.stability.walk_forward_association",
+                    on="signals",
+                    reason="audit frozen out-of-sample fold evidence",
+                    parameters={"min_fold_size": 3},
+                ),
+            )
+        ),
+    )
+
+    result = run_eval_plan(
+        scores,
+        _plan("sig", specs),
+        EvalContext(tables={"labels": labels}),
+    )
+    record = next(
+        record
+        for record in result.records
+        if record.library_method.endswith("walk_forward_association")
+    )
+
+    assert record.status == "passed"
+    assert record.details["valid_folds"] == 3
+    assert record.details["context_table"] == "labels"
+    assert record.details["joined_rows"] == 9
+    assert record.execution_mode == "polars_join_group"
+    assert scores.columns == ["event_time", "x", "signal"]
+
+
+def test_model_selection_uses_label_sidecar_and_explicit_class_semantics() -> None:
+    declaration = SignalSet(
+        keys=("event_time",),
+        features=("x",),
+        signals=("probability",),
+        targets={"1h": "direction"},
+        label_table="labels",
+    )
+    missing_label = LibrarySelection(
+        (
+            SelectedMethod(
+                "library.model.classification_probability_diagnostics",
+                on="signals",
+                reason="audit submitted class probabilities",
+            ),
+        )
+    )
+    with pytest.raises(LibrarySelectionError, match="positive_label"):
+        expand_library(declaration, missing_label)
+
+    specs = expand_library(
+        declaration,
+        LibrarySelection(
+            (
+                SelectedMethod(
+                    "library.model.classification_probability_diagnostics",
+                    on="signals",
+                    reason="audit submitted class probabilities",
+                    parameters={"positive_label": "up", "calibration_bins": 2},
+                ),
+            )
+        ),
+    )
+    scores = pl.DataFrame(
+        {
+            "event_time": [1, 2, 3, 4],
+            "x": [1.0] * 4,
+            "probability": [0.1, 0.2, 0.8, 0.9],
+        }
+    )
+    labels = pl.DataFrame(
+        {"event_time": [1, 2, 3, 4], "direction": ["down", "down", "up", "up"]}
+    )
+    result = run_eval_plan(
+        scores,
+        _plan("sig", specs),
+        EvalContext(tables={"labels": labels}),
+    )
+    record = next(
+        record
+        for record in result.records
+        if record.library_method.endswith("classification_probability_diagnostics")
+    )
+
+    assert record.status == "passed"
+    assert record.value["roc_auc"] == 1.0
+    assert record.details["context_table"] == "labels"
+    assert record.execution_mode == "matrix_backend"
+    assert scores.columns == ["event_time", "x", "probability"]
